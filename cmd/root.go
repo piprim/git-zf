@@ -6,15 +6,18 @@ import (
 	"log"
 	"os"
 
-	"github.com/lintingzhen/commitizen-go/config"
-	"github.com/lintingzhen/commitizen-go/git"
 	homedir "github.com/mitchellh/go-homedir"
+	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-const configFileName = ".git-zf"
-const configFileExt = "json"
+const (
+	configFileName = ".git-zf"
+	configFileExt  = "json"
+	progName       = "git-zf"
+)
 
 var (
 	isDebug   bool
@@ -24,7 +27,7 @@ var (
 // GetRootCmd builds and returns the root Cobra command.
 func GetRootCmd() (*cobra.Command, error) {
 	rootCmd := &cobra.Command{
-		Use:  "commitizen-go",
+		Use:  progName,
 		Long: `Command line utility to standardize git commit messages, golang version.`,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			cmd.SilenceUsage = true
@@ -44,9 +47,9 @@ func GetRootCmd() (*cobra.Command, error) {
 	return rootCmd, nil
 }
 
-// initConfig sets up logging, loads the .git-czrc config file via Viper, then
+// initConfig sets up logging, loads the .git-zf.json config file via Viper, then
 // parses the full AppConfig. Not being inside a git repo is not a fatal error —
-// git cz version/install must work anywhere.
+// git zf version/install must work anywhere.
 func initConfig() error {
 	if !isDebug {
 		log.SetOutput(io.Discard)
@@ -60,7 +63,7 @@ func initConfig() error {
 		log.SetOutput(f)
 	}
 
-	viper.SetConfigName(fmt.Sprintf("%s.%s", configFileName, configFileExt))
+	viper.SetConfigName(configFileName)
 	viper.SetConfigType(configFileExt)
 
 	// Repo-root config takes priority over home: add it first so Viper searches it first.

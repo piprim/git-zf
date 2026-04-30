@@ -1,4 +1,4 @@
 builds:
   - ldflags:
-      - -X github.com/lintingzhen/commitizen-go/cmd.version={{.Version}}
-      - -X github.com/lintingzhen/commitizen-go/cmd.revision={{.ShortCommit}}
+      - -X github.com:piprim/git-zf/cmd.version={{.Version}}
+      - -X github.com:piprim/git-zf/cmd.revision={{.ShortCommit}}

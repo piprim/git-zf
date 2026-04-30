@@ -10,8 +10,8 @@ import (
 
 	redminelib "github.com/mattn/go-redmine"
 
-	"github.com/lintingzhen/commitizen-go/config"
-	"github.com/lintingzhen/commitizen-go/tracker"
+	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/tracker"
 )
 
 const trackerType = "redmine"
@@ -125,7 +125,7 @@ func (a *redmineAdapter) UpdateIssueStatus(_ context.Context, issueID, statusNam
 	}
 
 	if !found {
-		return fmt.Errorf("status %q not found in Redmine; check in_progress_status in .git-czrc", statusName)
+		return fmt.Errorf("status %q not found in Redmine; check in_progress_status in .git-zf.json", statusName)
 	}
 
 	if err := a.client.UpdateIssue(redminelib.Issue{Id: id, StatusId: statusID}); err != nil {

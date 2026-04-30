@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lintingzhen/commitizen-go/config"
-	"github.com/lintingzhen/commitizen-go/tracker"
+	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/tracker"
 )
 
 type stubTracker struct{}
 
-func (s *stubTracker) ListIssues(_ context.Context) ([]tracker.Issue, error) { return nil, nil }
+func (s *stubTracker) ListIssues(_ context.Context) ([]tracker.Issue, error)  { return nil, nil }
 func (s *stubTracker) UpdateIssueStatus(_ context.Context, _, _ string) error { return nil }
 
 func TestRegisterAndNew_happy(t *testing.T) {

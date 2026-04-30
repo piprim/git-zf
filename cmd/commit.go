@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/lintingzhen/commitizen-go/commit"
-	"github.com/lintingzhen/commitizen-go/git"
-	"github.com/lintingzhen/commitizen-go/tui"
+	"github.com/piprim/git-zf/commit"
+	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -19,12 +19,12 @@ var (
 	commitAuthor     string
 )
 
-// CommitCmd is the "git cz commit" subcommand.
+// CommitCmd is the "git zf commit" subcommand.
 func getCommitCmd() *cobra.Command {
 	var commitCmd = &cobra.Command{
 		Use:   "commit",
 		Short: "Record changes to the repository",
-		Long:  "Open the commitizen TUI to compose a standardised commit message, then commit using go-git.",
+		Long:  "Open the " + progName + " TUI to compose a standardised commit message, then commit using go-git.",
 		RunE:  commitRunE,
 	}
 

@@ -32,7 +32,7 @@ type CommitItem struct {
 	Form     string             `json:"form"     mapstructure:"form"`
 	Required bool               `json:"required" mapstructure:"required"`
 	Options  []CommitItemOption `json:"options"  mapstructure:"options"`
-	Value string `json:"-" mapstructure:"-"` // runtime state; never serialised
+	Value    string             `json:"-" mapstructure:"-"` // runtime state; never serialised
 }
 
 // CommitMessageConfig holds the ordered list of form fields and the Go template
@@ -54,15 +54,15 @@ type IssueTrackerConfig struct {
 	Type             string `json:"type"               mapstructure:"type"`
 	URL              string `json:"url"                mapstructure:"url"`
 	Token            string `json:"token"              mapstructure:"token"`
-	InProgressStatus string `json:"in_progress_status" mapstructure:"in_progress_status"`
+	InProgressStatus string `json:"in_progress_status" mapstructure:"in-progress-status"`
 }
 
 // AppConfig is the top-level configuration for the application.
 type AppConfig struct {
-	CommitTypes   []CommitTypeOption  `json:"commit_types"   mapstructure:"commit_types"`
-	CommitMessage CommitMessageConfig `json:"commit_message" mapstructure:"commit_message"`
+	CommitTypes   []CommitTypeOption  `json:"commit_types"   mapstructure:"commit-types"`
+	CommitMessage CommitMessageConfig `json:"commit_message" mapstructure:"commit-message"`
 	Branch        BranchConfig        `json:"branch"         mapstructure:"branch"`
-	IssueTracker  IssueTrackerConfig  `json:"issue_tracker"  mapstructure:"issue_tracker"`
+	IssueTracker  IssueTrackerConfig  `json:"issue_tracker"  mapstructure:"issue-tracker"`
 }
 
 // Load parses the embedded default.json then overlays any values present in the

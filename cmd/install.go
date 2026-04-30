@@ -12,13 +12,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const subCommandName = "cz"
+const (
+	subCommandName = "zf"
+)
 
-// InstallCmd copies the current binary into Git's exec path as "git-cz".
+// InstallCmd copies the current binary into Git's exec path as "git-zf".
 func getInstallCmd() *cobra.Command {
 	var installCmd = &cobra.Command{
 		Use:   "install",
-		Short: "Install this tool to git-core as git-cz",
+		Short: "Install this tool to git-core as " + progName,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			appFilePath, err := exec.LookPath(os.Args[0])
 			if err != nil {
@@ -30,7 +32,7 @@ func getInstallCmd() *cobra.Command {
 				return fmt.Errorf("failed to install %s: %w", Name, err)
 			}
 
-			fmt.Printf("Install commitizen to %s\n", path)
+			fmt.Printf("Install %s to %s\n", progName, path)
 
 			return nil
 		},

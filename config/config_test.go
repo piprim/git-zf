@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/lintingzhen/commitizen-go/config"
+	"github.com/piprim/git-zf/config"
 )
 
 func TestLoad_defaults(t *testing.T) {

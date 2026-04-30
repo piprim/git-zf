@@ -15,10 +15,10 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	lgtable "github.com/charmbracelet/lipgloss/table"
-	"github.com/lintingzhen/commitizen-go/git"
-	"github.com/lintingzhen/commitizen-go/issue"
-	"github.com/lintingzhen/commitizen-go/store"
-	"github.com/lintingzhen/commitizen-go/tui"
+	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/issue"
+	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -289,7 +289,7 @@ func getBranchPruneCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Remove DB records for branches deleted or merged outside cz",
+		Short: "Remove DB records for branches deleted or merged outside " + progName,
 		Long: `Scans all in-progress branches in the local store and:
   - deletes records whose local git ref no longer exists
   - marks records as merged when their tip is reachable from the base branch`,

@@ -1,12 +1,11 @@
 VERSION := $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")
-BIN := commitizen-go
-TARGET     := git-cz
+TARGET     := git-zf
 BIN_DIR := ./bin
 BIN        := $(BIN_DIR)/$(TARGET)
 GOARCH := $(shell go env GOARCH)
 LDFLAGS    := -ldflags "\
-  -X github.com/lintingzhen/commitizen-go/cmd.Version=${VERSION} \
-  -X github.com/lintingzhen/commitizen-go/cmd.Name=${TARGET}"
+  -X github.com/piprim/git-zf/cmd.Version=${VERSION} \
+  -X github.com/piprim/git-zf/cmd.Name=${TARGET}"
 
 
 ifeq ($(OS),Windows_NT)
@@ -26,7 +25,7 @@ GIT_EXEC_PATH := $(shell git --exec-path)
 
 all: build
 install: build
-	$(COPY) $(BIN) $(GIT_EXEC_PATH)/git-cz
+	$(COPY) $(BIN) $(GIT_EXEC_PATH)/$(TARGET)
 clean:
 	rm -rf $(BIN_DIR)
 

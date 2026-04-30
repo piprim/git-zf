@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 
 	"github.com/charmbracelet/huh"
-	"github.com/lintingzhen/commitizen-go/branch"
-	"github.com/lintingzhen/commitizen-go/config"
-	"github.com/lintingzhen/commitizen-go/git"
-	"github.com/lintingzhen/commitizen-go/issue"
-	"github.com/lintingzhen/commitizen-go/store"
-	"github.com/lintingzhen/commitizen-go/tracker"
-	_ "github.com/lintingzhen/commitizen-go/tracker/redmine" // registers redmine adapter
-	"github.com/lintingzhen/commitizen-go/tui"
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/issue"
+	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/tracker"
+	_ "github.com/piprim/git-zf/tracker/redmine" // registers redmine adapter
+	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -50,7 +50,7 @@ func getIssueStartCmd() *cobra.Command {
 		Use:   "start",
 		Short: "Start work on an issue (create branch)",
 		Long: `Enter issue details, then a properly named branch is created and
-checked out from the default base branch. Branch state is saved to .git/git-cz.db.`,
+checked out from the default base branch. Branch state is saved to .git/git-zf.db.`,
 		RunE: issueStartRunE,
 	}
 }

@@ -10,8 +10,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"github.com/lintingzhen/commitizen-go/config"
-	"github.com/lintingzhen/commitizen-go/tui"
+	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/tui"
 )
 
 // FillOutForm presents the commit TUI form.

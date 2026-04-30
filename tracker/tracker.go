@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/lintingzhen/commitizen-go/config"
+	"github.com/piprim/git-zf/config"
 )
 
 // Issue is the tracker-agnostic representation of a work item.
@@ -27,7 +27,7 @@ type Tracker interface {
 
 var (
 	registryMu sync.RWMutex
-	registry   = make(map[string]func(config.IssueTrackerConfig) (Tracker, error), 0)
+	registry   = make(map[string]func(config.IssueTrackerConfig) (Tracker, error))
 )
 
 // Register adds a factory function for the named tracker type.

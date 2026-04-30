@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
-	"github.com/lintingzhen/commitizen-go/tracker"
-	"github.com/lintingzhen/commitizen-go/tui"
+	"github.com/piprim/git-zf/tracker"
+	"github.com/piprim/git-zf/tui"
 )
 
 type IssueStartFlags struct {

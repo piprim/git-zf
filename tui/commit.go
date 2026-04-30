@@ -10,7 +10,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"github.com/lintingzhen/commitizen-go/config"
+	"github.com/piprim/git-zf/config"
 )
 
 // CommitOption holds commit option values for the commit options group of the TUI.
@@ -33,8 +33,8 @@ func (o CommitOption) AnyOptionSet() bool {
 
 var (
 	descStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#888888")).
-		PaddingLeft(1)
+			Foreground(lipgloss.Color("#888888")).
+			PaddingLeft(1)
 	titler = cases.Title(language.English, cases.NoLower)
 )
 

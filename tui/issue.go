@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
-	"github.com/lintingzhen/commitizen-go/tracker"
+	"github.com/piprim/git-zf/tracker"
 )
 
 const (

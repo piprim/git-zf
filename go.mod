@@ -1,4 +1,4 @@
-module github.com/lintingzhen/commitizen-go
+module github.com/piprim/git-zf
 
 go 1.25.0
 

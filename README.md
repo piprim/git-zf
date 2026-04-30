@@ -1,43 +1,29 @@
-# Commitizen-go
-> Command line utility to standardize git commit messages and manage git-flow, golang version.
+# Git-ZF
 
-![demo](docs/images/demo.gif)
-
-Contents
-- Getting Started
-- Usage
-- Configure
+> Command line utility to standardize git commit messages and manage git-flow.
 
 ## Getting Started
-### installation with Homebrew:
-```
-$ brew tap lintingzhen/tap
-$ brew install commitizen-go
-$ sudo commitizen-go install
-```
-### installation with AUR package (Arch Linux):
-```
-$ yay commitizen-go
-```
+
+
 ### installation with source code:
 ```
 $ make && make install
 ```
 or
 ```
-$ make && ./commitizen-go install
+$ make && ./bin/git-zf install
 ```
 
 ## Usage
 
 ### Commit
 ```
-$ git cz commit
+$ git zf commit
 ```
 
 ```
 Usage:
-  commitizen-go commit [flags]
+  git-zf commit [flags]
 
 Flags:
   -a, --all             stage all tracked modified/deleted files before committing
@@ -53,20 +39,20 @@ If any commit flag is passed, the options page of the TUI form is skipped and th
 
 ### Issue
 ```
-$ git cz issue
-$ git cz issue start
+$ git zf issue
+$ git zf issue start
 ```
 
-Start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out automatically. Branch state is tracked in `.git/git-cz.db`.
+Start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out automatically. Branch state is tracked in `.git/git-zf.db`.
 
 If a tracker is configured, `issue start` pre-selects fetching from the tracker; after picking an issue you can update its status to "In Progress" in one step.
 
 ### Branch
 ```
-$ git cz branch new       # create a branch with manual input
-$ git cz branch list      # list tracked branches
-$ git cz branch merge     # merge a branch via TUI
-$ git cz branch prune     # clean up stale DB records
+$ git zf branch new       # create a branch with manual input
+$ git zf branch list      # list tracked branches
+$ git zf branch merge     # merge a branch via TUI
+$ git zf branch prune     # clean up stale DB records
 ```
 
 `branch new` is the same flow as `issue start` but pre-selects manual input.
@@ -87,25 +73,25 @@ $ git cz branch prune     # clean up stale DB records
 ### All commands
 ```
 Usage:
-  commitizen-go [command]
+  git-zf [command]
 
 Available Commands:
   branch      Manage local branches
   commit      Record changes to the repository
-  install     Install this tool to git-core as git-cz
+  install     Install this tool to git-core as git-zf
   issue       Manage issues
   version     Print version information and quit
 
 Flags:
   -d, --debug   debug mode, output debug info to debug.log
-  -h, --help    help for commitizen-go
+  -h, --help    help for git-zf
 ```
 
 ## Configure
 
-Config file: `.git-czrc` (JSON) at repository root or `$HOME`. Repository root takes priority over home directory. You can also add the `.json` extension (`.git-czrc.json`).
+Config file: `.git-zf.json` (JSON) at repository root or `$HOME`. Repository root takes priority over home directory.
 
-The default configuration is embedded in [`config/default.json`](https://github.com/lintingzhen/commitizen-go/blob/master/config/default.json).
+The default configuration is embedded in [`config/default.json`](https://github.com/piprim/git-zf/blob/master/config/default.json).
 
 ### Commit types
 
@@ -159,9 +145,9 @@ To override the base branch (default: auto-detected from `origin/HEAD`, then `ma
 
 ### Tracker integration
 
-`git cz issue start` can fetch open issues assigned to you from a project tracker. Currently supported: **Redmine**.
+`git zf issue start` can fetch open issues assigned to you from a project tracker. Currently supported: **Redmine**.
 
-Add an `issue_tracker` section to `.git-czrc`:
+Add an `issue_tracker` section to `.git-zf.json`:
 
 ```json
 {

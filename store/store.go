@@ -23,8 +23,9 @@ type Store struct {
 
 // Issue represents a tracked issue record.
 type Issue struct {
-	ID          int64
-	IDSlug      string  // tracker string ID: "ABC-42", "42", …
+	ID int64
+	// tracker string ID: "ABC-42", "42", …
+	IDSlug      string
 	Title       string
 	StatusID    int64
 	TrackerType *string // nil = manual entry; non-nil = tracker type (e.g. "redmine")
@@ -61,9 +62,11 @@ type BranchRow struct {
 	CreatedAt  time.Time    `json:"created_at"`
 }
 
-// Open opens (or creates) the SQLite database at dir/git-cz.db and runs pending migrations.
+const dbName = "git-zf.db"
+
+// Open opens (or creates) the SQLite database at dir/[dbName] and runs pending migrations.
 func Open(ctx context.Context, dir string) (*Store, error) {
-	path := filepath.Join(dir, "git-cz.db")
+	path := filepath.Join(dir, dbName)
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)

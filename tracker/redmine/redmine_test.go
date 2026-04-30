@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lintingzhen/commitizen-go/config"
-	"github.com/lintingzhen/commitizen-go/tracker/redmine"
+	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/tracker/redmine"
 )
 
 func TestListIssues_success(t *testing.T) {

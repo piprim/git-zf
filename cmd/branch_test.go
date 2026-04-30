@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lintingzhen/commitizen-go/store"
+	"github.com/piprim/git-zf/store"
 )
 
 // fakePruner implements branchPruner for tests without a real git repository.
@@ -16,9 +16,9 @@ type fakePruner struct {
 	mergedSet  map[string]bool
 }
 
-func (f *fakePruner) DefaultBaseBranch() (string, error)           { return f.base, nil }
-func (f *fakePruner) LocalBranchNames() ([]string, error)          { return f.localNames, nil }
-func (f *fakePruner) IsMergedInto(name, _ string) (bool, error)    { return f.mergedSet[name], nil }
+func (f *fakePruner) DefaultBaseBranch() (string, error)        { return f.base, nil }
+func (f *fakePruner) LocalBranchNames() ([]string, error)       { return f.localNames, nil }
+func (f *fakePruner) IsMergedInto(name, _ string) (bool, error) { return f.mergedSet[name], nil }
 
 func openTestBranchStore(t *testing.T) *store.Store {
 	t.Helper()

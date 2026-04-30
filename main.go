@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/lintingzhen/commitizen-go/cmd"
+	"github.com/piprim/git-zf/cmd"
 )
 
 func main() {
