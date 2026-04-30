@@ -4,14 +4,35 @@
 
 ## Getting Started
 
+### Prerequisites
 
-### installation with source code:
+- [Go 1.25+](https://go.dev/dl/)
+- Git
+
+### Install from source
+
+```bash
+git clone https://github.com/piprim/git-zf.git
+cd git-zf
+make
+sudo make install      # copies binary to $(git --exec-path)
 ```
-$ make && make install
+
+> On macOS with Homebrew Git the exec-path is user-writable; omit `sudo`.
+
+### Install via `go install`
+
+```bash
+go install github.com/piprim/git-zf@latest
+sudo git-zf install    # copies binary to $(git --exec-path)
 ```
-or
-```
-$ make && ./bin/git-zf install
+
+> If `git --exec-path` is user-writable, omit `sudo`.
+
+### Verify
+
+```bash
+git zf version
 ```
 
 ## Usage
