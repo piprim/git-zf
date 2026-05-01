@@ -1,6 +1,6 @@
 # Git-ZF
 
-> Command line utility to standardize git commit messages and manage git-flow.
+> Command line utility to manage git workflow, connect to issue trackers, and standardize commit messages through a TUI.
 
 ## Getting Started
 
@@ -92,13 +92,15 @@ $ git zf branch prune     # clean up stale DB records
 ```
 
 ### All commands
-```
+```txt
 Usage:
   git-zf [command]
 
 Available Commands:
   branch      Manage local branches
   commit      Record changes to the repository
+  completion  Generate completion script
+  help        Help about any command
   install     Install this tool to git-core as git-zf
   issue       Manage issues
   version     Print version information and quit
