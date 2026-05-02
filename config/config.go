@@ -51,10 +51,9 @@ type BranchConfig struct {
 // IssueTrackerConfig holds connection parameters for one tracker instance.
 // Never log values of this type — Token is a secret.
 type IssueTrackerConfig struct {
-	Type             string `json:"type"               mapstructure:"type"`
-	URL              string `json:"url"                mapstructure:"url"`
-	Token            string `json:"token"              mapstructure:"token"`
-	InProgressStatus string `json:"in-progress-status" mapstructure:"in-progress-status"`
+	Type  string `json:"type"  mapstructure:"type"`
+	URL   string `json:"url"   mapstructure:"url"`
+	Token string `json:"token" mapstructure:"token"`
 }
 
 // AppConfig is the top-level configuration for the application.

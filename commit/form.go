@@ -21,7 +21,7 @@ import (
 //	Group 2 is skipped when defaults.AnyOptionSet() is true (flags were passed).
 //
 // Returns the assembled commit message bytes and the (possibly user-modified) options.
-func FillOutForm(cfg config.AppConfig, defaults tui.CommitOption) ([]byte, tui.CommitOption, error) {
+func FillOutForm(cfg *config.AppConfig, defaults tui.CommitOption) ([]byte, tui.CommitOption, error) {
 	form, extractMsg, extractOpts := loadForm(cfg, defaults)
 	tmplText := cfg.CommitMessage.Template
 
@@ -93,7 +93,7 @@ func assembleMessage(buf *bytes.Buffer, tmplText string, answers map[string]any)
 }
 
 func loadForm(
-	cfg config.AppConfig,
+	cfg *config.AppConfig,
 	defaults tui.CommitOption,
 ) (form *huh.Form, extractMsg func() map[string]any, extractOpts func() tui.CommitOption) {
 	log.Printf("message tmpl: %s", cfg.CommitMessage.Template)

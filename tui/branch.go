@@ -21,7 +21,8 @@ func BranchActionSelect(action *string) *huh.Group {
 			Options(
 				huh.NewOption("List\n"+descStyle.Render("List branches by status"), BranchActionNameList),
 				huh.NewOption("New\n"+descStyle.Render("Create a new branch (manual input)"), BranchActionNameNew),
-				huh.NewOption("Prune\n"+descStyle.Render("Remove DB records for deleted or merged branches"), BranchActionNamePrune),
+				huh.NewOption("Prune\n"+
+					descStyle.Render("Remove DB records for deleted or merged branches"), BranchActionNamePrune),
 				huh.NewOption("Merge\n"+descStyle.Render("Merge a branch"), BranchActionNameMerge),
 			).
 			Value(action),

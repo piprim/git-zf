@@ -104,6 +104,21 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 	return result, nil
 }
 
+// ListStatuses returns every available status name from GET /issue_statuses.json.
+func (a *redmineAdapter) ListStatuses(_ context.Context) ([]string, error) {
+	statuses, err := a.client.IssueStatuses()
+	if err != nil {
+		return nil, fmt.Errorf("fetch issue statuses: %w", err)
+	}
+
+	names := make([]string, len(statuses))
+	for i, s := range statuses {
+		names[i] = s.Name
+	}
+
+	return names, nil
+}
+
 // UpdateIssueStatus resolves statusName via GET /issue_statuses.json then PUTs
 // only the status_id. We send a minimal payload instead of using go-redmine's
 // UpdateIssue because that serializes every Issue field (including category_id:0
@@ -132,7 +147,7 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 	if !found {
 		statusID, err = strconv.Atoi(statusNameOrID)
 		if err != nil {
-			return fmt.Errorf("status %q not found in Redmine; check in_progress_status in .git-zf.json", statusNameOrID)
+			return fmt.Errorf("status %q not found in Redmine", statusNameOrID)
 		}
 	}
 

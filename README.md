@@ -177,8 +177,7 @@ Add an `issue-tracker` section to `.git-zf.json`:
   "issue-tracker": {
     "type": "redmine",
     "url": "https://redmine.example.com",
-    "token": "YOUR_API_KEY",
-    "in-progress-status": "In Progress"
+    "token": "YOUR_API_KEY"
   }
 }
 ```
@@ -188,10 +187,9 @@ Add an `issue-tracker` section to `.git-zf.json`:
 | `type` | Tracker type. Currently only `"redmine"` is supported. |
 | `url` | Base URL of your tracker instance. |
 | `token` | API key / personal access token. |
-| `in-progress-status` | Status name to set when work starts (default: `"In Progress"`). |
 
 When a tracker is configured:
 1. `issue start` asks whether to fetch issues from the tracker.
 2. If yes, open issues assigned to you are listed; type any key to filter the list, pick one and select a branch type.
-3. After the branch is created, you can update the issue status in the tracker in one step.
+3. After the branch is created, a status picker shows the live list of statuses from the tracker; pick one or skip.
 4. If the tracker is unavailable or returns no issues, the flow falls back to manual input.

@@ -21,6 +21,8 @@ type Issue struct {
 type Tracker interface {
 	// ListIssues retrieves the issues from the tracker
 	ListIssues(ctx context.Context) ([]Issue, error)
+	// ListStatuses returns the available status names for the tracker.
+	ListStatuses(ctx context.Context) ([]string, error)
 	// UpdateIssueStatus updates the status from the given issueID
 	UpdateIssueStatus(ctx context.Context, issueID, statusName string) error
 }

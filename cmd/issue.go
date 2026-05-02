@@ -148,15 +148,28 @@ func createBranch(cmd *cobra.Command, t tracker.Tracker, pickedIssue *issue.Issu
 }
 
 func updateTrackerIssueStatus(cmd *cobra.Command, t tracker.Tracker, issueID string) {
-	var updateStatus bool
-	if err := huh.NewForm(tui.IssueUpdateStatusConfirm(
-		issueID, appConfig.IssueTracker.InProgressStatus, appConfig.IssueTracker.Type, &updateStatus,
+	statuses, err := t.ListStatuses(cmd.Context())
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "warning: could not fetch tracker statuses: %v\n", err)
+
+		return
+	}
+
+	var selected string
+	if err := huh.NewForm(tui.IssueStatusPicker(
+		issueID, appConfig.IssueTracker.Type, statuses, &selected,
 	)).Run(); err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: status confirm form: %v\n", err)
-	} else if updateStatus {
-		if err := t.UpdateIssueStatus(cmd.Context(), issueID, appConfig.IssueTracker.InProgressStatus); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "warning: could not update tracker status: %v\n", err)
-		}
+		fmt.Fprintf(cmd.OutOrStderr(), "warning: status picker form: %v\n", err)
+
+		return
+	}
+
+	if selected == "" {
+		return
+	}
+
+	if err := t.UpdateIssueStatus(cmd.Context(), issueID, selected); err != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "warning: could not update tracker status: %v\n", err)
 	}
 }
 

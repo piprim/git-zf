@@ -143,11 +143,23 @@ func IssueTrackerError(msg string) *huh.Group {
 	)
 }
 
-// IssueUpdateStatusConfirm asks whether to update the issue status in the tracker.
-func IssueUpdateStatusConfirm(issueID, statusName, trackerType string, confirmed *bool) *huh.Group {
+const issueStatusSkip = ""
+
+// IssueStatusPicker lets the user pick a new status from the live list, or
+// skip the update entirely. selected is set to the chosen status name, or to
+// issueStatusSkip ("") when the user chooses to skip.
+func IssueStatusPicker(issueID, trackerType string, statuses []string, selected *string) *huh.Group {
+	opts := make([]huh.Option[string], 0, len(statuses)+1)
+	opts = append(opts, huh.NewOption("Skip (don't update)", issueStatusSkip))
+
+	for _, s := range statuses {
+		opts = append(opts, huh.NewOption(s, s))
+	}
+
 	return huh.NewGroup(
-		huh.NewConfirm().
-			Title(fmt.Sprintf("Update issue %s to %q in %s?", issueID, statusName, trackerType)).
-			Value(confirmed),
+		huh.NewSelect[string]().
+			Title(fmt.Sprintf("Update issue %s status in %s:", issueID, trackerType)).
+			Options(opts...).
+			Value(selected).Filtering(true),
 	)
 }

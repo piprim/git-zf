@@ -33,10 +33,6 @@ func TestLoad_defaults(t *testing.T) {
 	if cfg.IssueTracker.Type != "" {
 		t.Errorf("IssueTracker.Type = %q, want empty", cfg.IssueTracker.Type)
 	}
-	if cfg.IssueTracker.InProgressStatus != "In Progress" {
-		t.Errorf("IssueTracker.InProgressStatus = %q, want %q",
-			cfg.IssueTracker.InProgressStatus, "In Progress")
-	}
 }
 
 func TestLoad_overlay(t *testing.T) {
@@ -62,30 +58,6 @@ func TestLoad_overlay(t *testing.T) {
 	// Unset keys fall back to defaults.
 	if cfg.CommitMessage.Template == "" {
 		t.Error("CommitMessage.Template should remain from defaults")
-	}
-}
-
-func TestLoad_overlay_issueTrackerPreservesDefault(t *testing.T) {
-	// Not parallel — modifies global viper state.
-	viper.Reset()
-	defer viper.Reset()
-
-	// Override type without touching in-progress-status; default must be preserved.
-	viper.Set("issue-tracker.type", "redmine")
-	viper.Set("issue-tracker.url", "https://example.com")
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if cfg.IssueTracker.Type != "redmine" {
-		t.Errorf("IssueTracker.Type = %q, want %q", cfg.IssueTracker.Type, "redmine")
-	}
-
-	if cfg.IssueTracker.InProgressStatus != "In Progress" {
-		t.Errorf("IssueTracker.InProgressStatus = %q, want %q",
-			cfg.IssueTracker.InProgressStatus, "In Progress")
 	}
 }
 

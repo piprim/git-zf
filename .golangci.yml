@@ -34,7 +34,6 @@ linters:
     - recvcheck
     - sloglint
     - staticcheck
-    - tagliatelle
     - unconvert
     - unparam
     - unused
@@ -867,18 +866,6 @@ linters:
           severity: warning
           disabled: false
           exclude: [""]
-    tagliatelle:
-      case:
-        rules:
-          avro: snake
-          bson: camel
-          env: upperSnake
-          envconfig: upperSnake
-          json: kebab
-          mapstructure: kebab
-          xml: camel
-          yaml: camel
-        use-field-name: false
   exclusions:
     generated: lax
     presets:

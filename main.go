@@ -22,6 +22,6 @@ func main() {
 func fatalError(ccmd *cobra.Command, err error) {
 	log.SetOutput(ccmd.OutOrStderr())
 
-	//nolint:revive // It's call by main only.
+	//nolint:revive,deep-exit // It's call by main only.
 	log.Fatal(err)
 }

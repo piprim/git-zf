@@ -67,7 +67,7 @@ func commitRunE(_ *cobra.Command, _ []string) error {
 		Author:     commitAuthor,
 	}
 
-	msg, opts, err := commit.FillOutForm(appConfig, defaults)
+	msg, opts, err := commit.FillOutForm(&appConfig, defaults)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
