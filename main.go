@@ -2,27 +2,25 @@ package main
 
 import (
 	"log"
-	"os"
 
 	"github.com/piprim/git-zf/cmd"
+	"github.com/spf13/cobra"
 )
 
 func main() {
 	rootCmd, err := cmd.GetRootCmd()
 	if err != nil {
-		fatalError(err)
+		fatalError(rootCmd, err)
 	}
 
 	err = rootCmd.Execute()
 	if err != nil {
-		fatalError(err)
+		fatalError(rootCmd, err)
 	}
-
-	os.Exit(0)
 }
 
-func fatalError(err error) {
-	log.SetOutput(os.Stderr)
+func fatalError(ccmd *cobra.Command, err error) {
+	log.SetOutput(ccmd.OutOrStderr())
 
 	//nolint:revive // It's call by main only.
 	log.Fatal(err)

@@ -54,20 +54,20 @@ type IssueTrackerConfig struct {
 	Type             string `json:"type"               mapstructure:"type"`
 	URL              string `json:"url"                mapstructure:"url"`
 	Token            string `json:"token"              mapstructure:"token"`
-	InProgressStatus string `json:"in_progress_status" mapstructure:"in-progress-status"`
+	InProgressStatus string `json:"in-progress-status" mapstructure:"in-progress-status"`
 }
 
 // AppConfig is the top-level configuration for the application.
 type AppConfig struct {
-	CommitTypes   []CommitTypeOption  `json:"commit_types"   mapstructure:"commit-types"`
-	CommitMessage CommitMessageConfig `json:"commit_message" mapstructure:"commit-message"`
+	CommitTypes   []CommitTypeOption  `json:"commit-types"   mapstructure:"commit-types"`
+	CommitMessage CommitMessageConfig `json:"commit-message" mapstructure:"commit-message"`
 	Branch        BranchConfig        `json:"branch"         mapstructure:"branch"`
-	IssueTracker  IssueTrackerConfig  `json:"issue_tracker"  mapstructure:"issue-tracker"`
+	IssueTracker  IssueTrackerConfig  `json:"issue-tracker"  mapstructure:"issue-tracker"`
 }
 
 // Load parses the embedded default.json then overlays any values present in the
 // global viper instance. Each config section is handled individually so that a
-// partial override (e.g. only commit_message.items) preserves unset defaults.
+// partial override (e.g. only commit-message.items) preserves unset defaults.
 // viper.Sub is avoided because it silently returns nil for array-typed keys.
 func Load() (AppConfig, error) {
 	var cfg AppConfig
@@ -79,31 +79,31 @@ func Load() (AppConfig, error) {
 	// fully replaces the default instead of being appended to it.
 	zeroSlice := func(dc *mapstructure.DecoderConfig) { dc.ZeroFields = true }
 
-	if viper.IsSet("commit_types") {
-		if err := viper.UnmarshalKey("commit_types", &cfg.CommitTypes, zeroSlice); err != nil {
-			return AppConfig{}, fmt.Errorf("unmarshal commit_types: %w", err)
+	if viper.IsSet("commit-types") {
+		if err := viper.UnmarshalKey("commit-types", &cfg.CommitTypes, zeroSlice); err != nil {
+			return AppConfig{}, fmt.Errorf("unmarshal commit-types: %w", err)
 		}
 	}
 
-	if viper.IsSet("commit_message.items") {
-		if err := viper.UnmarshalKey("commit_message.items", &cfg.CommitMessage.Items, zeroSlice); err != nil {
-			return AppConfig{}, fmt.Errorf("unmarshal commit_message.items: %w", err)
+	if viper.IsSet("commit-message.items") {
+		if err := viper.UnmarshalKey("commit-message.items", &cfg.CommitMessage.Items, zeroSlice); err != nil {
+			return AppConfig{}, fmt.Errorf("unmarshal commit-message.items: %w", err)
 		}
 	}
 
-	if viper.IsSet("commit_message.template") {
-		cfg.CommitMessage.Template = viper.GetString("commit_message.template")
+	if viper.IsSet("commit-message.template") {
+		cfg.CommitMessage.Template = viper.GetString("commit-message.template")
 	}
 
 	if viper.IsSet("branch.base") {
 		cfg.Branch.Base = viper.GetString("branch.base")
 	}
 
-	// issue_tracker has no slice fields, so zeroSlice is not needed — absent
+	// issue-tracker has no slice fields, so zeroSlice is not needed — absent
 	// keys keep their defaults under mapstructure's merge behaviour.
-	if viper.IsSet("issue_tracker") {
-		if err := viper.UnmarshalKey("issue_tracker", &cfg.IssueTracker); err != nil {
-			return AppConfig{}, fmt.Errorf("unmarshal issue_tracker: %w", err)
+	if viper.IsSet("issue-tracker") {
+		if err := viper.UnmarshalKey("issue-tracker", &cfg.IssueTracker); err != nil {
+			return AppConfig{}, fmt.Errorf("unmarshal issue-tracker: %w", err)
 		}
 	}
 

@@ -44,7 +44,7 @@ func TestLoad_overlay(t *testing.T) {
 	viper.Reset()
 	defer viper.Reset()
 
-	viper.Set("commit_types", []map[string]any{
+	viper.Set("commit-types", []map[string]any{
 		{"name": "custom", "desc": "Custom type"},
 	})
 
@@ -70,9 +70,9 @@ func TestLoad_overlay_issueTrackerPreservesDefault(t *testing.T) {
 	viper.Reset()
 	defer viper.Reset()
 
-	// Override type without touching in_progress_status; default must be preserved.
-	viper.Set("issue_tracker.type", "redmine")
-	viper.Set("issue_tracker.url", "https://example.com")
+	// Override type without touching in-progress-status; default must be preserved.
+	viper.Set("issue-tracker.type", "redmine")
+	viper.Set("issue-tracker.url", "https://example.com")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -95,7 +95,7 @@ func TestLoad_overlay_partialCommitMessage(t *testing.T) {
 	defer viper.Reset()
 
 	// Override only items (not template); template must be preserved from defaults.
-	viper.Set("commit_message.items", []map[string]any{
+	viper.Set("commit-message.items", []map[string]any{
 		{"name": "subject", "desc": "Custom subject:", "form": "input", "required": true},
 	})
 

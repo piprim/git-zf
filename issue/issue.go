@@ -57,6 +57,7 @@ func GetFromTracker(ctx context.Context, t tracker.Tracker, allowedTypes []strin
 
 	issue.ID = pickedIssue.ID
 	issue.Subject = pickedIssue.Subject
+	issue.TrackerType = pickedIssue.TrackerType
 
 	return &issue, nil
 }

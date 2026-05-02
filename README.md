@@ -122,7 +122,7 @@ Override the list of commit types shown in the type selector:
 
 ```json
 {
-  "commit_types": [
+  "commit-types": [
     { "name": "feat",  "desc": "A new feature" },
     { "name": "fix",   "desc": "A bug fix" },
     { "name": "chore", "desc": "Build process or tooling changes" }
@@ -136,7 +136,7 @@ Override the form fields and/or the message template:
 
 ```json
 {
-  "commit_message": {
+  "commit-message": {
     "items": [
       { "name": "scope",   "desc": "Scope (users, db, poll…):", "form": "input" },
       { "name": "subject", "desc": "Concise description. Imperative, lower case, no final dot:", "form": "input", "required": true },
@@ -170,15 +170,15 @@ To override the base branch (default: auto-detected from `origin/HEAD`, then `ma
 
 `git zf issue start` can fetch open issues assigned to you from a project tracker. Currently supported: **Redmine**.
 
-Add an `issue_tracker` section to `.git-zf.json`:
+Add an `issue-tracker` section to `.git-zf.json`:
 
 ```json
 {
-  "issue_tracker": {
+  "issue-tracker": {
     "type": "redmine",
     "url": "https://redmine.example.com",
     "token": "YOUR_API_KEY",
-    "in_progress_status": "In Progress"
+    "in-progress-status": "In Progress"
   }
 }
 ```
@@ -188,7 +188,7 @@ Add an `issue_tracker` section to `.git-zf.json`:
 | `type` | Tracker type. Currently only `"redmine"` is supported. |
 | `url` | Base URL of your tracker instance. |
 | `token` | API key / personal access token. |
-| `in_progress_status` | Status name to set when work starts (default: `"In Progress"`). |
+| `in-progress-status` | Status name to set when work starts (default: `"In Progress"`). |
 
 When a tracker is configured:
 1. `issue start` asks whether to fetch issues from the tracker.

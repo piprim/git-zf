@@ -1,32 +1,54 @@
 {
-  "commit_types": [
-    { "name": "feat",     "desc": "A new feature" },
-    { "name": "fix",      "desc": "A bug fix" },
-    { "name": "docs",     "desc": "Documentation only changes" },
-    { "name": "style",    "desc": "Changes that do not affect the meaning of the code" },
-    { "name": "refactor", "desc": "A code change that neither fixes a bug nor adds a feature" },
-    { "name": "perf",     "desc": "A code change that improves performance" },
-    { "name": "test",     "desc": "Adding missing tests" },
-    { "name": "chore",    "desc": "Changes to the build process or auxiliary tools" },
-    { "name": "revert",   "desc": "Revert to a commit" },
-    { "name": "WIP",      "desc": "Work in progress" }
+  "commit-types": [
+    { "name": "feat", "desc": "A new feature" },
+    { "name": "fix", "desc": "A bug fix" },
+    { "name": "docs", "desc": "Documentation only changes" },
+    {
+      "name": "style",
+      "desc": "Changes that do not affect the meaning of the code"
+    },
+    {
+      "name": "refactor",
+      "desc": "A code change that neither fixes a bug nor adds a feature"
+    },
+    { "name": "perf", "desc": "A code change that improves performance" },
+    { "name": "test", "desc": "Adding missing tests" },
+    {
+      "name": "chore",
+      "desc": "Changes to the build process or auxiliary tools"
+    },
+    { "name": "revert", "desc": "Revert to a commit" },
+    { "name": "WIP", "desc": "Work in progress" }
   ],
-  "commit_message": {
+  "commit-message": {
     "items": [
-      { "name": "scope",   "desc": "Scope (users, db, poll…):", "form": "input" },
-      { "name": "subject", "desc": "Concise description. Imperative, lower case, no final dot:", "form": "input", "required": true },
-      { "name": "body",    "desc": "Motivation for the change and contrast with previous behaviour:", "form": "multiline" },
-      { "name": "footer",  "desc": "Breaking changes and referenced issues:", "form": "multiline" }
+      { "name": "scope", "desc": "Scope (users, db, poll…):", "form": "input" },
+      {
+        "name": "subject",
+        "desc": "Concise description. Imperative, lower case, no final dot:",
+        "form": "input",
+        "required": true
+      },
+      {
+        "name": "body",
+        "desc": "Motivation for the change and contrast with previous behaviour:",
+        "form": "multiline"
+      },
+      {
+        "name": "footer",
+        "desc": "Breaking changes and referenced issues:",
+        "form": "multiline"
+      }
     ],
     "template": "{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}{{with .body}}\n\n{{.}}{{end}}{{with .footer}}\n\n{{.}}{{end}}"
   },
   "branch": {
     "base": ""
   },
-  "issue_tracker": {
+  "issue-tracker": {
     "type": "",
     "url": "",
     "token": "",
-    "in_progress_status": "In Progress"
+    "in-progress-status": "In Progress"
   }
 }
