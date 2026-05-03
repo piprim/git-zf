@@ -1,4 +1,4 @@
-package cmd
+package issue
 
 import (
 	"bytes"
@@ -63,7 +63,7 @@ func TestBuildIssueRows_trackerPath_partialMatch(t *testing.T) {
 
 	infra := issueListInfra{tracker: tk, store: s, stderr: &bytes.Buffer{}}
 
-	rows, err := buildIssueRows(t.Context(), infra, "open")
+	rows, err := buildRows(t.Context(), infra, "open")
 	if err != nil {
 		t.Fatalf("buildIssueRows: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestBuildIssueRows_localFallback_nilTracker(t *testing.T) {
 
 	infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
 
-	rows, err := buildIssueRows(t.Context(), infra, "open")
+	rows, err := buildRows(t.Context(), infra, "open")
 	if err != nil {
 		t.Fatalf("buildIssueRows: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestRunIssueList_json(t *testing.T) {
 
 	infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
 	var buf bytes.Buffer
-	if err := runIssueList(t.Context(), &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+	if err := runList(t.Context(), &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 		t.Fatalf("runIssueList: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestRunIssueList_stdout(t *testing.T) {
 
 	infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
 	var buf bytes.Buffer
-	if err := runIssueList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+	if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 		t.Fatalf("runIssueList: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestRunIssueList_stdout_emptyStore(t *testing.T) {
 	s := openTestIssueStore(t)
 	infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
 	var buf bytes.Buffer
-	if err := runIssueList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+	if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 		t.Fatalf("runIssueList: %v", err)
 	}
 
@@ -196,7 +196,7 @@ func TestRunIssueList_stdout_trackerIssueNoLocalBranch(t *testing.T) {
 	}}
 	infra := issueListInfra{tracker: tk, store: s, stderr: &bytes.Buffer{}}
 	var buf bytes.Buffer
-	if err := runIssueList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+	if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 		t.Fatalf("runIssueList: %v", err)
 	}
 
@@ -221,7 +221,7 @@ func TestBuildIssueRows_trackerError_fallback(t *testing.T) {
 	var stderr bytes.Buffer
 	infra := issueListInfra{tracker: tk, store: s, stderr: &stderr}
 
-	rows, err := buildIssueRows(t.Context(), infra, "open")
+	rows, err := buildRows(t.Context(), infra, "open")
 	if err != nil {
 		t.Fatalf("buildIssueRows: %v", err)
 	}

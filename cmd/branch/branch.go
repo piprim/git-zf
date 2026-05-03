@@ -1,4 +1,4 @@
-package cmd
+package branch
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	issuecmd "github.com/piprim/git-zf/cmd/issue"
+	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
@@ -20,24 +22,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type branchListFlags struct {
+type Branch struct {
+	appConfig *config.AppConfig
+}
+
+func New(appConfig *config.AppConfig) Branch {
+	return Branch{appConfig: appConfig}
+}
+
+type listFlags struct {
 	status  string
 	stdout  bool
 	jsonOut bool
 }
 
-func getBranchCmd() *cobra.Command {
+func (b Branch) GetRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "branch",
 		Short: "Manage local branches",
-		RunE:  branchRunE,
+		RunE:  b.runE,
 	}
-	cmd.AddCommand(getBranchListCmd(), getBranchNewCmd(), getBranchPruneCmd(), getBranchMergeCmd())
+	cmd.AddCommand(listCmd(), b.newCmd(), b.pruneCmd(), mergeCmd())
 
 	return cmd
 }
 
-func branchRunE(cmd *cobra.Command, args []string) error {
+func (b Branch) runE(cmd *cobra.Command, args []string) error {
 	var action string
 	if err := huh.NewForm(tui.BranchActionSelect(&action)).Run(); err != nil {
 		return fmt.Errorf("action select: %w", err)
@@ -46,11 +56,11 @@ func branchRunE(cmd *cobra.Command, args []string) error {
 	switch action {
 	case tui.BranchActionNameList:
 		// zero flags → TUI path (status filter presented interactively)
-		return branchListRunE(cmd, branchListFlags{})
+		return listRunE(cmd, listFlags{})
 	case tui.BranchActionNameNew:
-		return branchNewRunE(cmd, args)
+		return b.newRunE(cmd, args)
 	case tui.BranchActionNamePrune:
-		return branchPruneRunE(cmd, branchPruneFlags{})
+		return pruneRunE(cmd, pruneFlags{})
 	default:
 		fmt.Println("Not yet implemented.")
 
@@ -58,8 +68,8 @@ func branchRunE(cmd *cobra.Command, args []string) error {
 	}
 }
 
-func getBranchListCmd() *cobra.Command {
-	var flags branchListFlags
+func listCmd() *cobra.Command {
+	var flags listFlags
 
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -72,13 +82,13 @@ func getBranchListCmd() *cobra.Command {
 	f.BoolVar(&flags.jsonOut, "json", false, "print JSON array to stdout")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return branchListRunE(cmd, flags)
+		return listRunE(cmd, flags)
 	}
 
 	return cmd
 }
 
-func branchListRunE(cmd *cobra.Command, flags branchListFlags) error {
+func listRunE(cmd *cobra.Command, flags listFlags) error {
 	client, err := git.NewClient()
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
@@ -95,13 +105,13 @@ func branchListRunE(cmd *cobra.Command, flags branchListFlags) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	return runBranchList(cmd.Context(), os.Stdout, s, flags)
+	return runList(cmd.Context(), os.Stdout, s, flags)
 }
 
-// runBranchList executes the branch list logic. w receives stdout/non-TUI output.
-// When neither --json nor --stdout is set, runBranchList runs the interactive TUI.
-func runBranchList(ctx context.Context, w io.Writer, s *store.Store, flags branchListFlags) error {
-	queryStatus := toBranchStatus(flags.status)
+// runList executes the branch list logic. w receives stdout/non-TUI output.
+// When neither --json nor --stdout is set, runList runs the interactive TUI.
+func runList(ctx context.Context, w io.Writer, s *store.Store, flags listFlags) error {
+	queryStatus := toStoreStatus(flags.status)
 
 	if flags.jsonOut {
 		rows, err := s.ListBranches(ctx, queryStatus)
@@ -137,7 +147,7 @@ func runBranchList(ctx context.Context, w io.Writer, s *store.Store, flags branc
 		return fmt.Errorf("status filter: %w", err)
 	}
 
-	queryStatus = toBranchStatus(statusStr)
+	queryStatus = toStoreStatus(statusStr)
 
 	rows, err := s.ListBranches(ctx, queryStatus)
 	if err != nil {
@@ -161,7 +171,7 @@ func runBranchList(ctx context.Context, w io.Writer, s *store.Store, flags branc
 	return nil
 }
 
-func toBranchStatus(s string) store.BranchStatus {
+func toStoreStatus(s string) store.BranchStatus {
 	switch s {
 	case "in_progress":
 		return store.BranchStatusInProgress
@@ -172,21 +182,26 @@ func toBranchStatus(s string) store.BranchStatus {
 	}
 }
 
-func getBranchNewCmd() *cobra.Command {
+func (b Branch) newCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "new",
 		Short: "Create a new branch (manual input)",
 		Long:  "Enter issue details manually, then a named branch is created and checked out.",
-		RunE:  branchNewRunE,
+		RunE:  b.newRunE,
 	}
 }
 
-// branchNewRunE delegates to runIssueStart with manual-first (tracker toggle defaults to NO).
-func branchNewRunE(cmd *cobra.Command, _ []string) error {
-	return runIssueStart(cmd, issue.IssueStartFlags{TrackerFirst: false})
+// newRunE delegates to runIssueStart with manual-first (tracker toggle defaults to NO).
+func (b Branch) newRunE(cmd *cobra.Command, _ []string) error {
+	ir := issuecmd.New(b.appConfig)
+	if err := ir.RunIssueStart(cmd, issue.IssueStartFlags{TrackerFirst: false}); err != nil {
+		return fmt.Errorf("failed to run issueStart: %w", err)
+	}
+
+	return nil
 }
 
-type branchPruneFlags struct {
+type pruneFlags struct {
 	dryRun bool
 	base   string
 }
@@ -197,12 +212,12 @@ type pruneResult struct {
 	toMerge  []store.BranchRow // tip reachable from base — mark merged
 }
 
-func getBranchPruneCmd() *cobra.Command {
-	var flags branchPruneFlags
+func (b Branch) pruneCmd() *cobra.Command {
+	var flags pruneFlags
 
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Remove DB records for branches deleted or merged outside " + progName,
+		Short: "Remove DB records for branches deleted or merged outside " + b.appConfig.ProgName,
 		Long: `Scans all in-progress branches in the local store and:
   - deletes records whose local git ref no longer exists
   - marks records as merged when their tip is reachable from the base branch`,
@@ -212,21 +227,21 @@ func getBranchPruneCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flags.base, "base", "", "base branch for merge detection (default: auto-detected)")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return branchPruneRunE(cmd, flags)
+		return pruneRunE(cmd, flags)
 	}
 
 	return cmd
 }
 
-// branchPruner is the subset of git.Client that branchPrune needs,
+// pruner is the subset of git.Client that branchPrune needs,
 // allowing tests to inject a fake without a real git repository.
-type branchPruner interface {
+type pruner interface {
 	DefaultBaseBranch() (string, error)
 	LocalBranchNames() ([]string, error)
 	IsMergedInto(branchName, base string) (bool, error)
 }
 
-func branchPruneRunE(cmd *cobra.Command, flags branchPruneFlags) error {
+func pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	client, err := git.NewClient()
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
@@ -243,12 +258,12 @@ func branchPruneRunE(cmd *cobra.Command, flags branchPruneFlags) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	return runBranchPrune(cmd.Context(), os.Stdout, s, client, flags)
+	return runPrune(cmd.Context(), os.Stdout, s, client, flags)
 }
 
-// runBranchPrune executes the prune logic. w receives non-TUI output.
+// runPrune executes the prune logic. w receives non-TUI output.
 // When dryRun is true it prints the summary and returns without mutating the store.
-func runBranchPrune(ctx context.Context, w io.Writer, s *store.Store, pruner branchPruner, flags branchPruneFlags) error {
+func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, flags pruneFlags) error {
 	base := flags.base
 	if base == "" {
 		var err error
@@ -358,15 +373,15 @@ func executePrune(ctx context.Context, s *store.Store, result pruneResult) error
 	return nil
 }
 
-func getBranchMergeCmd() *cobra.Command {
+func mergeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "merge",
 		Short: "Merge a branch",
-		RunE:  branchMergeRunE,
+		RunE:  mergeRunE,
 	}
 }
 
-func branchMergeRunE(_ *cobra.Command, _ []string) error {
+func mergeRunE(_ *cobra.Command, _ []string) error {
 	fmt.Println("Not yet implemented.")
 
 	return nil

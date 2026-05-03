@@ -7,6 +7,8 @@ import (
 	"os"
 
 	homedir "github.com/mitchellh/go-homedir"
+	"github.com/piprim/git-zf/cmd/branch"
+	"github.com/piprim/git-zf/cmd/issue"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/spf13/cobra"
@@ -21,7 +23,7 @@ const (
 
 var (
 	isDebug   bool
-	appConfig config.AppConfig
+	appConfig *config.AppConfig
 )
 
 // GetRootCmd builds and returns the root Cobra command.
@@ -42,11 +44,14 @@ func GetRootCmd() (*cobra.Command, error) {
 	rootCmd.PersistentFlags().BoolVarP(&isDebug, "debug", "d", false,
 		"debug mode, output debug info to debug.log")
 
+	ir := issue.New(appConfig)
+	br := branch.New(appConfig)
+
 	rootCmd.AddCommand(
 		getCompletionCmd(),
 		getCommitCmd(),
-		getIssueCmd(),
-		getBranchCmd(),
+		ir.GetRootCmd(),
+		br.GetRootCmd(),
 		getVersionCmd(),
 		getInstallCmd(),
 	)

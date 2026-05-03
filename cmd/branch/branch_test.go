@@ -1,4 +1,4 @@
-package cmd
+package branch
 
 import (
 	"bytes"
@@ -44,7 +44,7 @@ func TestBranchList_json(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runBranchList(t.Context(), &buf, s, branchListFlags{jsonOut: true}); err != nil {
+	if err := runList(t.Context(), &buf, s, listFlags{jsonOut: true}); err != nil {
 		t.Fatalf("runBranchList: %v", err)
 	}
 
@@ -72,8 +72,8 @@ func TestBranchList_json_emptyStore(t *testing.T) {
 	s := openTestBranchStore(t)
 
 	var buf bytes.Buffer
-	if err := runBranchList(t.Context(), &buf, s, branchListFlags{jsonOut: true}); err != nil {
-		t.Fatalf("runBranchList: %v", err)
+	if err := runList(t.Context(), &buf, s, listFlags{jsonOut: true}); err != nil {
+		t.Fatalf("runList: %v", err)
 	}
 
 	var rows []store.BranchRow
@@ -97,8 +97,8 @@ func TestBranchList_stdout(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runBranchList(t.Context(), &buf, s, branchListFlags{stdout: true}); err != nil {
-		t.Fatalf("runBranchList: %v", err)
+	if err := runList(t.Context(), &buf, s, listFlags{stdout: true}); err != nil {
+		t.Fatalf("runList: %v", err)
 	}
 
 	out := buf.String()
@@ -116,8 +116,8 @@ func TestBranchList_stdout_emptyStore(t *testing.T) {
 	s := openTestBranchStore(t)
 
 	var buf bytes.Buffer
-	if err := runBranchList(t.Context(), &buf, s, branchListFlags{stdout: true}); err != nil {
-		t.Fatalf("runBranchList: %v", err)
+	if err := runList(t.Context(), &buf, s, listFlags{stdout: true}); err != nil {
+		t.Fatalf("runList: %v", err)
 	}
 
 	if !strings.Contains(buf.String(), "No branches found.") {
@@ -146,7 +146,7 @@ func TestRunBranchPrune_deletesGoneRef(t *testing.T) {
 	pruner := &fakePruner{base: "master", localNames: []string{"master"}}
 
 	var buf bytes.Buffer
-	if err := runBranchPrune(t.Context(), &buf, s, pruner, branchPruneFlags{dryRun: true}); err != nil {
+	if err := runPrune(t.Context(), &buf, s, pruner, pruneFlags{dryRun: true}); err != nil {
 		t.Fatalf("runBranchPrune: %v", err)
 	}
 	if !strings.Contains(buf.String(), "ABC-1@feat@gone@uuid-1") {
@@ -173,8 +173,8 @@ func TestRunBranchPrune_marksMerged(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runBranchPrune(t.Context(), &buf, s, pruner, branchPruneFlags{dryRun: true}); err != nil {
-		t.Fatalf("runBranchPrune: %v", err)
+	if err := runPrune(t.Context(), &buf, s, pruner, pruneFlags{dryRun: true}); err != nil {
+		t.Fatalf("runPrune: %v", err)
 	}
 	if !strings.Contains(buf.String(), "XY-1@fix@bug@uuid-2") {
 		t.Errorf("expected merged branch in output, got: %q", buf.String())
@@ -194,8 +194,8 @@ func TestRunBranchPrune_nothingToPrune(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runBranchPrune(t.Context(), &buf, s, pruner, branchPruneFlags{dryRun: true}); err != nil {
-		t.Fatalf("runBranchPrune: %v", err)
+	if err := runPrune(t.Context(), &buf, s, pruner, pruneFlags{dryRun: true}); err != nil {
+		t.Fatalf("runPrune: %v", err)
 	}
 	if !strings.Contains(buf.String(), "Nothing to prune.") {
 		t.Errorf("expected 'Nothing to prune.', got: %q", buf.String())
@@ -217,8 +217,8 @@ func TestRunBranchPrune_mixedDryRun(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runBranchPrune(t.Context(), &buf, s, pruner, branchPruneFlags{dryRun: true}); err != nil {
-		t.Fatalf("runBranchPrune: %v", err)
+	if err := runPrune(t.Context(), &buf, s, pruner, pruneFlags{dryRun: true}); err != nil {
+		t.Fatalf("runPrune: %v", err)
 	}
 
 	out := buf.String()

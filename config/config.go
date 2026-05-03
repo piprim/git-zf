@@ -9,6 +9,10 @@ import (
 	"github.com/spf13/viper"
 )
 
+const (
+	progName = "git-zf"
+)
+
 //go:embed default.json
 var defaultJSON []byte
 
@@ -58,6 +62,7 @@ type IssueTrackerConfig struct {
 
 // AppConfig is the top-level configuration for the application.
 type AppConfig struct {
+	ProgName      string
 	CommitTypes   []CommitTypeOption  `json:"commit-types"   mapstructure:"commit-types"`
 	CommitMessage CommitMessageConfig `json:"commit-message" mapstructure:"commit-message"`
 	Branch        BranchConfig        `json:"branch"         mapstructure:"branch"`
@@ -68,10 +73,10 @@ type AppConfig struct {
 // global viper instance. Each config section is handled individually so that a
 // partial override (e.g. only commit-message.items) preserves unset defaults.
 // viper.Sub is avoided because it silently returns nil for array-typed keys.
-func Load() (AppConfig, error) {
+func Load() (*AppConfig, error) {
 	var cfg AppConfig
 	if err := json.Unmarshal(defaultJSON, &cfg); err != nil {
-		return AppConfig{}, fmt.Errorf("parse default config: %w", err)
+		return nil, fmt.Errorf("parse default config: %w", err)
 	}
 
 	// zeroSlice zeroes the target before decoding so that a user-supplied slice
@@ -80,13 +85,13 @@ func Load() (AppConfig, error) {
 
 	if viper.IsSet("commit-types") {
 		if err := viper.UnmarshalKey("commit-types", &cfg.CommitTypes, zeroSlice); err != nil {
-			return AppConfig{}, fmt.Errorf("unmarshal commit-types: %w", err)
+			return nil, fmt.Errorf("unmarshal commit-types: %w", err)
 		}
 	}
 
 	if viper.IsSet("commit-message.items") {
 		if err := viper.UnmarshalKey("commit-message.items", &cfg.CommitMessage.Items, zeroSlice); err != nil {
-			return AppConfig{}, fmt.Errorf("unmarshal commit-message.items: %w", err)
+			return nil, fmt.Errorf("unmarshal commit-message.items: %w", err)
 		}
 	}
 
@@ -102,9 +107,11 @@ func Load() (AppConfig, error) {
 	// keys keep their defaults under mapstructure's merge behaviour.
 	if viper.IsSet("issue-tracker") {
 		if err := viper.UnmarshalKey("issue-tracker", &cfg.IssueTracker); err != nil {
-			return AppConfig{}, fmt.Errorf("unmarshal issue-tracker: %w", err)
+			return nil, fmt.Errorf("unmarshal issue-tracker: %w", err)
 		}
 	}
 
-	return cfg, nil
+	cfg.ProgName = progName
+
+	return &cfg, nil
 }
