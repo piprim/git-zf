@@ -368,3 +368,55 @@ func TestInsertIssueWithBranch_trackerTypeRoundTrip(t *testing.T) {
 		t.Errorf("tracker_type = %q, want %q", *got, "redmine")
 	}
 }
+
+func TestListBranchesByIssueSlugs_match(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&Issue{IDSlug: "ABC-1", Title: "First", StatusID: 1},
+		&Branch{UUID: "uuid-s1", Name: "ABC-1@feat@first@uuid-s1", Type: "feat", StatusID: 1},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&Issue{IDSlug: "ABC-2", Title: "Second", StatusID: 1},
+		&Branch{UUID: "uuid-s2", Name: "ABC-2@fix@second@uuid-s2", Type: "fix", StatusID: 1},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	result, err := s.ListBranchesByIssueSlugs(t.Context(), []string{"ABC-1", "ABC-2", "ABC-99"})
+	if err != nil {
+		t.Fatalf("ListBranchesByIssueSlugs: %v", err)
+	}
+	if len(result) != 2 {
+		t.Errorf("got %d entries, want 2", len(result))
+	}
+	if b, ok := result["ABC-1"]; !ok {
+		t.Error("missing ABC-1")
+	} else if b.BranchName != "ABC-1@feat@first@uuid-s1" {
+		t.Errorf("BranchName = %q, want %q", b.BranchName, "ABC-1@feat@first@uuid-s1")
+	}
+	if _, ok := result["ABC-2"]; !ok {
+		t.Error("missing ABC-2")
+	}
+	if _, ok := result["ABC-99"]; ok {
+		t.Error("unexpected ABC-99 in result")
+	}
+}
+
+func TestListBranchesByIssueSlugs_emptyInput(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	result, err := s.ListBranchesByIssueSlugs(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("ListBranchesByIssueSlugs: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("got %d entries, want 0", len(result))
+	}
+}

@@ -35,4 +35,7 @@ build:
 test:
 	go test ./...
 
-.PHONY: all install clean build test
+lint:
+	golangci-lint run ./...
+
+.PHONY: all install clean build test lint

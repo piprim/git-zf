@@ -3,8 +3,15 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strings"
 
+	btable "github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/piprim/git-zf/internal/pkg"
+	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -12,6 +19,14 @@ const (
 	IssueActionNameStart = "issueStart"
 	IssueActionNameList  = "issueList"
 	IssueActionNameClose = "issueClose"
+
+	issueTableColWidthIssueID       = 10
+	issueTableColWidthTitle         = 28
+	issueTableColWidthBranch        = 38
+	issueTableColWidthLocalStatus   = 12
+	issueTableColWidthTrackerStatus = 14
+	issueTableColWidthCreated       = 10
+	issueTableHeight                = 20
 )
 
 // IssueActionSelect presents the list of available issue actions.
@@ -162,4 +177,144 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 			Options(opts...).
 			Value(selected).Filtering(true),
 	)
+}
+
+// IssueStatusFilter presents a status filter for the issue list.
+// selected is the pre-selected value ("open", "closed", "all"); defaults to "open" when empty.
+func IssueStatusFilter(status *string, selected string) *huh.Group {
+	*status = selected
+	if *status == "" {
+		*status = "open"
+	}
+
+	return huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Filter by status:").
+			Options(
+				huh.NewOption("Open", "open"),
+				huh.NewOption("Closed / Merged", "closed"),
+				huh.NewOption("All", "all"),
+			).
+			Value(status),
+	)
+}
+
+func IssueTableModel(rows []store.IssueRow) (tea.Model, error) {
+	cols := []btable.Column{
+		{Title: "Issue ID", Width: issueTableColWidthIssueID},
+		{Title: "Title", Width: issueTableColWidthTitle},
+		{Title: "Branch", Width: issueTableColWidthBranch},
+		{Title: "Local Status", Width: issueTableColWidthLocalStatus},
+		{Title: "Tracker Status", Width: issueTableColWidthTrackerStatus},
+		{Title: "Created", Width: issueTableColWidthCreated},
+	}
+
+	tableRows := make([]btable.Row, len(rows))
+	for i, r := range rows {
+		tableRows[i] = btable.Row{
+			r.IssueSlug,
+			r.Title,
+			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
+			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
+			pkg.TrackerStatusOrNA(r.TrackerStatus),
+			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.CreatedAt.Format("2006-01-02") }),
+		}
+	}
+
+	t := btable.New(
+		btable.WithColumns(cols),
+		btable.WithRows(tableRows),
+		btable.WithFocused(true),
+		btable.WithHeight(issueTableHeight),
+	)
+
+	st := btable.DefaultStyles()
+	st.Header = lipgloss.NewStyle().Bold(true).Foreground(BranchTableHeaderColor).Padding(0, 1)
+	t.SetStyles(st)
+
+	fi := textinput.New()
+	fi.Placeholder = "type to filter…"
+	fi.CharLimit = 64
+
+	m := &issueTableModel{table: t, allRows: tableRows, filter: fi}
+
+	return m, nil
+}
+
+type issueTableModel struct {
+	table     btable.Model
+	allRows   []btable.Row
+	filter    textinput.Model
+	filtering bool
+}
+
+func (*issueTableModel) Init() tea.Cmd { return nil }
+
+func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		if m.filtering {
+			switch key.String() {
+			case "esc":
+				m.filtering = false
+				m.filter.Blur()
+				m.filter.Reset()
+				m.table.SetRows(m.allRows)
+
+				return m, nil
+			case "enter":
+				m.filtering = false
+				m.filter.Blur()
+
+				return m, nil
+			}
+
+			var cmd tea.Cmd
+			m.filter, cmd = m.filter.Update(msg)
+			m.table.SetRows(filterIssueRows(m.allRows, m.filter.Value()))
+
+			return m, cmd
+		}
+
+		switch key.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "/":
+			m.filtering = true
+			return m, m.filter.Focus()
+		}
+	}
+
+	var cmd tea.Cmd
+	m.table, cmd = m.table.Update(msg)
+
+	return m, cmd
+}
+
+func (m *issueTableModel) View() string {
+	if m.filtering {
+		return m.table.View() + "\n\n/" + m.filter.View() + "  (esc: clear  enter: confirm)"
+	}
+
+	return m.table.View() + "\n\nPress / to filter · q to quit."
+}
+
+func filterIssueRows(rows []btable.Row, query string) []btable.Row {
+	if query == "" {
+		return rows
+	}
+
+	q := strings.ToLower(query)
+	filtered := make([]btable.Row, 0, len(rows))
+
+	for _, row := range rows {
+		for _, cell := range row {
+			if strings.Contains(strings.ToLower(cell), q) {
+				filtered = append(filtered, row)
+
+				break
+			}
+		}
+	}
+
+	return filtered
 }

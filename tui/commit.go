@@ -123,6 +123,10 @@ func CommitOptionsGroup(opt *CommitOption) *huh.Group {
 		authorOpts = []huh.Option[string]{huh.NewOption("(no authors found)", "")}
 	}
 
+	if opt.Author == "" && len(opt.Authors) > 0 {
+		opt.Author = opt.Authors[0]
+	}
+
 	return huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("Author:").

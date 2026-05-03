@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -60,6 +61,15 @@ type BranchRow struct {
 	Type       string       `json:"type"`
 	Status     BranchStatus `json:"status"`
 	CreatedAt  time.Time    `json:"created_at"`
+}
+
+// IssueRow is the unified display row for git zf issue list.
+// It composes an issue identity with an optional local branch.
+type IssueRow struct {
+	IssueSlug     string     `json:"issue_slug"`
+	Title         string     `json:"title"`
+	TrackerStatus *string    `json:"tracker_status"` // nil → display "N.A."
+	Branch        *BranchRow `json:"branch"`         // nil → not started locally
 }
 
 const dbName = "git-zf.db"
@@ -230,6 +240,67 @@ func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]Branch
 
 	if result == nil {
 		result = []BranchRow{}
+	}
+
+	return result, nil
+}
+
+// ListBranchesByIssueSlugs returns a map[id_slug]BranchRow for the given slugs.
+// Uses a single SELECT … WHERE i.id_slug IN (…). Returns an empty map for empty input.
+func (s *Store) ListBranchesByIssueSlugs(ctx context.Context, slugs []string) (map[string]BranchRow, error) {
+	if len(slugs) == 0 {
+		return make(map[string]BranchRow), nil
+	}
+
+	placeholders := make([]string, len(slugs))
+	for i := range slugs {
+		placeholders[i] = "?"
+	}
+
+	q := `
+SELECT b.uuid, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
+FROM branches b
+JOIN issues i ON b.issue_id = i.id
+JOIN statuses st ON b.status_id = st.id
+WHERE i.id_slug IN (SELECT value FROM json_each(?))
+ORDER BY b.created_at DESC`
+
+	args, err := json.Marshal(slugs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert to json: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, q, string(args))
+	if err != nil {
+		return nil, fmt.Errorf("list branches by slugs query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]BranchRow)
+
+	for rows.Next() {
+		var r BranchRow
+		var createdAtStr string
+
+		if err := rows.Scan(
+			&r.UUID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
+		); err != nil {
+			return nil, fmt.Errorf("scan branch row: %w", err)
+		}
+
+		t, parseErr := parseSQLiteTime(createdAtStr)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse branch created_at %q: %w", createdAtStr, parseErr)
+		}
+
+		r.CreatedAt = t
+		if _, exists := result[r.IssueSlug]; !exists {
+			result[r.IssueSlug] = r
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate branches: %w", err)
 	}
 
 	return result, nil

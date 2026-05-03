@@ -62,11 +62,25 @@ If any commit flag is passed, the options page of the TUI form is skipped and th
 ```
 $ git zf issue
 $ git zf issue start
+$ git zf issue list
 ```
 
-Start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out automatically. Branch state is tracked in `.git/git-zf.db`.
+**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out automatically. Branch state is tracked in `.git/git-zf.db`.
 
 If a tracker is configured, `issue start` pre-selects fetching from the tracker; after picking an issue you can update its status to "In Progress" in one step.
+
+**`issue list`** — list issues enriched with local branch data. When a tracker is configured it is the primary source; the local store is used as fallback.
+
+Columns: Issue ID · Title · Branch · Local Status · Tracker Status · Created. `"∅"` means the issue has no local branch yet; `"N.A."` means no tracker is configured.
+
+`issue list` flags:
+```
+--status string   filter by status: open, closed, all (default: open)
+--stdout          print table to stdout without TUI
+--json            print JSON array to stdout
+```
+
+In the interactive TUI press **`/`** to filter rows in real time (matches any column, case-insensitive), **`Enter`** to confirm, **`Esc`** to clear, **`q`** to quit.
 
 ### Branch
 ```

@@ -3,7 +3,11 @@ package tui
 import (
 	"fmt"
 
+	btable "github.com/charmbracelet/bubbles/table"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/piprim/git-zf/store"
 )
 
 const (
@@ -11,6 +15,15 @@ const (
 	BranchActionNameNew   = "branchNew"
 	BranchActionNameMerge = "branchMerge"
 	BranchActionNamePrune = "branchPrune"
+
+	branchTableColWidthIssueID = 10
+	branchTableColWidthTitle   = 28
+	branchTableColWidthBranch  = 38
+	branchTableColWidthType    = 8
+	branchTableColWidthStatus  = 12
+	branchTableColWidthCreated = 10
+	branchTableHeight          = 20
+	BranchTableHeaderColor     = lipgloss.Color("63")
 )
 
 // BranchActionSelect presents the list of available branch actions.
@@ -62,4 +75,65 @@ func BranchStatusFilter(status *string, selected string) *huh.Group {
 			).
 			Value(status),
 	)
+}
+
+func BranchTableModel(rows []store.BranchRow) (tea.Model, error) {
+	cols := []btable.Column{
+		{Title: "Issue ID", Width: branchTableColWidthIssueID},
+		{Title: "Title", Width: branchTableColWidthTitle},
+		{Title: "Branch", Width: branchTableColWidthBranch},
+		{Title: "Type", Width: branchTableColWidthType},
+		{Title: "Status", Width: branchTableColWidthStatus},
+		{Title: "Created", Width: branchTableColWidthCreated},
+	}
+
+	tableRows := make([]btable.Row, len(rows))
+	for i, r := range rows {
+		tableRows[i] = btable.Row{
+			r.IssueSlug,
+			r.Title,
+			r.BranchName,
+			r.Type,
+			string(r.Status),
+			r.CreatedAt.Format("2006-01-02"),
+		}
+	}
+
+	t := btable.New(
+		btable.WithColumns(cols),
+		btable.WithRows(tableRows),
+		btable.WithFocused(true),
+		btable.WithHeight(branchTableHeight),
+	)
+
+	st := btable.DefaultStyles()
+	st.Header = lipgloss.NewStyle().Bold(true).Foreground(BranchTableHeaderColor).Padding(0, 1)
+	t.SetStyles(st)
+
+	return &branchTableModel{table: t}, nil
+}
+
+// branchTableModel wraps bubbles/table as a minimal Bubble Tea program.
+type branchTableModel struct {
+	table btable.Model
+}
+
+func (*branchTableModel) Init() tea.Cmd { return nil }
+
+func (m *branchTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.table, cmd = m.table.Update(msg)
+
+	return m, cmd
+}
+
+func (m *branchTableModel) View() string {
+	return m.table.View() + "\n\nPress q to quit."
 }
