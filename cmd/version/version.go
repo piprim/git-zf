@@ -1,4 +1,4 @@
-package cmd
+package version
 
 import (
 	"fmt"
@@ -7,21 +7,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version and Name are injected at build time via -ldflags.
-var (
-	Version = "none"
-	Name    string
-)
+type Version struct {
+	version string
+	name    string
+}
+
+func New(version, name string) Version {
+	return Version{version: version, name: name}
+}
 
 type info struct {
 	time, arch, os, revision string
 	dirty                    bool
 }
 
-func buildInfo() string {
+func (v Version) buildInfo() string {
 	vinfo := vcsInfo()
 	if vinfo == nil || vinfo.revision == "" {
-		return Version
+		return v.version
 	}
 
 	dirtyStr := ""
@@ -36,7 +39,7 @@ Arch: %s
 OS: %s
 Revision: %s%s
 Built at: %s
-`, Name, Version, vinfo.arch, vinfo.os, vinfo.revision, dirtyStr, vinfo.time)
+`, v.name, v.version, vinfo.arch, vinfo.os, vinfo.revision, dirtyStr, vinfo.time)
 }
 
 func vcsInfo() *info {
@@ -65,15 +68,12 @@ func vcsInfo() *info {
 	return out
 }
 
-// VersionCmd prints the build version and revision then exits.
-func getVersionCmd() *cobra.Command {
-	var versionCmd = &cobra.Command{
+func (v Version) GetRootCmd() *cobra.Command {
+	return &cobra.Command{
 		Use:   "version",
 		Short: "Print version information and quit",
 		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println(buildInfo())
+			fmt.Println(v.buildInfo())
 		},
 	}
-
-	return versionCmd
 }

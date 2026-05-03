@@ -172,7 +172,7 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 	}
 
 	m, err := tui.IssueTableModel(rows)
-	if err == nil {
+	if err != nil {
 		return fmt.Errorf("failed to construct issue table: %w", err)
 	}
 	if _, err := tea.NewProgram(m).Run(); err != nil {

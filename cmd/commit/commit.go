@@ -1,51 +1,58 @@
-package cmd
+package commit
 
 import (
 	"fmt"
 	"log"
 
-	"github.com/piprim/git-zf/commit"
+	commitpkg "github.com/piprim/git-zf/commit"
+	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
-var (
-	commitAll        bool
-	commitAmend      bool
-	commitNoVerify   bool
-	commitSignoff    bool
-	commitAllowEmpty bool
-	commitAuthor     string
-)
-
-// CommitCmd is the "git zf commit" subcommand.
-func getCommitCmd() *cobra.Command {
-	var commitCmd = &cobra.Command{
-		Use:   "commit",
-		Short: "Record changes to the repository",
-		Long:  "Open the " + progName + " TUI to compose a standardised commit message, then commit using go-git.",
-		RunE:  commitRunE,
-	}
-
-	f := commitCmd.Flags()
-	f.BoolVarP(&commitAll, "all", "a", false,
-		"stage all tracked modified/deleted files before committing")
-	f.BoolVar(&commitAmend, "amend", false,
-		"replace the tip of the current branch")
-	f.BoolVarP(&commitNoVerify, "no-verify", "n", false,
-		"bypass pre-commit and commit-msg hooks")
-	f.BoolVarP(&commitSignoff, "signoff", "s", false,
-		"add Signed-off-by trailer to the commit message")
-	f.BoolVar(&commitAllowEmpty, "allow-empty", false,
-		"allow a commit with no changes")
-	f.StringVar(&commitAuthor, "author", "",
-		`override commit author as "Name <email>"`)
-
-	return commitCmd
+type Commit struct {
+	appConfig *config.AppConfig
 }
 
-func commitRunE(_ *cobra.Command, _ []string) error {
+func New(appConfig *config.AppConfig) Commit {
+	return Commit{appConfig: appConfig}
+}
+
+func (c Commit) GetRootCmd() *cobra.Command {
+	var (
+		all        bool
+		amend      bool
+		noVerify   bool
+		signoff    bool
+		allowEmpty bool
+		author     string
+	)
+
+	desc := "Open the " + c.appConfig.ProgName +
+		" TUI to compose a standardised commit message, then commit using go-git."
+	cmd := &cobra.Command{
+		Use:   "commit",
+		Short: "Record changes to the repository",
+		Long:  desc,
+	}
+
+	f := cmd.Flags()
+	f.BoolVarP(&all, "all", "a", false, "stage all tracked modified/deleted files before committing")
+	f.BoolVar(&amend, "amend", false, "replace the tip of the current branch")
+	f.BoolVarP(&noVerify, "no-verify", "n", false, "bypass pre-commit and commit-msg hooks")
+	f.BoolVarP(&signoff, "signoff", "s", false, "add Signed-off-by trailer to the commit message")
+	f.BoolVar(&allowEmpty, "allow-empty", false, "allow a commit with no changes")
+	f.StringVar(&author, "author", "", `override commit author as "Name <email>"`)
+
+	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		return c.runE(all, amend, noVerify, signoff, allowEmpty, author)
+	}
+
+	return cmd
+}
+
+func (c Commit) runE(all, amend, noVerify, signoff, allowEmpty bool, author string) error {
 	client, err := git.NewClient()
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
@@ -59,15 +66,15 @@ func commitRunE(_ *cobra.Command, _ []string) error {
 
 	defaults := tui.CommitOption{
 		Authors:    authors,
-		All:        commitAll,
-		Amend:      commitAmend,
-		NoVerify:   commitNoVerify,
-		Signoff:    commitSignoff,
-		AllowEmpty: commitAllowEmpty,
-		Author:     commitAuthor,
+		All:        all,
+		Amend:      amend,
+		NoVerify:   noVerify,
+		Signoff:    signoff,
+		AllowEmpty: allowEmpty,
+		Author:     author,
 	}
 
-	msg, opts, err := commit.FillOutForm(appConfig, defaults)
+	msg, opts, err := commitpkg.FillOutForm(c.appConfig, defaults)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
@@ -93,6 +100,7 @@ func printCommitSummary(s *git.CommitSummary) {
 	if s == nil {
 		return
 	}
+
 	ref := s.Branch
 	if s.IsRoot {
 		ref += " (root-commit)"

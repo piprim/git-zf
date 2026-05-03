@@ -1,4 +1,4 @@
-package cmd
+package install
 
 import (
 	"context"
@@ -9,18 +9,24 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/piprim/git-zf/config"
 	"github.com/spf13/cobra"
 )
 
-const (
-	subCommandName = "zf"
-)
+const subCommandName = "zf"
 
-// InstallCmd copies the current binary into Git's exec path as "git-zf".
-func getInstallCmd() *cobra.Command {
-	var installCmd = &cobra.Command{
+type Install struct {
+	appConfig *config.AppConfig
+}
+
+func New(appConfig *config.AppConfig) Install {
+	return Install{appConfig: appConfig}
+}
+
+func (i Install) GetRootCmd() *cobra.Command {
+	return &cobra.Command{
 		Use:   "install",
-		Short: "Install this tool to git-core as " + progName,
+		Short: "Install this tool to git-core as " + subCommandName,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			appFilePath, err := exec.LookPath(os.Args[0])
 			if err != nil {
@@ -29,19 +35,16 @@ func getInstallCmd() *cobra.Command {
 
 			path, err := installSubCmd(cmd.Context(), appFilePath)
 			if err != nil {
-				return fmt.Errorf("failed to install %s: %w", Name, err)
+				return fmt.Errorf("failed to install %s: %w", i.appConfig.ProgName, err)
 			}
 
-			fmt.Printf("Install %s to %s\n", progName, path)
+			fmt.Printf("Install %s to %s\n", i.appConfig.ProgName, path)
 
 			return nil
 		},
 	}
-
-	return installCmd
 }
 
-// installSubCmd copies srcFilePath into Git's exec path as "git-<subCmdName>".
 func installSubCmd(ctx context.Context, srcFilePath string) (string, error) {
 	dst, err := gitExecPath(ctx)
 	if err != nil {

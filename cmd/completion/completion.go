@@ -1,15 +1,24 @@
-package cmd
+package completion
 
 import (
 	"errors"
 	"fmt"
 	"os"
 
+	"github.com/piprim/git-zf/config"
 	"github.com/spf13/cobra"
 )
 
-func getCompletionCmd() *cobra.Command {
-	completionCmd := &cobra.Command{
+type Completion struct {
+	appConfig *config.AppConfig
+}
+
+func New(appConfig *config.AppConfig) Completion {
+	return Completion{appConfig: appConfig}
+}
+
+func (c Completion) GetRootCmd() *cobra.Command {
+	return &cobra.Command{
 		Use:   "completion [bash|zsh|fish|powershell]",
 		Short: "Generate completion script",
 		Long: `To load completions:
@@ -38,12 +47,10 @@ PowerShell: PS> yourprogram completion powershell | Out-String | Invoke-Expressi
 			}
 
 			if err != nil {
-				return fmt.Errorf("%s failed to generate %s completion: %w", progName, shell, err)
+				return fmt.Errorf("%s failed to generate %s completion: %w", c.appConfig.ProgName, shell, err)
 			}
 
 			return nil
 		},
 	}
-
-	return completionCmd
 }

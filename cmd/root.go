@@ -8,7 +8,11 @@ import (
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/piprim/git-zf/cmd/branch"
+	"github.com/piprim/git-zf/cmd/commit"
+	"github.com/piprim/git-zf/cmd/completion"
+	"github.com/piprim/git-zf/cmd/install"
 	"github.com/piprim/git-zf/cmd/issue"
+	"github.com/piprim/git-zf/cmd/version"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/spf13/cobra"
@@ -18,18 +22,25 @@ import (
 const (
 	configFileName = ".git-zf"
 	configFileExt  = "json"
-	progName       = "git-zf"
 )
 
+// Version and Name are injected at build time via -ldflags.
 var (
+	Version = "none"
+	Name    string
+
 	isDebug   bool
 	appConfig *config.AppConfig
 )
 
 // GetRootCmd builds and returns the root Cobra command.
 func GetRootCmd() (*cobra.Command, error) {
+	if err := initConfig(); err != nil {
+		return nil, err
+	}
+
 	rootCmd := &cobra.Command{
-		Use:  progName,
+		Use:  appConfig.ProgName,
 		Long: `Command line utility to standardize git commit messages, golang version.`,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			cmd.SilenceUsage = true
@@ -37,23 +48,23 @@ func GetRootCmd() (*cobra.Command, error) {
 		},
 	}
 
-	if err := initConfig(); err != nil {
-		return nil, err
-	}
-
 	rootCmd.PersistentFlags().BoolVarP(&isDebug, "debug", "d", false,
 		"debug mode, output debug info to debug.log")
 
 	ir := issue.New(appConfig)
 	br := branch.New(appConfig)
+	co := commit.New(appConfig)
+	cp := completion.New(appConfig)
+	in := install.New(appConfig)
+	vs := version.New(Version, Name)
 
 	rootCmd.AddCommand(
-		getCompletionCmd(),
-		getCommitCmd(),
+		cp.GetRootCmd(),
+		co.GetRootCmd(),
 		ir.GetRootCmd(),
 		br.GetRootCmd(),
-		getVersionCmd(),
-		getInstallCmd(),
+		vs.GetRootCmd(),
+		in.GetRootCmd(),
 	)
 
 	return rootCmd, nil
