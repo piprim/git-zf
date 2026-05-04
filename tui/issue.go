@@ -29,6 +29,11 @@ const (
 	issueTableHeight                = 20
 )
 
+var (
+	activeTabStyle   = lipgloss.NewStyle().Bold(true)
+	inactiveTabStyle = lipgloss.NewStyle().Faint(true)
+)
+
 // IssueActionSelect presents the list of available issue actions.
 func IssueActionSelect(action *string) *huh.Group {
 	return huh.NewGroup(
@@ -179,27 +184,7 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 	)
 }
 
-// IssueStatusFilter presents a status filter for the issue list.
-// selected is the pre-selected value ("open", "closed", "all"); defaults to "open" when empty.
-func IssueStatusFilter(status *string, selected string) *huh.Group {
-	*status = selected
-	if *status == "" {
-		*status = "open"
-	}
-
-	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Filter by status:").
-			Options(
-				huh.NewOption("Open", "open"),
-				huh.NewOption("Closed / Merged", "closed"),
-				huh.NewOption("All", "all"),
-			).
-			Value(status),
-	)
-}
-
-func IssueTableModel(rows []store.IssueRow) (tea.Model, error) {
+func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, error) {
 	cols := []btable.Column{
 		{Title: "Issue ID", Width: issueTableColWidthIssueID},
 		{Title: "Title", Width: issueTableColWidthTitle},
@@ -209,21 +194,14 @@ func IssueTableModel(rows []store.IssueRow) (tea.Model, error) {
 		{Title: "Created", Width: issueTableColWidthCreated},
 	}
 
-	tableRows := make([]btable.Row, len(rows))
-	for i, r := range rows {
-		tableRows[i] = btable.Row{
-			r.IssueSlug,
-			r.Title,
-			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
-			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
-			pkg.TrackerStatusOrNA(r.TrackerStatus),
-			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.CreatedAt.Format("2006-01-02") }),
-		}
+	status := initialStatus
+	if status == "" {
+		status = "open"
 	}
 
 	t := btable.New(
 		btable.WithColumns(cols),
-		btable.WithRows(tableRows),
+		btable.WithRows(applyFilters(rows, status, "")),
 		btable.WithFocused(true),
 		btable.WithHeight(issueTableHeight),
 	)
@@ -236,16 +214,80 @@ func IssueTableModel(rows []store.IssueRow) (tea.Model, error) {
 	fi.Placeholder = "type to filter…"
 	fi.CharLimit = 64
 
-	m := &issueTableModel{table: t, allRows: tableRows, filter: fi}
+	return &issueTableModel{table: t, allRows: rows, filter: fi, statusFilter: status}, nil
+}
 
-	return m, nil
+func issueRowToTableRow(r store.IssueRow) btable.Row {
+	return btable.Row{
+		r.IssueSlug,
+		r.Title,
+		pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
+		pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
+		pkg.TrackerStatusOrNA(r.TrackerStatus),
+		pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.CreatedAt.Format("2006-01-02") }),
+	}
+}
+
+func matchesStatus(r store.IssueRow, status string) bool {
+	switch status {
+	case "closed":
+		return r.Branch != nil && r.Branch.Status == store.BranchStatusMerged
+	case "all":
+		return true
+	default: // "open" and anything else
+		return r.Branch == nil || r.Branch.Status == store.BranchStatusInProgress
+	}
+}
+
+func applyFilters(rows []store.IssueRow, status, text string) []btable.Row {
+	q := strings.ToLower(text)
+	out := make([]btable.Row, 0, len(rows))
+
+	for _, r := range rows {
+		if !matchesStatus(r, status) {
+			continue
+		}
+
+		row := issueRowToTableRow(r)
+
+		if q != "" {
+			matched := false
+			for _, cell := range row {
+				if strings.Contains(strings.ToLower(cell), q) {
+					matched = true
+
+					break
+				}
+			}
+
+			if !matched {
+				continue
+			}
+		}
+
+		out = append(out, row)
+	}
+
+	return out
+}
+
+func nextStatus(current string) string {
+	switch current {
+	case "open":
+		return "closed"
+	case "closed":
+		return "all"
+	default:
+		return "open"
+	}
 }
 
 type issueTableModel struct {
-	table     btable.Model
-	allRows   []btable.Row
-	filter    textinput.Model
-	filtering bool
+	table        btable.Model
+	allRows      []store.IssueRow
+	filter       textinput.Model
+	filtering    bool
+	statusFilter string
 }
 
 func (*issueTableModel) Init() tea.Cmd { return nil }
@@ -258,7 +300,7 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtering = false
 				m.filter.Blur()
 				m.filter.Reset()
-				m.table.SetRows(m.allRows)
+				m.table.SetRows(applyFilters(m.allRows, m.statusFilter, ""))
 
 				return m, nil
 			case "enter":
@@ -270,7 +312,7 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			var cmd tea.Cmd
 			m.filter, cmd = m.filter.Update(msg)
-			m.table.SetRows(filterIssueRows(m.allRows, m.filter.Value()))
+			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value()))
 
 			return m, cmd
 		}
@@ -278,8 +320,14 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch key.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "tab":
+			m.statusFilter = nextStatus(m.statusFilter)
+			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value()))
+
+			return m, nil
 		case "/":
 			m.filtering = true
+
 			return m, m.filter.Focus()
 		}
 	}
@@ -290,31 +338,36 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *issueTableModel) View() string {
-	if m.filtering {
-		return m.table.View() + "\n\n/" + m.filter.View() + "  (esc: clear  enter: confirm)"
+func renderStatusTabs(current string) string {
+	type tab struct {
+		label string
+		value string
 	}
 
-	return m.table.View() + "\n\nPress / to filter · q to quit."
-}
-
-func filterIssueRows(rows []btable.Row, query string) []btable.Row {
-	if query == "" {
-		return rows
+	tabs := []tab{
+		{"Open", "open"},
+		{"Closed", "closed"},
+		{"All", "all"},
 	}
 
-	q := strings.ToLower(query)
-	filtered := make([]btable.Row, 0, len(rows))
-
-	for _, row := range rows {
-		for _, cell := range row {
-			if strings.Contains(strings.ToLower(cell), q) {
-				filtered = append(filtered, row)
-
-				break
-			}
+	parts := make([]string, len(tabs))
+	for i, t := range tabs {
+		if t.value == current {
+			parts[i] = activeTabStyle.Render("[ " + t.label + " ]")
+		} else {
+			parts[i] = inactiveTabStyle.Render(t.label)
 		}
 	}
 
-	return filtered
+	return strings.Join(parts, "  ")
+}
+
+func (m *issueTableModel) View() string {
+	tabs := renderStatusTabs(m.statusFilter)
+
+	if m.filtering {
+		return m.table.View() + "\n\n" + tabs + "    /" + m.filter.View() + "  (esc: clear  enter: confirm)"
+	}
+
+	return m.table.View() + "\n\n" + tabs + "    Press / to filter · tab: status · q to quit"
 }
