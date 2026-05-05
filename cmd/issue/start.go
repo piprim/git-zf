@@ -187,8 +187,8 @@ func persist(ctx context.Context, client *git.Client, b *branch.Branch, rawTitle
 	defer func() { _ = s.Close() }()
 
 	if err := s.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: b.IssueID(), Title: rawTitle, StatusID: 1, TrackerType: trackerType},
-		&store.Branch{UUID: b.ID(), Name: b.Name(), Type: b.Type(), StatusID: 1},
+		&store.Issue{IDSlug: b.IssueID(), Title: rawTitle, StatusID: store.StatusIDInProgress, TrackerType: trackerType},
+		&store.Branch{UUID: b.ID(), Name: b.Name(), Type: b.Type(), StatusID: store.StatusIDInProgress},
 	); err != nil {
 		return fmt.Errorf("insert issue with branch: %w", err)
 	}

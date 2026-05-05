@@ -125,11 +125,11 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	}
 
 	now := time.Now()
-	if err := s.UpdateBranchStatus(ctx, picked.UUID, 2, &now); err != nil {
+	if err := s.UpdateBranchStatus(ctx, picked.UUID, store.StatusIDMerged, &now); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: update branch status: %v\n", err)
 	}
 
-	if err := s.UpdateIssueStatus(ctx, picked.IssueID, 2); err != nil {
+	if err := s.UpdateIssueStatus(ctx, picked.IssueID, store.StatusIDMerged); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: update issue status: %v\n", err)
 	}
 
