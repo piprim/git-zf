@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
@@ -135,7 +134,7 @@ func (i Issue) createBranch(
 		tt = &i.appConfig.IssueTracker.Type
 	}
 
-	if err := persist(cmd.Context(), client, b, pickedIssue.Subject, tt); err != nil {
+	if err := persist(cmd.Context(), b, pickedIssue.Subject, tt); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: branch created but store record failed: %v\n", err)
 	}
 
@@ -174,15 +173,10 @@ func (i Issue) updateTrackerIssueStatus(cmd *cobra.Command, t tracker.Tracker, i
 	}
 }
 
-func persist(ctx context.Context, client *git.Client, b *branch.Branch, rawTitle string, trackerType *string) error {
-	root, err := client.WorkingTreeRoot()
+func persist(ctx context.Context, b *branch.Branch, rawTitle string, trackerType *string) error {
+	s, err := pkg.GetStore(ctx)
 	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
-
-	s, err := store.Open(ctx, filepath.Join(root, ".git"))
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return fmt.Errorf("failed to get store: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 

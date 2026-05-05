@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tty"
@@ -51,19 +50,10 @@ func (ir Issue) getIssueListCmd() *cobra.Command {
 }
 
 func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
-	client, err := git.NewClient()
+	ctx := cmd.Context()
+	s, err := pkg.GetStore(ctx)
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
-
-	root, err := client.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
-
-	s, err := store.Open(cmd.Context(), filepath.Join(root, ".git"))
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return fmt.Errorf("failed to get store: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
@@ -81,7 +71,7 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		stderr:  cmd.OutOrStderr(),
 	}
 
-	return runList(cmd.Context(), os.Stdout, infra, flags)
+	return runList(ctx, os.Stdout, infra, flags)
 }
 
 func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issueListFlags) error {

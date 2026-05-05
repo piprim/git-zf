@@ -1,12 +1,13 @@
 package issue
 
 import (
+	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tui"
@@ -26,41 +27,24 @@ update the local store, update the remote tracker, then optionally delete the lo
 func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
+	s, err := pkg.GetStore(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get store: %w", err)
+	}
+	defer func() { _ = s.Close() }()
+
 	client, err := git.NewClient()
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	root, err := client.WorkingTreeRoot()
+	picked, err := getPickedBranch(ctx, s, client)
 	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
+		return err
 	}
 
-	s, err := store.Open(ctx, filepath.Join(root, ".git"))
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() { _ = s.Close() }()
-
-	branches, err := s.ListBranches(ctx, store.BranchStatusInProgress)
-	if err != nil {
-		return fmt.Errorf("list branches: %w", err)
-	}
-
-	if len(branches) == 0 {
-		fmt.Println("No in-progress branches.")
-
+	if picked == nil {
 		return nil
-	}
-
-	currentBranch, err := client.CurrentBranch(ctx)
-	if err != nil {
-		currentBranch = ""
-	}
-
-	var picked store.BranchRow
-	if err := huh.NewForm(tui.IssueBranchPicker(branches, currentBranch, &picked)).Run(); err != nil {
-		return fmt.Errorf("branch picker: %w", err)
 	}
 
 	base := i.appConfig.Branch.Base
@@ -71,9 +55,66 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	conflicts, err := client.MergeDryRun(ctx, picked.BranchName, base)
+	squash, aborted, err := doMerge(ctx, client, picked, base)
 	if err != nil {
-		return fmt.Errorf("merge dry-run: %w", err)
+		return err
+	}
+
+	if aborted {
+		fmt.Println("Aborted.")
+
+		return nil
+	}
+
+	// Best-effort: warn on stderr but do not abort — the merge already succeeded.
+	i.updateStatus(cmd, s, picked)
+
+	if err := doDeleteBranch(cmd, client, picked, squash); err != nil {
+		return err
+	}
+
+	fmt.Printf("Branch %q merged into %q and closed.\n", picked.BranchName, base)
+
+	return nil
+}
+
+// getPickedBranch returns (nil, nil) when there are no in-progress branches.
+func getPickedBranch(ctx context.Context, s *store.Store, client *git.Client) (*store.BranchRow, error) {
+	branches, err := s.ListBranches(ctx, store.BranchStatusInProgress)
+	if err != nil {
+		return nil, fmt.Errorf("list branches: %w", err)
+	}
+
+	if len(branches) == 0 {
+		fmt.Println("No in-progress branches.")
+
+		return nil, nil
+	}
+
+	currentBranch, err := client.CurrentBranch(ctx)
+	if err != nil {
+		currentBranch = ""
+	}
+
+	var picked store.BranchRow
+	if err := huh.NewForm(tui.IssueBranchPicker(branches, currentBranch, &picked)).Run(); err != nil {
+		return nil, fmt.Errorf("branch picker: %w", err)
+	}
+
+	return &picked, nil
+}
+
+// doMerge runs the full merge flow: dry-run, strategy picker, author picker,
+// confirm, then the actual merge. aborted is true when the user cancelled.
+func doMerge(
+	ctx context.Context,
+	c *git.Client,
+	pickedBranch *store.BranchRow,
+	baseBranch string,
+) (squash, aborted bool, err error) {
+	conflicts, err := c.MergeDryRun(ctx, pickedBranch.BranchName, baseBranch)
+	if err != nil {
+		return false, false, fmt.Errorf("merge dry-run: %w", err)
 	}
 
 	if len(conflicts) > 0 {
@@ -83,18 +124,17 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 		}
 		fmt.Println("Aborting.")
 
-		return fmt.Errorf("merge conflicts in branch %q", picked.BranchName)
+		return false, false, fmt.Errorf("merge conflicts in branch %q", pickedBranch.BranchName)
 	}
 
-	var squash bool
 	if err := huh.NewForm(tui.IssueMergeStrategy(&squash)).Run(); err != nil {
-		return fmt.Errorf("strategy picker: %w", err)
+		return false, false, fmt.Errorf("strategy picker: %w", err)
 	}
 
 	var author string
 	if squash {
-		if err := i.pickSquashAuthor(client, &author); err != nil {
-			return err
+		if err := pickSquashAuthor(c, &author); err != nil {
+			return false, false, err
 		}
 	}
 
@@ -104,56 +144,62 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	}
 
 	var confirmed bool
-	if err := huh.NewForm(tui.IssueMergeConfirm(picked.BranchName, base, strategy, author, &confirmed)).Run(); err != nil {
-		return fmt.Errorf("confirm form: %w", err)
+	form := tui.IssueMergeConfirm(pickedBranch.BranchName, baseBranch, strategy, author, &confirmed)
+	if err := huh.NewForm(form).Run(); err != nil {
+		return false, false, fmt.Errorf("confirm form: %w", err)
 	}
 
 	if !confirmed {
-		fmt.Println("Aborted.")
-
-		return nil
+		return squash, true, nil
 	}
 
 	if squash {
-		if err := client.MergeSquash(ctx, picked.BranchName, base, author); err != nil {
-			return fmt.Errorf("merge squash: %w", err)
+		if err := c.MergeSquash(ctx, pickedBranch.BranchName, baseBranch, author); err != nil {
+			return false, false, fmt.Errorf("merge squash: %w", err)
 		}
 	} else {
-		if err := client.MergeNoFF(ctx, picked.BranchName, base); err != nil {
-			return fmt.Errorf("merge no-ff: %w", err)
+		if err := c.MergeNoFF(ctx, pickedBranch.BranchName, baseBranch); err != nil {
+			return false, false, fmt.Errorf("merge no-ff: %w", err)
 		}
 	}
 
+	return squash, false, nil
+}
+
+// updateStatus marks the branch and issue as merged/closed in the store and
+// optionally updates the remote tracker. Errors are non-fatal — the merge has
+// already been committed, so we warn rather than fail.
+func (i Issue) updateStatus(cmd *cobra.Command, s *store.Store, pickedBranch *store.BranchRow) {
 	now := time.Now()
-	if err := s.UpdateBranchStatus(ctx, picked.UUID, store.StatusIDMerged, &now); err != nil {
+	if err := s.UpdateBranchStatus(cmd.Context(), pickedBranch.UUID, store.StatusIDMerged, &now); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: update branch status: %v\n", err)
 	}
 
-	if err := s.UpdateIssueStatus(ctx, picked.IssueID, store.StatusIDMerged); err != nil {
+	if err := s.UpdateIssueStatus(cmd.Context(), pickedBranch.IssueID, store.StatusIDMerged); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: update issue status: %v\n", err)
 	}
 
 	if i.appConfig.IssueTracker.Type != "" {
-		i.closeTrackerIssue(cmd, picked.IssueSlug)
+		i.closeTrackerIssue(cmd, pickedBranch.IssueSlug)
 	}
+}
 
-	var deleteBranch bool
-	if err := huh.NewForm(tui.IssueDeleteBranch(picked.BranchName, &deleteBranch)).Run(); err != nil {
+func doDeleteBranch(cmd *cobra.Command, c *git.Client, pickedBranch *store.BranchRow, squashed bool) error {
+	var shouldDelete bool
+	if err := huh.NewForm(tui.IssueDeleteBranch(pickedBranch.BranchName, &shouldDelete)).Run(); err != nil {
 		return fmt.Errorf("delete branch form: %w", err)
 	}
 
-	if deleteBranch {
-		if err := client.DeleteLocalBranch(ctx, picked.BranchName, squash); err != nil {
+	if shouldDelete {
+		if err := c.DeleteLocalBranch(cmd.Context(), pickedBranch.BranchName, squashed); err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "warning: delete branch: %v\n", err)
 		}
 	}
 
-	fmt.Printf("Branch %q merged into %q and closed.\n", picked.BranchName, base)
-
 	return nil
 }
 
-func (i Issue) pickSquashAuthor(client *git.Client, author *string) error {
+func pickSquashAuthor(client *git.Client, author *string) error {
 	authors, err := client.Authors()
 	if err != nil || len(authors) == 0 {
 		authors = []string{}

@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +14,7 @@ import (
 	issuecmd "github.com/piprim/git-zf/cmd/issue"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tty"
@@ -89,23 +89,14 @@ func listCmd() *cobra.Command {
 }
 
 func listRunE(cmd *cobra.Command, flags listFlags) error {
-	client, err := git.NewClient()
+	ctx := cmd.Context()
+	s, err := pkg.GetStore(ctx)
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
-
-	root, err := client.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
-
-	s, err := store.Open(cmd.Context(), filepath.Join(root, ".git"))
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return fmt.Errorf("failed to get store: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	return runList(cmd.Context(), os.Stdout, s, flags)
+	return runList(ctx, os.Stdout, s, flags)
 }
 
 // runList executes the branch list logic. w receives stdout/non-TUI output.
@@ -242,23 +233,19 @@ type pruner interface {
 }
 
 func pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
-	client, err := git.NewClient()
+	ctx := cmd.Context()
+	s, err := pkg.GetStore(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get store: %w", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	c, err := git.NewClient()
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	root, err := client.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
-
-	s, err := store.Open(cmd.Context(), filepath.Join(root, ".git"))
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() { _ = s.Close() }()
-
-	return runPrune(cmd.Context(), os.Stdout, s, client, flags)
+	return runPrune(ctx, os.Stdout, s, c, flags)
 }
 
 // runPrune executes the prune logic. w receives non-TUI output.
@@ -290,22 +277,22 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, f
 
 	var result pruneResult
 
-	for _, row := range rows {
-		if _, exists := localSet[row.BranchName]; !exists {
-			result.toDelete = append(result.toDelete, row)
+	for i := range rows {
+		if _, exists := localSet[rows[i].BranchName]; !exists {
+			result.toDelete = append(result.toDelete, rows[i])
 
 			continue
 		}
 
-		merged, mergeErr := pruner.IsMergedInto(row.BranchName, base)
+		merged, mergeErr := pruner.IsMergedInto(rows[i].BranchName, base)
 		if mergeErr != nil {
-			log.Printf("merge check for %q: %v", row.BranchName, mergeErr)
+			log.Printf("merge check for %q: %v", rows[i].BranchName, mergeErr)
 
 			continue
 		}
 
 		if merged {
-			result.toMerge = append(result.toMerge, row)
+			result.toMerge = append(result.toMerge, rows[i])
 		}
 	}
 
@@ -338,8 +325,8 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, f
 func renderPruneSummary(w io.Writer, result pruneResult) {
 	if len(result.toDelete) > 0 {
 		fmt.Fprintln(w, "Will delete (local ref gone):")
-		for _, r := range result.toDelete {
-			fmt.Fprintf(w, "  - %s\n", r.BranchName)
+		for i := range result.toDelete {
+			fmt.Fprintf(w, "  - %s\n", result.toDelete[i].BranchName)
 		}
 	}
 
@@ -348,23 +335,23 @@ func renderPruneSummary(w io.Writer, result pruneResult) {
 	}
 
 	fmt.Fprintln(w, "Will mark merged (tip reachable from base):")
-	for _, r := range result.toMerge {
-		fmt.Fprintf(w, "  ~ %s\n", r.BranchName)
+	for i := range result.toMerge {
+		fmt.Fprintf(w, "  ~ %s\n", result.toMerge[i].BranchName)
 	}
 }
 
 func executePrune(ctx context.Context, s *store.Store, result pruneResult) error {
 	now := time.Now()
 
-	for _, r := range result.toDelete {
-		if err := s.DeleteBranch(ctx, r.UUID); err != nil {
-			return fmt.Errorf("delete %q: %w", r.BranchName, err)
+	for i := range result.toDelete {
+		if err := s.DeleteBranch(ctx, result.toDelete[i].UUID); err != nil {
+			return fmt.Errorf("delete %q: %w", result.toDelete[i].BranchName, err)
 		}
 	}
 
-	for _, r := range result.toMerge {
-		if err := s.UpdateBranchStatus(ctx, r.UUID, 2, &now); err != nil {
-			return fmt.Errorf("mark merged %q: %w", r.BranchName, err)
+	for i := range result.toMerge {
+		if err := s.UpdateBranchStatus(ctx, result.toMerge[i].UUID, 2, &now); err != nil {
+			return fmt.Errorf("mark merged %q: %w", result.toMerge[i].BranchName, err)
 		}
 	}
 

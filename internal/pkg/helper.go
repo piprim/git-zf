@@ -1,7 +1,12 @@
 package pkg
 
 import (
+	"context"
+	"fmt"
+	"path/filepath"
+
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -28,4 +33,23 @@ func GetAllowedBranchType(types []config.CommitTypeOption) []string {
 	}
 
 	return allowedBranchTypes
+}
+
+func GetStore(ctx context.Context) (*store.Store, error) {
+	client, err := git.NewClient()
+	if err != nil {
+		return nil, fmt.Errorf("not a git repository: %w", err)
+	}
+
+	root, err := client.WorkingTreeRoot()
+	if err != nil {
+		return nil, fmt.Errorf("working tree root: %w", err)
+	}
+
+	s, err := store.Open(ctx, filepath.Join(root, ".git"))
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+
+	return s, nil
 }
