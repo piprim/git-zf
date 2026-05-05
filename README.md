@@ -63,6 +63,7 @@ If any commit flag is passed, the options page of the TUI form is skipped and th
 $ git zf issue
 $ git zf issue start
 $ git zf issue list
+$ git zf issue close
 ```
 
 **`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out automatically. Branch state is tracked in `.git/git-zf.db`.
@@ -81,6 +82,15 @@ Columns: Issue ID · Title · Branch · Local Status · Tracker Status · Create
 ```
 
 In the interactive TUI press **`/`** to filter rows in real time (matches any column, case-insensitive), **`Enter`** to confirm, **`Esc`** to clear, **`q`** to quit.
+
+**`issue close`** — close an in-progress issue: pick from the list of in-progress branches (the currently checked-out branch is pre-selected), merge into the base branch, update the local store, and optionally update the tracker status and delete the local branch.
+
+The close flow:
+1. A conflict dry-run is performed in a temporary git worktree — if conflicts are detected the command aborts without touching anything.
+2. Choose merge strategy: **Squash** (default, combines all commits into one) or **Classic** (`--no-ff`, preserves full history). For squash, the commit author is pre-filled from your git config identity.
+3. Confirm the merge. After a successful merge the branch is marked as `merged` in the local store and the issue is marked as `closed`.
+4. If a tracker is configured, a status picker lets you update the remote issue status (or skip).
+5. Optionally delete the local branch. Safe delete (`-d`) is used for classic merges; force delete (`-D`) for squash merges (squash does not preserve ancestry so git requires `-D`).
 
 ### Branch
 ```
@@ -207,3 +217,4 @@ When a tracker is configured:
 2. If yes, open issues assigned to you are listed; type any key to filter the list, pick one and select a branch type.
 3. After the branch is created, a status picker shows the live list of statuses from the tracker; pick one or skip.
 4. If the tracker is unavailable or returns no issues, the flow falls back to manual input.
+5. `issue close` shows the same live status picker after merging, so you can move the issue to "Done", "Closed", or any other status in a single step.
