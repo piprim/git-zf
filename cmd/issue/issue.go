@@ -25,7 +25,7 @@ func (i Issue) GetRootCmd() *cobra.Command {
 		RunE:  i.runE,
 	}
 
-	cmd.AddCommand(i.getStartCmd(), i.getIssueListCmd())
+	cmd.AddCommand(i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd())
 
 	return cmd
 }
@@ -41,6 +41,8 @@ func (i Issue) runE(cmd *cobra.Command, args []string) error {
 		return i.startRunE(cmd, args)
 	case tui.IssueActionNameList:
 		return i.issueListRunE(cmd, issueListFlags{})
+	case tui.IssueActionNameClose:
+		return i.closeRunE(cmd, args)
 	default:
 		fmt.Println("Not yet implemented.")
 

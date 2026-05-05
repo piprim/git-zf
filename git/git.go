@@ -49,6 +49,17 @@ func NewClient() (*Client, error) {
 	return &Client{repo: repo}, nil
 }
 
+// NewClientAt opens the git repository rooted at dir.
+// Used in tests and tooling that need to open a repo at a specific path.
+func NewClientAt(dir string) (*Client, error) {
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open git repository at %s: %w", dir, err)
+	}
+
+	return &Client{repo: repo}, nil
+}
+
 // WorkingTreeRoot returns the absolute path of the repository's working tree root.
 func (c *Client) WorkingTreeRoot() (string, error) {
 	wt, err := c.repo.Worktree()

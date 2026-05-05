@@ -104,3 +104,40 @@ func TestNextStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestIssueBranchPicker_preselectsCurrentBranch(t *testing.T) {
+	rows := []store.BranchRow{
+		{UUID: "a", IssueSlug: "A-1", Title: "First", BranchName: "feature-a"},
+		{UUID: "b", IssueSlug: "B-1", Title: "Second", BranchName: "feature-b"},
+	}
+
+	var selected store.BranchRow
+	IssueBranchPicker(rows, "feature-b", &selected)
+
+	if selected.BranchName != "feature-b" {
+		t.Errorf("pre-selected = %q, want %q", selected.BranchName, "feature-b")
+	}
+}
+
+func TestIssueBranchPicker_defaultsToFirstWhenCurrentUnknown(t *testing.T) {
+	rows := []store.BranchRow{
+		{UUID: "a", IssueSlug: "A-1", Title: "First", BranchName: "feature-a"},
+		{UUID: "b", IssueSlug: "B-1", Title: "Second", BranchName: "feature-b"},
+	}
+
+	var selected store.BranchRow
+	IssueBranchPicker(rows, "not-in-list", &selected)
+
+	if selected.BranchName != "feature-a" {
+		t.Errorf("pre-selected = %q, want first row %q", selected.BranchName, "feature-a")
+	}
+}
+
+func TestIssueMergeStrategy_defaultsToSquash(t *testing.T) {
+	squash := false
+	IssueMergeStrategy(&squash)
+
+	if !squash {
+		t.Error("IssueMergeStrategy should default squash to true")
+	}
+}

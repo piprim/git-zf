@@ -371,3 +371,90 @@ func (m *issueTableModel) View() string {
 
 	return m.table.View() + "\n\n" + tabs + "    Press / to filter · tab: status · q to quit"
 }
+
+// IssueBranchPicker presents in-progress branches for the close flow.
+// The branch matching currentBranch is pre-selected; falls back to the first row.
+func IssueBranchPicker(rows []store.BranchRow, currentBranch string, selected *store.BranchRow) *huh.Group {
+	opts := make([]huh.Option[store.BranchRow], len(rows))
+	for i, r := range rows {
+		label := fmt.Sprintf("[%s] %s (%s)", r.IssueSlug, r.Title, r.BranchName)
+		opts[i] = huh.NewOption(label, r)
+	}
+
+	// Pre-select current branch; default to first row if not found.
+	*selected = rows[0]
+	for _, r := range rows {
+		if r.BranchName == currentBranch {
+			*selected = r
+
+			break
+		}
+	}
+
+	return huh.NewGroup(
+		huh.NewSelect[store.BranchRow]().
+			Title("Select branch to close:").
+			Options(opts...).
+			Value(selected),
+	)
+}
+
+// IssueMergeStrategy lets the user choose between squash (default) and classic merge.
+func IssueMergeStrategy(squash *bool) *huh.Group {
+	*squash = true
+
+	return huh.NewGroup(
+		huh.NewSelect[bool]().
+			Title("Merge strategy:").
+			Options(
+				huh.NewOption("Squash — combine into one commit (default)", true),
+				huh.NewOption("Classic — preserve full history (--no-ff)", false),
+			).
+			Value(squash),
+	)
+}
+
+// IssueMergeAuthor lets the user pick the squash commit author.
+// authors[0] is expected to be the git config identity (pre-filled by the caller).
+func IssueMergeAuthor(authors []string, author *string) *huh.Group {
+	opts := make([]huh.Option[string], 0, len(authors))
+	for _, a := range authors {
+		opts = append(opts, huh.NewOption(a, a))
+	}
+
+	if len(opts) == 0 {
+		opts = []huh.Option[string]{huh.NewOption("(no authors found)", "")}
+	}
+
+	return huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Squash commit author:").
+			Options(opts...).
+			Value(author),
+	)
+}
+
+// IssueMergeConfirm shows a merge summary and asks for final confirmation.
+// author is empty for classic merges.
+func IssueMergeConfirm(branchName, baseBranch, strategy, author string, confirmed *bool) *huh.Group {
+	desc := fmt.Sprintf("%s → %s (%s)", branchName, baseBranch, strategy)
+	if author != "" {
+		desc += "\nAuthor: " + author
+	}
+
+	return huh.NewGroup(
+		huh.NewConfirm().
+			Title(fmt.Sprintf("Merge %q into %q?", branchName, baseBranch)).
+			Description(desc).
+			Value(confirmed),
+	)
+}
+
+// IssueDeleteBranch asks whether to delete the local branch after closing.
+func IssueDeleteBranch(branchName string, confirmed *bool) *huh.Group {
+	return huh.NewGroup(
+		huh.NewConfirm().
+			Title(fmt.Sprintf("Delete local branch %q?", branchName)).
+			Value(confirmed),
+	)
+}

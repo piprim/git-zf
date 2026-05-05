@@ -52,9 +52,17 @@ const (
 	BranchStatusAll        BranchStatus = "" // sentinel: no WHERE filter; not a DB value
 )
 
+// StatusIDInProgress and StatusIDMerged are the integer primary keys for the
+// seeded rows in the statuses table (see migrations/0001_initial.sql).
+const (
+	StatusIDInProgress int64 = 1
+	StatusIDMerged     int64 = 2
+)
+
 // BranchRow is the joined result of one branch with its parent issue and status.
 type BranchRow struct {
 	UUID       string       `json:"uuid"`
+	IssueID    int64        `json:"issue_id"`
 	IssueSlug  string       `json:"issue_slug"`
 	Title      string       `json:"title"`
 	BranchName string       `json:"branch_name"`
@@ -194,7 +202,7 @@ func (s *Store) UpdateIssueStatus(ctx context.Context, issueID, statusID int64) 
 // ordered by created_at DESC. BranchStatusAll returns every row.
 func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]BranchRow, error) {
 	q := `
-		SELECT b.uuid, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
+		SELECT b.uuid, i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
 		FROM branches b
 		JOIN issues i ON b.issue_id = i.id
 		JOIN statuses st ON b.status_id = st.id`
@@ -220,7 +228,7 @@ func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]Branch
 		var createdAtStr string
 
 		if err := rows.Scan(
-			&r.UUID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
+			&r.UUID, &r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("scan branch row: %w", err)
 		}
@@ -252,13 +260,8 @@ func (s *Store) ListBranchesByIssueSlugs(ctx context.Context, slugs []string) (m
 		return make(map[string]BranchRow), nil
 	}
 
-	placeholders := make([]string, len(slugs))
-	for i := range slugs {
-		placeholders[i] = "?"
-	}
-
 	q := `
-SELECT b.uuid, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
+SELECT b.uuid, i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
 FROM branches b
 JOIN issues i ON b.issue_id = i.id
 JOIN statuses st ON b.status_id = st.id
@@ -283,7 +286,7 @@ ORDER BY b.created_at DESC`
 		var createdAtStr string
 
 		if err := rows.Scan(
-			&r.UUID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
+			&r.UUID, &r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("scan branch row: %w", err)
 		}

@@ -420,3 +420,29 @@ func TestListBranchesByIssueSlugs_emptyInput(t *testing.T) {
 		t.Errorf("got %d entries, want 0", len(result))
 	}
 }
+
+func TestListBranches_includesIssueID(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&Issue{IDSlug: "X-1", Title: "IssueID test", StatusID: 1},
+		&Branch{UUID: "uuid-x1", Name: "X-1@feat@issueid@uuid-x1", Type: "feat", StatusID: 1},
+	); err != nil {
+		t.Fatalf("InsertIssueWithBranch: %v", err)
+	}
+
+	rows, err := s.ListBranches(t.Context(), BranchStatusInProgress)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+
+	if len(rows) == 0 {
+		t.Fatal("expected at least one branch row")
+	}
+
+	if rows[0].IssueID <= 0 {
+		t.Errorf("IssueID = %d, want > 0", rows[0].IssueID)
+	}
+}
