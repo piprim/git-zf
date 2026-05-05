@@ -88,14 +88,14 @@ func BranchTableModel(rows []store.BranchRow) (tea.Model, error) {
 	}
 
 	tableRows := make([]btable.Row, len(rows))
-	for i, r := range rows {
+	for i := range rows {
 		tableRows[i] = btable.Row{
-			r.IssueSlug,
-			r.Title,
-			r.BranchName,
-			r.Type,
-			string(r.Status),
-			r.CreatedAt.Format("2006-01-02"),
+			rows[i].IssueSlug,
+			rows[i].Title,
+			rows[i].BranchName,
+			rows[i].Type,
+			string(rows[i].Status),
+			rows[i].CreatedAt.Format("2006-01-02"),
 		}
 	}
 

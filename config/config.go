@@ -4,13 +4,17 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 
+	"github.com/mitchellh/go-homedir"
 	"github.com/mitchellh/mapstructure"
+	"github.com/piprim/git-zf/git"
 	"github.com/spf13/viper"
 )
 
 const (
-	progName = "git-zf"
+	progName       = "git-zf"
+	configFileName = ".git-zf.json"
 )
 
 //go:embed default.json
@@ -114,4 +118,56 @@ func Load() (*AppConfig, error) {
 	cfg.ProgName = progName
 
 	return &cfg, nil
+}
+
+// DefaultJSON returns the raw embedded default configuration bytes.
+func DefaultJSON() []byte {
+	return defaultJSON
+}
+
+// HomeDir returns the configuration directory path in the user home directory
+// where live the config file.
+func HomeDir() (string, error) {
+	home, err := homedir.Dir()
+	if err != nil {
+		return "", fmt.Errorf("get home dir: %w", err)
+	}
+
+	return home, nil
+}
+
+// RepoPath return the configuration directory path in the git repository of the
+// project.
+func RepoDir() string {
+	client, err := git.NewClient()
+	if err != nil {
+		return ""
+	}
+
+	root, err := client.WorkingTreeRoot()
+	if err != nil || root == "" {
+		return ""
+	}
+
+	return filepath.Join(root, ".git")
+}
+
+// HomePath returns the configurtion file path in the user home directory.
+func HomePath() (string, error) {
+	home, err := HomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(home, configFileName), nil
+}
+
+// RepoPath return the configuration file path in the git repository of the project.
+func RepoPath() string {
+	repoDir := RepoDir()
+	if repoDir == "" {
+		return ""
+	}
+
+	return filepath.Join(repoDir, configFileName)
 }

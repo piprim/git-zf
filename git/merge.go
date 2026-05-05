@@ -156,7 +156,7 @@ func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool)
 func parseConflictFiles(output string) []string {
 	var files []string
 
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if !strings.HasPrefix(line, "CONFLICT") {
 			continue
 		}

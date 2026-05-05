@@ -27,6 +27,10 @@ const (
 	issueTableColWidthTrackerStatus = 14
 	issueTableColWidthCreated       = 10
 	issueTableHeight                = 20
+
+	statusOpen   = "open"
+	statusClosed = "closed"
+	statusAll    = "all"
 )
 
 var (
@@ -196,7 +200,7 @@ func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, er
 
 	status := initialStatus
 	if status == "" {
-		status = "open"
+		status = statusOpen
 	}
 
 	t := btable.New(
@@ -230,9 +234,9 @@ func issueRowToTableRow(r store.IssueRow) btable.Row {
 
 func matchesStatus(r store.IssueRow, status string) bool {
 	switch status {
-	case "closed":
+	case statusClosed:
 		return r.Branch != nil && r.Branch.Status == store.BranchStatusMerged
-	case "all":
+	case statusAll:
 		return true
 	default: // "open" and anything else
 		return r.Branch == nil || r.Branch.Status == store.BranchStatusInProgress
@@ -273,12 +277,12 @@ func applyFilters(rows []store.IssueRow, status, text string) []btable.Row {
 
 func nextStatus(current string) string {
 	switch current {
-	case "open":
-		return "closed"
-	case "closed":
-		return "all"
+	case statusOpen:
+		return statusClosed
+	case statusClosed:
+		return statusAll
 	default:
-		return "open"
+		return statusOpen
 	}
 }
 
@@ -345,9 +349,9 @@ func renderStatusTabs(current string) string {
 	}
 
 	tabs := []tab{
-		{"Open", "open"},
-		{"Closed", "closed"},
-		{"All", "all"},
+		{"Open", statusOpen},
+		{"Closed", statusClosed},
+		{"All", statusAll},
 	}
 
 	parts := make([]string, len(tabs))
@@ -376,16 +380,16 @@ func (m *issueTableModel) View() string {
 // The branch matching currentBranch is pre-selected; falls back to the first row.
 func IssueBranchPicker(rows []store.BranchRow, currentBranch string, selected *store.BranchRow) *huh.Group {
 	opts := make([]huh.Option[store.BranchRow], len(rows))
-	for i, r := range rows {
-		label := fmt.Sprintf("[%s] %s (%s)", r.IssueSlug, r.Title, r.BranchName)
-		opts[i] = huh.NewOption(label, r)
+	for i := range rows {
+		label := fmt.Sprintf("[%s] %s (%s)", rows[i].IssueSlug, rows[i].Title, rows[i].BranchName)
+		opts[i] = huh.NewOption(label, rows[i])
 	}
 
 	// Pre-select current branch; default to first row if not found.
 	*selected = rows[0]
-	for _, r := range rows {
-		if r.BranchName == currentBranch {
-			*selected = r
+	for i := range rows {
+		if rows[i].BranchName == currentBranch {
+			*selected = rows[i]
 
 			break
 		}

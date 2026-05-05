@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -82,5 +83,21 @@ func TestLoad_overlay_partialCommitMessage(t *testing.T) {
 
 	if cfg.CommitMessage.Template == "" {
 		t.Error("CommitMessage.Template must be preserved when only items is overridden")
+	}
+}
+
+func TestDefaultJSON_isValidJSON(t *testing.T) {
+	b := config.DefaultJSON()
+	if len(b) == 0 {
+		t.Fatal("DefaultJSON returned empty bytes")
+	}
+
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatalf("DefaultJSON is not valid JSON: %v", err)
+	}
+
+	if _, ok := v["commit-types"]; !ok {
+		t.Error("DefaultJSON missing 'commit-types' key")
 	}
 }

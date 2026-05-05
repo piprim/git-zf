@@ -46,13 +46,20 @@ func (c Commit) GetRootCmd() *cobra.Command {
 	f.StringVar(&author, "author", "", `override commit author as "Name <email>"`)
 
 	cmd.RunE = func(_ *cobra.Command, _ []string) error {
-		return c.runE(all, amend, noVerify, signoff, allowEmpty, author)
+		return c.runE(tui.CommitOption{
+			All:        all,
+			Amend:      amend,
+			NoVerify:   noVerify,
+			Signoff:    signoff,
+			AllowEmpty: allowEmpty,
+			Author:     author,
+		})
 	}
 
 	return cmd
 }
 
-func (c Commit) runE(all, amend, noVerify, signoff, allowEmpty bool, author string) error {
+func (c Commit) runE(flags tui.CommitOption) error {
 	client, err := git.NewClient()
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
@@ -64,15 +71,8 @@ func (c Commit) runE(all, amend, noVerify, signoff, allowEmpty bool, author stri
 		authors = []string{}
 	}
 
-	defaults := tui.CommitOption{
-		Authors:    authors,
-		All:        all,
-		Amend:      amend,
-		NoVerify:   noVerify,
-		Signoff:    signoff,
-		AllowEmpty: allowEmpty,
-		Author:     author,
-	}
+	defaults := flags
+	defaults.Authors = authors
 
 	msg, opts, err := commitpkg.FillOutForm(c.appConfig, defaults)
 	if err != nil {

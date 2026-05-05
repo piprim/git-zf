@@ -20,8 +20,15 @@ func RenderBranchTable(w io.Writer, rows []store.BranchRow) {
 			return lipgloss.NewStyle()
 		})
 
-	for _, r := range rows {
-		t.Row(r.IssueSlug, r.Title, r.BranchName, r.Type, string(r.Status), r.CreatedAt.Format("2006-01-02"))
+	for i := range rows {
+		t.Row(
+			rows[i].IssueSlug,
+			rows[i].Title,
+			rows[i].BranchName,
+			rows[i].Type,
+			string(rows[i].Status),
+			rows[i].CreatedAt.Format("2006-01-02"),
+		)
 	}
 
 	fmt.Fprintln(w, t.Render())

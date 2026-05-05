@@ -6,15 +6,14 @@ import (
 	"log"
 	"os"
 
-	homedir "github.com/mitchellh/go-homedir"
 	"github.com/piprim/git-zf/cmd/branch"
 	"github.com/piprim/git-zf/cmd/commit"
 	"github.com/piprim/git-zf/cmd/completion"
+	cfgcmd "github.com/piprim/git-zf/cmd/config"
 	"github.com/piprim/git-zf/cmd/install"
 	"github.com/piprim/git-zf/cmd/issue"
 	"github.com/piprim/git-zf/cmd/version"
 	"github.com/piprim/git-zf/config"
-	"github.com/piprim/git-zf/git"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -57,6 +56,7 @@ func GetRootCmd() (*cobra.Command, error) {
 	cp := completion.New(appConfig)
 	in := install.New(appConfig)
 	vs := version.New(Version, Name)
+	cf := cfgcmd.New(appConfig)
 
 	rootCmd.AddCommand(
 		cp.GetRootCmd(),
@@ -65,6 +65,7 @@ func GetRootCmd() (*cobra.Command, error) {
 		br.GetRootCmd(),
 		vs.GetRootCmd(),
 		in.GetRootCmd(),
+		cf.GetRootCmd(),
 	)
 
 	return rootCmd, nil
@@ -90,15 +91,13 @@ func initConfig() error {
 	viper.SetConfigType(configFileExt)
 
 	// Repo-root config takes priority over home: add it first so Viper searches it first.
-	if client, err := git.NewClient(); err == nil {
-		if root, err := client.WorkingTreeRoot(); err == nil && root != "" {
-			viper.AddConfigPath(root)
-		}
+	if root := config.RepoDir(); root != "" {
+		viper.AddConfigPath(root)
 	}
 
-	home, err := homedir.Dir()
+	home, err := config.HomeDir()
 	if err != nil {
-		return fmt.Errorf("get home dir failed: %w", err)
+		return fmt.Errorf("get home config dir failed: %w", err)
 	}
 	viper.AddConfigPath(home)
 

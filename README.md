@@ -115,6 +115,38 @@ $ git zf branch prune     # clean up stale DB records
 --dry-run       show what would be pruned without executing
 ```
 
+### Config
+```
+$ git zf config show
+$ git zf config init
+```
+
+**`config show`** — print the active config file path followed by the effective configuration as formatted JSON. The `issue-tracker.token` field is masked as `***` so the output is safe to share or paste into issues.
+
+Example output:
+```
+Config file: /home/user/.git-zf.json
+
+{
+  "commit-types": [...],
+  ...
+  "issue-tracker": {
+    "type": "redmine",
+    "url": "https://redmine.example.com",
+    "token": "***"
+  }
+}
+```
+
+If no config file is found the header reads `no config file found (built-in defaults apply)`.
+
+**`config init`** — interactively write the default config file. The destination is chosen based on context:
+
+- **Outside a git repo, no home config**: the home path is selected automatically without a prompt.
+- **Inside a git repo or a home config already exists**: a TUI picker lets you choose between `$HOME/.git-zf.json` and `<repo>/.git/.git-zf.json`. The repo-level file lives inside `.git/` so it is never committed and cannot leak secrets. It takes precedence over the home file when present.
+
+If the target file already exists a confirmation prompt is shown before overwriting.
+
 ### All commands
 ```txt
 Usage:
@@ -124,6 +156,7 @@ Available Commands:
   branch      Manage local branches
   commit      Record changes to the repository
   completion  Generate completion script
+  config      Manage git-zf configuration
   help        Help about any command
   install     Install this tool to git-core as git-zf
   issue       Manage issues
@@ -136,7 +169,14 @@ Flags:
 
 ## Configure
 
-Config file: `.git-zf.json` (JSON) at repository root or `$HOME`. Repository root takes priority over home directory.
+Config file: `.git-zf.json` (JSON). Two locations are supported; the repo-level file takes precedence over the home file:
+
+| Location | Path | Notes |
+|----------|------|-------|
+| Home | `$HOME/.git-zf.json` | Applied everywhere |
+| Repo | `<repo>/.git/.git-zf.json` | Inside `.git/` — never committed, can contain secrets |
+
+Use `git zf config init` to create the file interactively, or `git zf config show` to inspect the currently active configuration.
 
 The default configuration is embedded in [`config/default.json`](https://github.com/piprim/git-zf/blob/master/config/default.json).
 
