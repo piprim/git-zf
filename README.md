@@ -1,4 +1,8 @@
-# Git-ZF
+# Git-ZF - Git Zen workFlow
+
+<p align="center">
+  <img src="./assets/git-zf-logo.webp" alt="Logo git-zf" width="272" />
+</p>
 
 > Command line utility to manage git workflow, connect to issue trackers, and standardize commit messages through a TUI.
 
