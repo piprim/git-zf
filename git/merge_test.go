@@ -52,7 +52,7 @@ func TestCurrentBranch(t *testing.T) {
 
 	client, dir := newDiskRepo(t)
 
-	branch, err := client.CurrentBranch(t.Context())
+	branch, err := client.CurrentBranch()
 	if err != nil {
 		t.Fatalf("CurrentBranch: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestCurrentBranch(t *testing.T) {
 		t.Fatalf("checkout feature-x: %v\n%s", err, out)
 	}
 
-	branch2, err := client.CurrentBranch(t.Context())
+	branch2, err := client.CurrentBranch()
 	if err != nil {
 		t.Fatalf("CurrentBranch after switch: %v", err)
 	}

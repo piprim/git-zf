@@ -2,7 +2,10 @@ package commit
 
 import (
 	"bytes"
+	"slices"
 	"testing"
+
+	"github.com/piprim/git-zf/config"
 )
 
 func TestAssembleMessage(t *testing.T) {
@@ -162,4 +165,165 @@ func TestBuildAuthorList_currentAppearsMultipleTimes(t *testing.T) {
 	if len(got) != 1 || got[0] != "Alice <alice@example.com>" {
 		t.Errorf("expected [Alice] (len 1), got %v", got)
 	}
+}
+
+const testIssueID = "ABC-1"
+
+func TestSetItemValue_found(t *testing.T) {
+	items := []config.CommitItem{
+		{Name: "scope"},
+		{Name: "subject"},
+	}
+
+	ok := setItemValue(items, "scope", testIssueID)
+	if !ok {
+		t.Fatal("setItemValue: returned false, want true")
+	}
+	if items[0].Value != testIssueID {
+		t.Errorf("items[0].Value = %q, want %q", items[0].Value, testIssueID)
+	}
+}
+
+func TestSetItemValue_notFound(t *testing.T) {
+	items := []config.CommitItem{
+		{Name: "subject"},
+	}
+
+	ok := setItemValue(items, "scope", testIssueID)
+	if ok {
+		t.Error("setItemValue: returned true, want false")
+	}
+	if items[0].Name != "subject" || items[0].Value != "" {
+		t.Errorf("items[0] mutated: got %+v", items[0])
+	}
+}
+
+func TestIsValidCommitType_match(t *testing.T) {
+	types := []config.CommitTypeOption{
+		{Name: "feat"},
+		{Name: "fix"},
+	}
+	if !isValidCommitType(types, "feat") {
+		t.Error("isValidCommitType(feat) = false, want true")
+	}
+}
+
+func TestIsValidCommitType_noMatch(t *testing.T) {
+	types := []config.CommitTypeOption{{Name: "feat"}}
+	if isValidCommitType(types, "wip") {
+		t.Error("isValidCommitType(wip) = true, want false")
+	}
+}
+
+func TestIsValidCommitType_emptyTypes(t *testing.T) {
+	if isValidCommitType(nil, "feat") {
+		t.Error("isValidCommitType(nil, feat) = true, want false")
+	}
+}
+
+func TestApplyIssueHint(t *testing.T) {
+	tests := []struct {
+		name      string
+		items     []config.CommitItem
+		hint      IssueHint
+		wantField string // empty = no field set
+		wantValue string
+	}{
+		{
+			name: "scope_wins_over_footer_and_subject",
+			items: []config.CommitItem{
+				{Name: "subject"}, {Name: "scope"}, {Name: "footer"},
+			},
+			hint:      IssueHint{IssueID: testIssueID},
+			wantField: "scope",
+			wantValue: testIssueID,
+		},
+		{
+			name: "footer_used_when_scope_missing",
+			items: []config.CommitItem{
+				{Name: "subject"}, {Name: "footer"},
+			},
+			hint:      IssueHint{IssueID: testIssueID},
+			wantField: "footer",
+			wantValue: "Refs: " + testIssueID,
+		},
+		{
+			name:      "subject_used_when_only_subject_present",
+			items:     []config.CommitItem{{Name: "subject"}},
+			hint:      IssueHint{IssueID: testIssueID},
+			wantField: "subject",
+			wantValue: "(" + testIssueID + ")",
+		},
+		{
+			name:      "no_matching_field_no_change",
+			items:     []config.CommitItem{{Name: "body"}},
+			hint:      IssueHint{IssueID: testIssueID},
+			wantField: "",
+		},
+		{
+			name:      "empty_issue_id_early_return",
+			items:     []config.CommitItem{{Name: "scope"}, {Name: "footer"}},
+			hint:      IssueHint{IssueID: ""},
+			wantField: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Snapshot original to ensure applyIssueHint never mutates the input.
+			originalCopy := slices.Clone(tt.items)
+
+			got := applyIssueHint(tt.items, tt.hint)
+
+			assertNoInputMutation(t, tt.items, originalCopy)
+
+			if tt.wantField == "" {
+				assertNoFieldSet(t, got)
+
+				return
+			}
+
+			assertFieldValue(t, got, tt.wantField, tt.wantValue)
+		})
+	}
+}
+
+func assertNoInputMutation(t *testing.T, got, want []config.CommitItem) {
+	t.Helper()
+
+	for i := range got {
+		// CommitItem is not comparable (Options is a slice), so compare the
+		// fields applyIssueHint could touch.
+		if got[i].Name != want[i].Name || got[i].Value != want[i].Value {
+			t.Errorf("input mutated at [%d]: got %+v, want %+v",
+				i, got[i], want[i])
+		}
+	}
+}
+
+func assertNoFieldSet(t *testing.T, items []config.CommitItem) {
+	t.Helper()
+
+	for _, item := range items {
+		if item.Value != "" {
+			t.Errorf("expected no field set, but %q = %q", item.Name, item.Value)
+		}
+	}
+}
+
+func assertFieldValue(t *testing.T, items []config.CommitItem, name, want string) {
+	t.Helper()
+
+	for _, item := range items {
+		if item.Name != name {
+			continue
+		}
+		if item.Value != want {
+			t.Errorf("%s.Value = %q, want %q", name, item.Value, want)
+		}
+
+		return
+	}
+
+	t.Errorf("field %q not found in result", name)
 }

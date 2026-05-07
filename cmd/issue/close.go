@@ -91,7 +91,7 @@ func getPickedBranch(ctx context.Context, s *store.Store, client *git.Client) (*
 		return nil, nil
 	}
 
-	currentBranch, err := client.CurrentBranch(ctx)
+	currentBranch, err := client.CurrentBranch()
 	if err != nil {
 		currentBranch = ""
 	}

@@ -76,6 +76,18 @@ func (c *Client) WorkingTreeRoot() (string, error) {
 	return "", fmt.Errorf("filesystem type %T does not expose Root()", wt.Filesystem)
 }
 
+// CurrentBranch returns the short name of the branch HEAD points to.
+// On a detached HEAD the returned name will not parse as an issue branch,
+// so callers can simply ignore it.
+func (c *Client) CurrentBranch() (string, error) {
+	head, err := c.repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("read HEAD: %w", err)
+	}
+
+	return head.Name().Short(), nil
+}
+
 // Authors returns a deduplicated, alphabetically sorted list of commit author strings
 // ("Name <email>") from the repository history.
 // The current git config identity is prepended as the first (default) entry.

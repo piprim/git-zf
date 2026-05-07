@@ -8,21 +8,6 @@ import (
 	"strings"
 )
 
-// CurrentBranch returns the short name of the currently checked-out branch.
-func (c *Client) CurrentBranch(ctx context.Context) (string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return "", fmt.Errorf("working tree root: %w", err)
-	}
-
-	out, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return "", fmt.Errorf("current branch: %w", err)
-	}
-
-	return strings.TrimSpace(string(out)), nil
-}
-
 // MergeDryRun checks whether branchName merges cleanly into baseBranch.
 // It performs the check in a temporary git worktree so the main working tree
 // is never modified. Returns the list of conflicting file paths, or nil if clean.

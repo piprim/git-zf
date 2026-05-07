@@ -540,3 +540,52 @@ func TestCreateBranch_withUnstagedChanges(t *testing.T) {
 		t.Errorf("HEAD = %q, want new branch", head.Name().Short())
 	}
 }
+
+func TestCurrentBranch_master(t *testing.T) {
+	t.Parallel()
+
+	repo := newTestRepo(t)
+	client := &Client{repo: repo}
+
+	got, err := client.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+	if got != "master" {
+		t.Errorf("CurrentBranch = %q, want %q", got, "master")
+	}
+}
+
+func TestCurrentBranch_issueBranch(t *testing.T) {
+	t.Parallel()
+
+	repo := newTestRepo(t)
+	client := &Client{repo: repo}
+
+	const name = "ABC-42@feat@add-oauth-login@a1b2c3d4"
+	if err := client.CreateBranch(name, "master"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	got, err := client.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+	if got != name {
+		t.Errorf("CurrentBranch = %q, want %q", got, name)
+	}
+}
+
+func TestCurrentBranch_emptyRepo(t *testing.T) {
+	t.Parallel()
+
+	repo, err := gogit.Init(memory.NewStorage(), gogit.WithWorkTree(memfs.New()))
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	client := &Client{repo: repo}
+
+	if _, err := client.CurrentBranch(); err == nil {
+		t.Error("CurrentBranch on empty repo: expected error, got nil")
+	}
+}

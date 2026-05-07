@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/piprim/git-zf/branch"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -74,7 +75,9 @@ func (c Commit) runE(flags tui.CommitOption) error {
 	defaults := flags
 	defaults.Authors = authors
 
-	msg, opts, err := commitpkg.FillOutForm(c.appConfig, defaults)
+	hint := issueHintFromClient(client)
+
+	msg, opts, err := commitpkg.FillOutForm(c.appConfig, defaults, hint)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
@@ -138,4 +141,21 @@ func printCommitSummary(s *git.CommitSummary) {
 	}
 
 	fmt.Println(line)
+}
+
+// issueHintFromClient detects whether the current branch is an issue branch
+// and returns the corresponding IssueHint. All failure modes (detached HEAD,
+// non-issue branch name) collapse to the zero value, leaving the form unchanged.
+func issueHintFromClient(c *git.Client) commitpkg.IssueHint {
+	name, err := c.CurrentBranch()
+	if err != nil {
+		return commitpkg.IssueHint{}
+	}
+
+	b, err := branch.Parse(name)
+	if err != nil {
+		return commitpkg.IssueHint{}
+	}
+
+	return commitpkg.IssueHint{IssueID: b.IssueID(), BranchType: b.Type()}
 }
