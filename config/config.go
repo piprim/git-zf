@@ -2,85 +2,86 @@ package config
 
 import (
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 
 	"github.com/mitchellh/go-homedir"
 	"github.com/mitchellh/mapstructure"
+	toml "github.com/pelletier/go-toml"
 	"github.com/piprim/git-zf/git"
 	"github.com/spf13/viper"
 )
 
 const (
-	progName       = "git-zf"
-	configFileName = ".git-zf.json"
+	SubCommandName = "zf"
+	ProgName       = "git-" + SubCommandName
+	configFileName = ".git-zf.toml"
 )
 
-//go:embed default.json
-var defaultJSON []byte
+//go:embed default.toml
+var defaultTOML []byte
 
 // CommitTypeOption is a single commit type entry (e.g. "feat", "fix").
 type CommitTypeOption struct {
-	Name string `json:"name" mapstructure:"name"`
-	Desc string `json:"desc" mapstructure:"desc"`
+	Name string `json:"name" toml:"name" mapstructure:"name"`
+	Desc string `json:"desc" toml:"desc" mapstructure:"desc"`
 }
 
 // CommitItemOption is a selectable option within a CommitItem select field.
 type CommitItemOption struct {
-	Name string `json:"name" mapstructure:"name"`
-	Desc string `json:"desc" mapstructure:"desc"`
+	Name string `json:"name" toml:"name" mapstructure:"name"`
+	Desc string `json:"desc" toml:"desc" mapstructure:"desc"`
 }
 
 // CommitItem describes one field in the commit message form.
 // Value is written by the form after the user submits.
 type CommitItem struct {
-	Name     string             `json:"name"     mapstructure:"name"`
-	Desc     string             `json:"desc"     mapstructure:"desc"`
-	Form     string             `json:"form"     mapstructure:"form"`
-	Required bool               `json:"required" mapstructure:"required"`
-	Options  []CommitItemOption `json:"options"  mapstructure:"options"`
-	Value    string             `json:"-" mapstructure:"-"` // runtime state; never serialised
+	Name     string             `json:"name"     toml:"name"     mapstructure:"name"`
+	Desc     string             `json:"desc"     toml:"desc"     mapstructure:"desc"`
+	Form     string             `json:"form"     toml:"form"     mapstructure:"form"`
+	Required bool               `json:"required" toml:"required" mapstructure:"required"`
+	Options  []CommitItemOption `json:"options"  toml:"options"  mapstructure:"options"`
+	Value    string             `json:"-"        toml:"-"        mapstructure:"-"`
 }
 
 // CommitMessageConfig holds the ordered list of form fields and the Go template
 // used to assemble the commit message.
 type CommitMessageConfig struct {
-	Items    []CommitItem `json:"items"    mapstructure:"items"`
-	Template string       `json:"template" mapstructure:"template"`
+	Items    []CommitItem `json:"items"    toml:"items"    mapstructure:"items"`
+	Template string       `json:"template" toml:"template" mapstructure:"template"`
 }
 
 // BranchConfig holds branch-related settings.
 // Base is the branch new branches are cut from; empty means auto-detect.
 type BranchConfig struct {
-	Base string `json:"base" mapstructure:"base"`
+	Base string `json:"base" toml:"base" mapstructure:"base"`
 }
 
 // IssueTrackerConfig holds connection parameters for one tracker instance.
 // Never log values of this type — Token is a secret.
 type IssueTrackerConfig struct {
-	Type     string   `json:"type"     mapstructure:"type"`
-	URL      string   `json:"url"      mapstructure:"url"`
-	Token    string   `json:"token"    mapstructure:"token"`
-	Projects []string `json:"projects" mapstructure:"projects"`
+	Type     string   `json:"type"     toml:"type"     mapstructure:"type"`
+	URL      string   `json:"url"      toml:"url"      mapstructure:"url"`
+	Token    string   `json:"token"    toml:"token"    mapstructure:"token"`
+	Projects []string `json:"projects" toml:"projects" mapstructure:"projects"`
 }
 
 // AppConfig is the top-level configuration for the application.
 type AppConfig struct {
-	ProgName      string
-	CommitTypes   []CommitTypeOption  `json:"commit-types"   mapstructure:"commit-types"`
-	CommitMessage CommitMessageConfig `json:"commit-message" mapstructure:"commit-message"`
-	Branch        BranchConfig        `json:"branch"         mapstructure:"branch"`
-	IssueTracker  IssueTrackerConfig  `json:"issue-tracker"  mapstructure:"issue-tracker"`
+	ProgName      string              `json:"-" toml:"-" mapstructure:"-"`
+	CommitTypes   []CommitTypeOption  `json:"commit-types"   toml:"commit-types"   mapstructure:"commit-types"`
+	CommitMessage CommitMessageConfig `json:"commit-message" toml:"commit-message" mapstructure:"commit-message"`
+	Branch        BranchConfig        `json:"branch"         toml:"branch"         mapstructure:"branch"`
+	IssueTracker  IssueTrackerConfig  `json:"issue-tracker"  toml:"issue-tracker"  mapstructure:"issue-tracker"`
 }
 
-// Load parses the embedded default.json then overlays any values present in the
+// Load parses the embedded default.toml then overlays any values present in the
 // global viper instance. Each config section is handled individually so that a
 // partial override (e.g. only commit-message.items) preserves unset defaults.
 // viper.Sub is avoided because it silently returns nil for array-typed keys.
 func Load() (*AppConfig, error) {
 	var cfg AppConfig
-	if err := json.Unmarshal(defaultJSON, &cfg); err != nil {
+	if err := toml.Unmarshal(defaultTOML, &cfg); err != nil {
 		return nil, fmt.Errorf("parse default config: %w", err)
 	}
 
@@ -116,14 +117,14 @@ func Load() (*AppConfig, error) {
 		}
 	}
 
-	cfg.ProgName = progName
+	cfg.ProgName = ProgName
 
 	return &cfg, nil
 }
 
-// DefaultJSON returns the raw embedded default configuration bytes.
-func DefaultJSON() []byte {
-	return defaultJSON
+// DefaultTOML returns the raw embedded default configuration bytes.
+func DefaultTOML() []byte {
+	return defaultTOML
 }
 
 // HomeDir returns the configuration directory path in the user home directory
@@ -137,8 +138,7 @@ func HomeDir() (string, error) {
 	return home, nil
 }
 
-// RepoPath return the configuration directory path in the git repository of the
-// project.
+// RepoDir returns the configuration directory path in the git repository of the project.
 func RepoDir() string {
 	client, err := git.NewClient()
 	if err != nil {
@@ -153,7 +153,7 @@ func RepoDir() string {
 	return filepath.Join(root, ".git")
 }
 
-// HomePath returns the configurtion file path in the user home directory.
+// HomePath returns the configuration file path in the user home directory.
 func HomePath() (string, error) {
 	home, err := HomeDir()
 	if err != nil {
@@ -163,7 +163,7 @@ func HomePath() (string, error) {
 	return filepath.Join(home, configFileName), nil
 }
 
-// RepoPath return the configuration file path in the git repository of the project.
+// RepoPath returns the configuration file path in the git repository of the project.
 func RepoPath() string {
 	repoDir := RepoDir()
 	if repoDir == "" {

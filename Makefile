@@ -11,8 +11,10 @@ LDFLAGS    := -ldflags "\
 ifeq ($(OS),Windows_NT)
 	GOOS := windows
 	COPY := copy
+	RM := del /Q /F
 else
 	COPY := cp
+	RM := rm -f
 	UNAME_S := $(shell uname -s)
 	ifeq ($(UNAME_S),Linux)
 		GOOS := linux
@@ -26,6 +28,10 @@ GIT_EXEC_PATH := $(shell git --exec-path)
 all: build
 install: build
 	$(COPY) $(BIN) $(GIT_EXEC_PATH)/$(TARGET)
+
+uninstall:
+	$(RM) $(GIT_EXEC_PATH)/$(TARGET)
+
 clean:
 	rm -rf $(BIN_DIR)
 

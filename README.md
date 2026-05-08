@@ -39,6 +39,11 @@ sudo git-zf install    # copies binary to $(git --exec-path)
 git zf version
 ```
 
+### Uninstall
+
+`git zf uninstall`
+
+
 ## Usage
 
 ### Commit
@@ -185,6 +190,7 @@ Available Commands:
   config      Manage git-zf configuration
   help        Help about any command
   install     Install this tool to git-core as git-zf
+  uninstall   uninstall this tool from git-core
   issue       Manage issues
   version     Print version information and quit
 

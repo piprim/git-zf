@@ -12,7 +12,7 @@ import (
 )
 
 func TestBuildPickerOpts_homeOnlyNoExist(t *testing.T) {
-	opts := buildPickerOpts("/home/user/.git-zf.json", "", false, false)
+	opts := buildPickerOpts("/home/user/.git-zf.toml", "", false, false)
 
 	if len(opts) != 1 {
 		t.Fatalf("expected 1 option, got %d", len(opts))
@@ -21,7 +21,7 @@ func TestBuildPickerOpts_homeOnlyNoExist(t *testing.T) {
 
 func TestBuildPickerOpts_homeExistsWithRepo(t *testing.T) {
 	// homeExists=true, repoExists=false → home has [overwrite], repo has precedence note.
-	opts := buildPickerOpts("/home/user/.git-zf.json", "/repo/.git-zf.json", true, false)
+	opts := buildPickerOpts("/home/user/.git-zf.toml", "/repo/.git-zf.toml", true, false)
 
 	if len(opts) != 2 {
 		t.Fatalf("expected 2 options, got %d", len(opts))
@@ -38,7 +38,7 @@ func TestBuildPickerOpts_homeExistsWithRepo(t *testing.T) {
 
 func TestBuildPickerOpts_bothExist(t *testing.T) {
 	// homeExists=true, repoExists=true → both have [overwrite].
-	opts := buildPickerOpts("/home/user/.git-zf.json", "/repo/.git-zf.json", true, true)
+	opts := buildPickerOpts("/home/user/.git-zf.toml", "/repo/.git-zf.toml", true, true)
 
 	if len(opts) != 2 {
 		t.Fatalf("expected 2 options, got %d", len(opts))
@@ -53,16 +53,16 @@ func TestBuildPickerOpts_bothExist(t *testing.T) {
 	}
 }
 
-func TestWriteDest_writesDefaultJSON(t *testing.T) {
+func TestWriteHomeDest_writesDefaultTOML(t *testing.T) {
 	dir := t.TempDir()
-	dest := filepath.Join(dir, ".git-zf.json")
+	dest := filepath.Join(dir, ".git-zf.toml")
 
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
 
-	if err := writeDest(cmd, dest); err != nil {
-		t.Fatalf("writeDest: %v", err)
+	if err := writeHomeDest(cmd, dest); err != nil {
+		t.Fatalf("writeHomeDest: %v", err)
 	}
 
 	content, err := os.ReadFile(dest)
@@ -70,8 +70,8 @@ func TestWriteDest_writesDefaultJSON(t *testing.T) {
 		t.Fatalf("read written file: %v", err)
 	}
 
-	if !bytes.Equal(content, appconfig.DefaultJSON()) {
-		t.Errorf("file content does not match DefaultJSON")
+	if !bytes.Equal(content, appconfig.DefaultTOML()) {
+		t.Errorf("file content does not match DefaultTOML")
 	}
 
 	if !strings.Contains(buf.String(), dest) {
@@ -80,7 +80,7 @@ func TestWriteDest_writesDefaultJSON(t *testing.T) {
 }
 
 func TestPickDest_autoSelectsHomeWhenOutsideRepoNoFile(t *testing.T) {
-	homePath := filepath.Join(t.TempDir(), ".git-zf.json")
+	homePath := filepath.Join(t.TempDir(), ".git-zf.toml")
 	// repoPath="" simulates being outside a git repo; homePath does not exist.
 	dest, err := pickDest(homePath, "")
 	if err != nil {
@@ -97,7 +97,7 @@ func TestConfirmOverwrite_returnsFalseOnAbort(t *testing.T) {
 	// This test verifies it compiles and that fileExists guards correctly by
 	// testing the guard path in isolation: when dest does not exist, no confirm is needed.
 	dir := t.TempDir()
-	dest := filepath.Join(dir, "nonexistent.json")
+	dest := filepath.Join(dir, "nonexistent.toml")
 
 	if fileExists(dest) {
 		t.Error("fileExists should return false for nonexistent file — overwrite confirm must not trigger")
@@ -106,15 +106,15 @@ func TestConfirmOverwrite_returnsFalseOnAbort(t *testing.T) {
 
 func TestFileExists(t *testing.T) {
 	dir := t.TempDir()
-	existing := filepath.Join(dir, "exists.json")
-	if err := os.WriteFile(existing, []byte("{}"), 0644); err != nil {
+	existing := filepath.Join(dir, "exists.toml")
+	if err := os.WriteFile(existing, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	if !fileExists(existing) {
 		t.Error("fileExists returned false for existing file")
 	}
-	if fileExists(filepath.Join(dir, "missing.json")) {
+	if fileExists(filepath.Join(dir, "missing.toml")) {
 		t.Error("fileExists returned true for missing file")
 	}
 }

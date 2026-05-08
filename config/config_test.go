@@ -1,12 +1,12 @@
 package config_test
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
+	toml "github.com/pelletier/go-toml"
 	"github.com/spf13/viper"
 
 	"github.com/piprim/git-zf/config"
@@ -89,40 +89,42 @@ func TestLoad_overlay_partialCommitMessage(t *testing.T) {
 	}
 }
 
-func TestDefaultJSON_isValidJSON(t *testing.T) {
-	b := config.DefaultJSON()
+func TestDefaultTOML_isValidTOML(t *testing.T) {
+	t.Parallel()
+
+	b := config.DefaultTOML()
 	if len(b) == 0 {
-		t.Fatal("DefaultJSON returned empty bytes")
+		t.Fatal("DefaultTOML returned empty bytes")
 	}
 
 	var v map[string]any
-	if err := json.Unmarshal(b, &v); err != nil {
-		t.Fatalf("DefaultJSON is not valid JSON: %v", err)
+	if err := toml.Unmarshal(b, &v); err != nil {
+		t.Fatalf("DefaultTOML is not valid TOML: %v", err)
 	}
 
 	if _, ok := v["commit-types"]; !ok {
-		t.Error("DefaultJSON missing 'commit-types' key")
+		t.Error("DefaultTOML missing 'commit-types' key")
 	}
 }
 
 func TestLoad_projects(t *testing.T) {
 	// Not parallel — modifies global viper state.
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, ".git-zf.json")
+	cfgPath := filepath.Join(dir, ".git-zf.toml")
 
-	const blob = `{
-		"issue-tracker": {
-			"type": "github",
-			"url": "https://api.github.com",
-			"token": "x",
-			"projects": ["a/b", "c/d"]
-		}
-	}`
+	const blob = `
+[issue-tracker]
+type = "github"
+url = "https://api.github.com"
+token = "x"
+projects = ["a/b", "c/d"]
+`
 	if err := os.WriteFile(cfgPath, []byte(blob), 0o600); err != nil {
 		t.Fatalf("write cfg: %v", err)
 	}
 
 	v := viper.New()
+	v.SetConfigType("toml")
 	v.SetConfigFile(cfgPath)
 	if err := v.ReadInConfig(); err != nil {
 		t.Fatalf("read cfg: %v", err)
@@ -143,5 +145,76 @@ func TestLoad_projects(t *testing.T) {
 	want := []string{"a/b", "c/d"}
 	if !slices.Equal(cfg.IssueTracker.Projects, want) {
 		t.Errorf("Projects = %v, want %v", cfg.IssueTracker.Projects, want)
+	}
+}
+
+func TestLoad_twoFileMerge(t *testing.T) {
+	// Not parallel — modifies global viper state.
+	viper.Reset()
+	defer viper.Reset()
+
+	globalTOML := []byte(`
+[[commit-types]]
+name = "custom"
+desc = "Custom type"
+`)
+
+	localTOML := []byte(`
+[issue-tracker]
+type = "redmine"
+url = "https://redmine.example.com"
+token = "tok"
+`)
+
+	globalPath := filepath.Join(t.TempDir(), ".git-zf.toml")
+	localPath := filepath.Join(t.TempDir(), ".git-zf.toml")
+
+	if err := os.WriteFile(globalPath, globalTOML, 0o600); err != nil {
+		t.Fatalf("write global: %v", err)
+	}
+
+	if err := os.WriteFile(localPath, localTOML, 0o600); err != nil {
+		t.Fatalf("write local: %v", err)
+	}
+
+	viper.SetConfigType("toml")
+	viper.SetConfigFile(globalPath)
+
+	if err := viper.ReadInConfig(); err != nil {
+		t.Fatalf("ReadInConfig global: %v", err)
+	}
+
+	viper.SetConfigFile(localPath)
+
+	if err := viper.MergeInConfig(); err != nil {
+		t.Fatalf("MergeInConfig local: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// commit-types from global override (replaces built-in defaults).
+	if len(cfg.CommitTypes) != 1 {
+		t.Errorf("CommitTypes len = %d, want 1", len(cfg.CommitTypes))
+	}
+
+	if cfg.CommitTypes[0].Name != "custom" {
+		t.Errorf("CommitTypes[0].Name = %q, want %q", cfg.CommitTypes[0].Name, "custom")
+	}
+
+	// issue-tracker from local.
+	if cfg.IssueTracker.Type != "redmine" {
+		t.Errorf("IssueTracker.Type = %q, want %q", cfg.IssueTracker.Type, "redmine")
+	}
+
+	if cfg.IssueTracker.URL != "https://redmine.example.com" {
+		t.Errorf("IssueTracker.URL = %q, want %q", cfg.IssueTracker.URL, "https://redmine.example.com")
+	}
+
+	// template preserved from built-in default (neither file sets it).
+	if cfg.CommitMessage.Template == "" {
+		t.Error("CommitMessage.Template should be preserved from built-in default")
 	}
 }

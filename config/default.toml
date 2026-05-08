@@ -1,0 +1,72 @@
+[[commit-types]]
+name = "feat"
+desc = "A new feature"
+
+[[commit-types]]
+name = "fix"
+desc = "A bug fix"
+
+[[commit-types]]
+name = "docs"
+desc = "Documentation only changes"
+
+[[commit-types]]
+name = "style"
+desc = "Changes that do not affect the meaning of the code"
+
+[[commit-types]]
+name = "refactor"
+desc = "A code change that neither fixes a bug nor adds a feature"
+
+[[commit-types]]
+name = "perf"
+desc = "A code change that improves performance"
+
+[[commit-types]]
+name = "test"
+desc = "Adding missing tests"
+
+[[commit-types]]
+name = "chore"
+desc = "Changes to the build process or auxiliary tools"
+
+[[commit-types]]
+name = "revert"
+desc = "Revert to a commit"
+
+[[commit-types]]
+name = "WIP"
+desc = "Work in progress"
+
+[commit-message]
+template = "{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}{{with .body}}\n\n{{.}}{{end}}{{with .footer}}\n\n{{.}}{{end}}"
+
+[[commit-message.items]]
+name = "scope"
+desc = "Scope (users, db, poll…):"
+form = "input"
+
+[[commit-message.items]]
+name = "subject"
+desc = "Concise description. Imperative, lower case, no final dot:"
+form = "input"
+required = true
+
+[[commit-message.items]]
+name = "body"
+desc = "Motivation for the change and contrast with previous behaviour:"
+form = "multiline"
+
+[[commit-message.items]]
+name = "footer"
+desc = "Breaking changes and referenced issues:"
+form = "multiline"
+
+[branch]
+base = ""
+
+[issue-tracker]
+projects = []
+type = ""
+url = ""
+token = ""

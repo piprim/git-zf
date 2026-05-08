@@ -7,13 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 	"github.com/spf13/cobra"
 )
-
-const subCommandName = "zf"
 
 type Install struct {
 	appConfig *config.AppConfig
@@ -26,7 +24,7 @@ func New(appConfig *config.AppConfig) Install {
 func (i Install) GetRootCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
-		Short: "Install this tool to git-core as " + subCommandName,
+		Short: "Install this tool to git-core as " + config.SubCommandName,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			appFilePath, err := exec.LookPath(os.Args[0])
 			if err != nil {
@@ -46,12 +44,12 @@ func (i Install) GetRootCmd() *cobra.Command {
 }
 
 func installSubCmd(ctx context.Context, srcFilePath string) (string, error) {
-	dst, err := gitExecPath(ctx)
+	dst, err := git.ExecPath(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to retrieve git-core path: %w", err)
 	}
 
-	dstFilePath := filepath.Join(dst, "git-"+subCommandName)
+	dstFilePath := filepath.Join(dst, config.ProgName)
 	if _, err := copyFile(dstFilePath, srcFilePath); err != nil {
 		return "", err
 	}
@@ -79,24 +77,4 @@ func copyFile(dstName, srcName string) (int64, error) {
 	}
 
 	return nb, nil
-}
-
-func gitExecPath(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "--exec-path")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("exec-path pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("exec-path start: %w", err)
-	}
-	result, err := io.ReadAll(stdout)
-	if err != nil {
-		return "", fmt.Errorf("exec-path read: %w", err)
-	}
-	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("exec-path wait: %w", err)
-	}
-
-	return strings.TrimSpace(string(result)), nil
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,16 +13,14 @@ import (
 	cfgcmd "github.com/piprim/git-zf/cmd/config"
 	"github.com/piprim/git-zf/cmd/install"
 	"github.com/piprim/git-zf/cmd/issue"
+	"github.com/piprim/git-zf/cmd/uninstall"
 	"github.com/piprim/git-zf/cmd/version"
 	"github.com/piprim/git-zf/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-const (
-	configFileName = ".git-zf"
-	configFileExt  = "json"
-)
+// const configFileExt = "toml"
 
 // Version and Name are injected at build time via -ldflags.
 var (
@@ -55,6 +54,7 @@ func GetRootCmd() (*cobra.Command, error) {
 	co := commit.New(appConfig)
 	cp := completion.New(appConfig)
 	in := install.New(appConfig)
+	uin := uninstall.New(appConfig)
 	vs := version.New(Version, Name)
 	cf := cfgcmd.New(appConfig)
 
@@ -65,20 +65,21 @@ func GetRootCmd() (*cobra.Command, error) {
 		br.GetRootCmd(),
 		vs.GetRootCmd(),
 		in.GetRootCmd(),
+		uin.GetRootCmd(),
 		cf.GetRootCmd(),
 	)
 
 	return rootCmd, nil
 }
 
-// initConfig sets up logging, loads the .git-zf.json config file via Viper, then
+// initConfig sets up logging, loads the .git-zf.toml config file via Viper, then
 // parses the full AppConfig. Not being inside a git repo is not a fatal error —
 // git zf version/install must work anywhere.
 func initConfig() error {
 	if !isDebug {
 		log.SetOutput(io.Discard)
 	} else {
-		f, err := os.OpenFile("debug.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+		f, err := os.OpenFile("debug.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 		if err != nil {
 			return fmt.Errorf("failed to open debug.log: %w", err)
 		}
@@ -87,34 +88,63 @@ func initConfig() error {
 		log.SetOutput(f)
 	}
 
-	viper.SetConfigName(configFileName)
-	viper.SetConfigType(configFileExt)
+	// viper.SetConfigType(configFileExt)
 
-	// Repo-root config takes priority over home: add it first so Viper searches it first.
-	if root := config.RepoDir(); root != "" {
-		viper.AddConfigPath(root)
-	}
-
-	home, err := config.HomeDir()
+	// Phase 1: load global config from home directory.
+	err := loadGlobalConfig()
 	if err != nil {
-		return fmt.Errorf("get home config dir failed: %w", err)
+		return err
 	}
-	viper.AddConfigPath(home)
 
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return fmt.Errorf("read config failed: %w", err)
+	// Phase 2: merge repo-local config on top (repo values win).
+	if repoPath := config.RepoPath(); repoPath != "" {
+		err := loadRepoConfig(repoPath)
+		if err != nil {
+			return nil
 		}
-
-		log.Println("can not find config file")
-	} else {
-		log.Println("read config success")
 	}
 
 	appConfig, err = config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load app config: %w", err)
 	}
+
+	return nil
+}
+
+func loadGlobalConfig() error {
+	homePath, err := config.HomePath()
+	if err != nil {
+		return fmt.Errorf("get home config path: %w", err)
+	}
+
+	viper.SetConfigFile(homePath)
+
+	if err := viper.ReadInConfig(); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("could not read global config %s: %w", homePath, err)
+		}
+
+		log.Println("no global config file found")
+	}
+
+	log.Printf("loaded global config: %s", homePath)
+
+	return nil
+}
+
+func loadRepoConfig(repoPath string) error {
+	viper.SetConfigFile(repoPath)
+
+	if err := viper.MergeInConfig(); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("could not merge repo config %s: %w", repoPath, err)
+		}
+
+		log.Println("no repo config file found")
+	}
+
+	log.Printf("merged repo config: %s", repoPath)
 
 	return nil
 }
