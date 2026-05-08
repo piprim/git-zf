@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -234,5 +235,30 @@ func TestBuildIssueRows_trackerError_fallback(t *testing.T) {
 	}
 	if !bytes.Contains(stderr.Bytes(), []byte("warning")) {
 		t.Errorf("expected warning on stderr, got %q", stderr.String())
+	}
+}
+
+func TestBuildFromTracker_populatesProject(t *testing.T) {
+	t.Parallel()
+
+	tk := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "1", Subject: "a", Status: "open", Project: "octo/cat"},
+		{ID: "2", Subject: "b", Status: "open", Project: "octo/dog"},
+	}}
+
+	db := openTestIssueStore(t)
+	defer db.Close()
+
+	infra := issueListInfra{tracker: tk, store: db, stderr: io.Discard}
+
+	rows, err := buildFromTracker(t.Context(), infra)
+	if err != nil {
+		t.Fatalf("buildFromTracker: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+	if rows[0].Project != "octo/cat" || rows[1].Project != "octo/dog" {
+		t.Errorf("projects = %q,%q want octo/cat,octo/dog", rows[0].Project, rows[1].Project)
 	}
 }

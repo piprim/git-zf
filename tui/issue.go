@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	btable "github.com/charmbracelet/bubbles/table"
@@ -31,6 +32,10 @@ const (
 	statusOpen   = "open"
 	statusClosed = "closed"
 	statusAll    = "all"
+
+	projectAll                = "all"
+	issueTableColWidthProject = 18
+	issueTableMaxCols         = 7
 )
 
 var (
@@ -189,14 +194,9 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 }
 
 func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, error) {
-	cols := []btable.Column{
-		{Title: "Issue ID", Width: issueTableColWidthIssueID},
-		{Title: "Title", Width: issueTableColWidthTitle},
-		{Title: "Branch", Width: issueTableColWidthBranch},
-		{Title: "Local Status", Width: issueTableColWidthLocalStatus},
-		{Title: "Tracker Status", Width: issueTableColWidthTrackerStatus},
-		{Title: "Created", Width: issueTableColWidthCreated},
-	}
+	projects := uniqueProjects(rows)
+	includeProj := len(projects) > 1
+	cols := buildIssueTableColumns(rows)
 
 	status := initialStatus
 	if status == "" {
@@ -205,7 +205,7 @@ func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, er
 
 	t := btable.New(
 		btable.WithColumns(cols),
-		btable.WithRows(applyFilters(rows, status, "")),
+		btable.WithRows(applyFilters(rows, status, "", projectAll, includeProj)),
 		btable.WithFocused(true),
 		btable.WithHeight(issueTableHeight),
 	)
@@ -218,18 +218,51 @@ func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, er
 	fi.Placeholder = "type to filter…"
 	fi.CharLimit = 64
 
-	return &issueTableModel{table: t, allRows: rows, filter: fi, statusFilter: status}, nil
+	return &issueTableModel{
+		table:         t,
+		allRows:       rows,
+		filter:        fi,
+		statusFilter:  status,
+		projects:      projects,
+		projectFilter: projectAll,
+	}, nil
 }
 
-func issueRowToTableRow(r store.IssueRow) btable.Row {
-	return btable.Row{
-		r.IssueSlug,
+func issueRowToTableRow(r store.IssueRow, includeProject bool) btable.Row {
+	row := make(btable.Row, 0, issueTableMaxCols)
+	row = append(row, r.IssueSlug)
+
+	if includeProject {
+		row = append(row, r.Project)
+	}
+
+	return append(row,
 		r.Title,
 		pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
 		pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
 		pkg.TrackerStatusOrNA(r.TrackerStatus),
 		pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.CreatedAt.Format("2006-01-02") }),
+	)
+}
+
+// buildIssueTableColumns returns the bubbletea columns. The Project column
+// appears only when rows span more than one project.
+func buildIssueTableColumns(rows []store.IssueRow) []btable.Column {
+	cols := []btable.Column{
+		{Title: "Issue ID", Width: issueTableColWidthIssueID},
 	}
+
+	if len(uniqueProjects(rows)) > 1 {
+		cols = append(cols, btable.Column{Title: "Project", Width: issueTableColWidthProject})
+	}
+
+	return append(cols,
+		btable.Column{Title: "Title", Width: issueTableColWidthTitle},
+		btable.Column{Title: "Branch", Width: issueTableColWidthBranch},
+		btable.Column{Title: "Local Status", Width: issueTableColWidthLocalStatus},
+		btable.Column{Title: "Tracker Status", Width: issueTableColWidthTrackerStatus},
+		btable.Column{Title: "Created", Width: issueTableColWidthCreated},
+	)
 }
 
 func matchesStatus(r store.IssueRow, status string) bool {
@@ -243,7 +276,10 @@ func matchesStatus(r store.IssueRow, status string) bool {
 	}
 }
 
-func applyFilters(rows []store.IssueRow, status, text string) []btable.Row {
+// applyFilters builds the bubbletea table rows, keeping only those matching
+// status, project, and free-text search. includeProject controls whether the
+// Project cell is emitted (must match the table's column count).
+func applyFilters(rows []store.IssueRow, status, text, project string, includeProject bool) []btable.Row {
 	q := strings.ToLower(text)
 	out := make([]btable.Row, 0, len(rows))
 
@@ -252,7 +288,11 @@ func applyFilters(rows []store.IssueRow, status, text string) []btable.Row {
 			continue
 		}
 
-		row := issueRowToTableRow(r)
+		if project != projectAll && r.Project != project {
+			continue
+		}
+
+		row := issueRowToTableRow(r, includeProject)
 
 		if q != "" {
 			matched := false
@@ -286,25 +326,92 @@ func nextStatus(current string) string {
 	}
 }
 
+// uniqueProjects returns the deduplicated, sorted list of non-empty
+// IssueRow.Project values.
+func uniqueProjects(rows []store.IssueRow) []string {
+	seen := make(map[string]struct{})
+	for _, r := range rows {
+		if r.Project == "" {
+			continue
+		}
+
+		seen[r.Project] = struct{}{}
+	}
+
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// projectPickerOptions returns the ordered list ["all", p1, p2, …] used both
+// for rendering the picker and for resolving the cursor position.
+func projectPickerOptions(projects []string) []string {
+	opts := make([]string, 0, len(projects)+1)
+	opts = append(opts, projectAll)
+
+	return append(opts, projects...)
+}
+
 type issueTableModel struct {
-	table        btable.Model
-	allRows      []store.IssueRow
-	filter       textinput.Model
-	filtering    bool
-	statusFilter string
+	table         btable.Model
+	allRows       []store.IssueRow
+	filter        textinput.Model
+	filtering     bool
+	statusFilter  string
+	projects      []string
+	projectFilter string
+	picking       bool
+	pickCursor    int
 }
 
 func (*issueTableModel) Init() tea.Cmd { return nil }
 
 func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if m.picking {
+			opts := projectPickerOptions(m.projects)
+			switch key.String() {
+			case "esc":
+				m.picking = false
+
+				return m, nil
+			case "enter":
+				m.picking = false
+				m.projectFilter = opts[m.pickCursor]
+				includeProj := len(m.projects) > 1
+				m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
+
+				return m, nil
+			case "up", "k":
+				if m.pickCursor > 0 {
+					m.pickCursor--
+				}
+
+				return m, nil
+			case "down", "j":
+				if m.pickCursor < len(opts)-1 {
+					m.pickCursor++
+				}
+
+				return m, nil
+			}
+
+			return m, nil
+		}
+
 		if m.filtering {
 			switch key.String() {
 			case "esc":
 				m.filtering = false
 				m.filter.Blur()
 				m.filter.Reset()
-				m.table.SetRows(applyFilters(m.allRows, m.statusFilter, ""))
+				includeProj := len(m.projects) > 1
+				m.table.SetRows(applyFilters(m.allRows, m.statusFilter, "", m.projectFilter, includeProj))
 
 				return m, nil
 			case "enter":
@@ -316,7 +423,8 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			var cmd tea.Cmd
 			m.filter, cmd = m.filter.Update(msg)
-			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value()))
+			includeProj := len(m.projects) > 1
+			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
 
 			return m, cmd
 		}
@@ -326,7 +434,23 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "tab":
 			m.statusFilter = nextStatus(m.statusFilter)
-			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value()))
+			includeProj := len(m.projects) > 1
+			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
+
+			return m, nil
+		case "p":
+			if len(m.projects) > 0 {
+				m.picking = true
+				opts := projectPickerOptions(m.projects)
+				m.pickCursor = 0
+				for i, o := range opts {
+					if o == m.projectFilter {
+						m.pickCursor = i
+
+						break
+					}
+				}
+			}
 
 			return m, nil
 		case "/":
@@ -366,14 +490,43 @@ func renderStatusTabs(current string) string {
 	return strings.Join(parts, "  ")
 }
 
+func renderProjectPicker(cursor int, projects []string) string {
+	opts := projectPickerOptions(projects)
+	lines := make([]string, len(opts))
+
+	for i, o := range opts {
+		if i == cursor {
+			lines[i] = activeTabStyle.Render("> " + o)
+		} else {
+			lines[i] = inactiveTabStyle.Render("  " + o)
+		}
+	}
+
+	return "Pick project (↑↓ / j·k, enter: confirm, esc: cancel):\n" + strings.Join(lines, "\n")
+}
+
 func (m *issueTableModel) View() string {
 	tabs := renderStatusTabs(m.statusFilter)
 
-	if m.filtering {
-		return m.table.View() + "\n\n" + tabs + "    /" + m.filter.View() + "  (esc: clear  enter: confirm)"
+	if m.picking {
+		return m.table.View() + "\n\n" + tabs + "\n\n" + renderProjectPicker(m.pickCursor, m.projects)
 	}
 
-	return m.table.View() + "\n\n" + tabs + "    Press / to filter · tab: status · q to quit"
+	hint := "Press / to filter · tab: status · q to quit"
+	proj := ""
+
+	if len(m.projects) > 0 {
+		hint = "Press / to filter · tab: status · p: project · q to quit"
+		proj = "    Project: " + activeTabStyle.Render(m.projectFilter)
+	}
+
+	view := m.table.View() + "\n\n" + tabs + proj
+
+	if m.filtering {
+		return view + "    /" + m.filter.View() + "  (esc: clear  enter: confirm)"
+	}
+
+	return view + "    " + hint
 }
 
 // IssueBranchPicker presents in-progress branches for the close flow.

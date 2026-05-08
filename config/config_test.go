@@ -2,6 +2,9 @@ package config_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -99,5 +102,46 @@ func TestDefaultJSON_isValidJSON(t *testing.T) {
 
 	if _, ok := v["commit-types"]; !ok {
 		t.Error("DefaultJSON missing 'commit-types' key")
+	}
+}
+
+func TestLoad_projects(t *testing.T) {
+	// Not parallel — modifies global viper state.
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, ".git-zf.json")
+
+	const blob = `{
+		"issue-tracker": {
+			"type": "github",
+			"url": "https://api.github.com",
+			"token": "x",
+			"projects": ["a/b", "c/d"]
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(blob), 0o600); err != nil {
+		t.Fatalf("write cfg: %v", err)
+	}
+
+	v := viper.New()
+	v.SetConfigFile(cfgPath)
+	if err := v.ReadInConfig(); err != nil {
+		t.Fatalf("read cfg: %v", err)
+	}
+
+	// Swap the global viper used by config.Load() with our local instance.
+	viper.Reset()
+	defer viper.Reset()
+	for _, k := range v.AllKeys() {
+		viper.Set(k, v.Get(k))
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []string{"a/b", "c/d"}
+	if !slices.Equal(cfg.IssueTracker.Projects, want) {
+		t.Errorf("Projects = %v, want %v", cfg.IssueTracker.Projects, want)
 	}
 }

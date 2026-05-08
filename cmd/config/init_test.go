@@ -118,4 +118,3 @@ func TestFileExists(t *testing.T) {
 		t.Error("fileExists returned true for missing file")
 	}
 }
-

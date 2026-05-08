@@ -76,6 +76,7 @@ type BranchRow struct {
 type IssueRow struct {
 	IssueSlug     string     `json:"issue_slug"`
 	Title         string     `json:"title"`
+	Project       string     `json:"project"`        // tracker project / repo; empty when unknown
 	TrackerStatus *string    `json:"tracker_status"` // nil → display "N.A."
 	Branch        *BranchRow `json:"branch"`         // nil → not started locally
 }

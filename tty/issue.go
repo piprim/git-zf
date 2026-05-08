@@ -11,8 +11,17 @@ import (
 )
 
 func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
+	includeProject := hasMultipleProjects(rows)
+
+	headers := []string{"ISSUE ID"}
+	if includeProject {
+		headers = append(headers, "PROJECT")
+	}
+
+	headers = append(headers, "TITLE", "BRANCH", "LOCAL STATUS", "TRACKER STATUS", "CREATED")
+
 	t := lgtable.New().
-		Headers("ISSUE ID", "TITLE", "BRANCH", "LOCAL STATUS", "TRACKER STATUS", "CREATED").
+		Headers(headers...).
 		StyleFunc(func(row, _ int) lipgloss.Style {
 			if row == lgtable.HeaderRow {
 				return lipgloss.NewStyle().Bold(true)
@@ -22,15 +31,43 @@ func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
 		})
 
 	for _, r := range rows {
-		t.Row(
-			r.IssueSlug,
+		cells := []string{r.IssueSlug}
+		if includeProject {
+			cells = append(cells, r.Project)
+		}
+
+		cells = append(cells,
 			r.Title,
 			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
 			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
 			pkg.TrackerStatusOrNA(r.TrackerStatus),
 			pkg.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.CreatedAt.Format("2006-01-02") }),
 		)
+
+		t.Row(cells...)
 	}
 
 	fmt.Fprintln(w, t.Render())
+}
+
+func hasMultipleProjects(rows []store.IssueRow) bool {
+	first := ""
+	seen := false
+
+	for _, r := range rows {
+		if r.Project == "" {
+			continue
+		}
+		if !seen {
+			first = r.Project
+			seen = true
+
+			continue
+		}
+		if r.Project != first {
+			return true
+		}
+	}
+
+	return false
 }

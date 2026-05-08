@@ -161,6 +161,7 @@ func buildFromTracker(ctx context.Context, infra issueListInfra) ([]store.IssueR
 		row := store.IssueRow{
 			IssueSlug:     iss.ID,
 			Title:         iss.Subject,
+			Project:       iss.Project,
 			TrackerStatus: &status,
 		}
 		if b, ok := branchMap[iss.ID]; ok {

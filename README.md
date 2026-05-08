@@ -76,7 +76,7 @@ If a tracker is configured, `issue start` pre-selects fetching from the tracker;
 
 **`issue list`** — list issues enriched with local branch data. When a tracker is configured it is the primary source; the local store is used as fallback.
 
-Columns: Issue ID · Title · Branch · Local Status · Tracker Status · Created. `"∅"` means the issue has no local branch yet; `"N.A."` means no tracker is configured.
+Columns: Issue ID · [Project] · Title · Branch · Local Status · Tracker Status · Created. The Project column appears automatically when issues span more than one project. `"∅"` means the issue has no local branch yet; `"N.A."` means no tracker is configured.
 
 `issue list` flags:
 ```
@@ -85,7 +85,11 @@ Columns: Issue ID · Title · Branch · Local Status · Tracker Status · Create
 --json            print JSON array to stdout
 ```
 
-In the interactive TUI press **`/`** to filter rows in real time (matches any column, case-insensitive), **`Enter`** to confirm, **`Esc`** to clear, **`q`** to quit.
+In the interactive TUI:
+- **`/`** — filter rows in real time (matches any column, case-insensitive); **`Enter`** to confirm, **`Esc`** to clear
+- **`tab`** — cycle status filter (Open → Closed → All)
+- **`p`** — open the project picker (↑/↓ or j/k to navigate, **`Enter`** to confirm, **`Esc`** to cancel)
+- **`q`** — quit
 
 **`issue close`** — close an in-progress issue: pick from the list of in-progress branches (the currently checked-out branch is pre-selected), merge into the base branch, update the local store, and optionally update the tracker status and delete the local branch.
 
@@ -151,6 +155,24 @@ If no config file is found the header reads `no config file found (built-in defa
 
 If the target file already exists a confirmation prompt is shown before overwriting.
 
+### Completion
+
+For `Bash` users, set up completion with these steps:
+
+1. **Generate Completion Script**  
+   `git zf completion bash > ~/git-zf-completion.bash`
+2. **Install System-Wide (recommended)**  
+   `sudo mv ~/git-zf-completion.bash /etc/bash_completion.d/`
+2. **Or Install User-Only**  
+   ```bash
+   mkdir -p ~/.local/share/bash-completion/completions
+   mv ~/git-zf-completion.bash ~/.local/share/bash-completion/completions/git-zf
+   ```
+3. **Reload Your Shell**  
+   `source ~/.bashrc`
+
+Take a look at the [Cobra Shell-Specific Configuration](https://cobra.dev/docs/how-to-guides/shell-completion/) for the other supported shells.
+
 ### All commands
 ```txt
 Usage:
@@ -171,7 +193,7 @@ Flags:
   -h, --help    help for git-zf
 ```
 
-## Configure
+## Configuration
 
 Config file: `.git-zf.json` (JSON). Two locations are supported; the repo-level file takes precedence over the home file:
 
@@ -236,10 +258,11 @@ To override the base branch (default: auto-detected from `origin/HEAD`, then `ma
 
 ### Tracker integration
 
-`git zf issue start` can fetch open issues assigned to you from a project tracker. Currently supported: **Redmine**.
+`git zf issue start` and `issue list` can fetch open issues assigned to you from a project tracker. Supported trackers: **Redmine** and **GitHub**.
 
 Add an `issue-tracker` section to `.git-zf.json`:
 
+**Redmine**
 ```json
 {
   "issue-tracker": {
@@ -250,11 +273,42 @@ Add an `issue-tracker` section to `.git-zf.json`:
 }
 ```
 
+**GitHub** (public or GitHub Enterprise)
+```json
+{
+  "issue-tracker": {
+    "type": "github",
+    "url": "https://api.github.com",
+    "token": "ghp_yourPersonalAccessToken"
+  }
+}
+```
+
+For GitHub Enterprise, set `url` to your instance API root, e.g. `https://github.example.com/api/v3/`.
+
 | Key | Description |
 |-----|-------------|
-| `type` | Tracker type. Currently only `"redmine"` is supported. |
-| `url` | Base URL of your tracker instance. |
-| `token` | API key / personal access token. |
+| `type` | Tracker type: `"redmine"` or `"github"`. |
+| `url` | Base URL of the tracker API. For GitHub use `https://api.github.com`. |
+| `token` | API key (Redmine) or personal access token with `repo` scope (GitHub). |
+| `projects` | Optional list of projects to show. Redmine: project slugs or numeric IDs. GitHub: `"owner/repo"` strings. When omitted all assigned issues are shown. |
+
+**Filtering by project**
+
+Use `projects` to limit which repositories or Redmine projects appear in `issue list`:
+
+```json
+{
+  "issue-tracker": {
+    "type": "github",
+    "url": "https://api.github.com",
+    "token": "ghp_...",
+    "projects": ["myorg/backend", "myorg/frontend"]
+  }
+}
+```
+
+> **Note for `UpdateIssueStatus` via GitHub:** because GitHub's update endpoint requires the `owner/repo`, exactly one entry must be present in `projects` when using `issue close` with a GitHub tracker.
 
 When a tracker is configured:
 1. `issue start` asks whether to fetch issues from the tracker.
@@ -262,3 +316,7 @@ When a tracker is configured:
 3. After the branch is created, a status picker shows the live list of statuses from the tracker; pick one or skip.
 4. If the tracker is unavailable or returns no issues, the flow falls back to manual input.
 5. `issue close` shows the same live status picker after merging, so you can move the issue to "Done", "Closed", or any other status in a single step.
+
+### Commit auto-fill from issue branch
+
+When you run `git zf commit` on an issue branch (e.g. `ABC-42@feat@add-oauth@550e8400`), the issue ID is automatically pre-filled into the commit form — into `scope` if that field exists, otherwise `footer`, otherwise `subject` as a fallback. The pre-fill is a hint only; you can edit or clear it before confirming.

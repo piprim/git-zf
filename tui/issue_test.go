@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/piprim/git-zf/store"
@@ -13,7 +14,7 @@ func TestApplyFilters_Open(t *testing.T) {
 		{IssueSlug: "C", Title: "C", Branch: &store.BranchRow{Status: store.BranchStatusMerged}},
 	}
 
-	got := applyFilters(rows, "open", "")
+	got := applyFilters(rows, "open", "", projectAll, false)
 
 	if len(got) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(got))
@@ -31,7 +32,7 @@ func TestApplyFilters_Closed(t *testing.T) {
 		{IssueSlug: "C", Title: "C", Branch: &store.BranchRow{Status: store.BranchStatusMerged}},
 	}
 
-	got := applyFilters(rows, "closed", "")
+	got := applyFilters(rows, "closed", "", projectAll, false)
 
 	if len(got) != 1 {
 		t.Fatalf("want 1 row, got %d", len(got))
@@ -49,7 +50,7 @@ func TestApplyFilters_All(t *testing.T) {
 		{IssueSlug: "C", Title: "C", Branch: &store.BranchRow{Status: store.BranchStatusMerged}},
 	}
 
-	got := applyFilters(rows, "all", "")
+	got := applyFilters(rows, "all", "", projectAll, false)
 
 	if len(got) != 3 {
 		t.Fatalf("want 3 rows, got %d", len(got))
@@ -62,7 +63,7 @@ func TestApplyFilters_TextFilter(t *testing.T) {
 		{IssueSlug: "ABC-2", Title: "Update signup", Branch: &store.BranchRow{Status: store.BranchStatusInProgress}},
 	}
 
-	got := applyFilters(rows, "open", "login")
+	got := applyFilters(rows, "open", "login", projectAll, false)
 
 	if len(got) != 1 {
 		t.Fatalf("want 1 row, got %d", len(got))
@@ -79,7 +80,7 @@ func TestApplyFilters_StatusAndText(t *testing.T) {
 		{IssueSlug: "X-2", Title: "Fix auth", Branch: &store.BranchRow{Status: store.BranchStatusMerged}},
 	}
 
-	got := applyFilters(rows, "open", "auth")
+	got := applyFilters(rows, "open", "auth", projectAll, false)
 
 	if len(got) != 1 {
 		t.Fatalf("want 1 row, got %d", len(got))
@@ -139,5 +140,76 @@ func TestIssueMergeStrategy_defaultsToSquash(t *testing.T) {
 
 	if !squash {
 		t.Error("IssueMergeStrategy should default squash to true")
+	}
+}
+
+func TestApplyFilters_ByProject(t *testing.T) {
+	t.Parallel()
+
+	rows := []store.IssueRow{
+		{IssueSlug: "A", Title: "a", Project: "octo/cat"},
+		{IssueSlug: "B", Title: "b", Project: "octo/dog"},
+		{IssueSlug: "C", Title: "c", Project: "octo/cat"},
+	}
+
+	got := applyFilters(rows, statusOpen, "", "octo/cat", false)
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2", len(got))
+	}
+
+	if got[0][0] != "A" || got[1][0] != "C" {
+		t.Errorf("unexpected rows: %v", got)
+	}
+}
+
+func TestApplyFilters_AllProjects(t *testing.T) {
+	t.Parallel()
+
+	rows := []store.IssueRow{
+		{IssueSlug: "A", Project: "octo/cat"},
+		{IssueSlug: "B", Project: "octo/dog"},
+	}
+
+	got := applyFilters(rows, statusOpen, "", projectAll, false)
+	if len(got) != 2 {
+		t.Fatalf(`got %d rows with projectAll, want 2`, len(got))
+	}
+}
+
+func TestUniqueProjects(t *testing.T) {
+	t.Parallel()
+
+	rows := []store.IssueRow{
+		{Project: "z/y"},
+		{Project: "a/b"},
+		{Project: ""},
+		{Project: "a/b"},
+		{Project: "z/y"},
+	}
+
+	got := uniqueProjects(rows)
+	want := []string{"a/b", "z/y"} // sorted, no empty, deduplicated
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestProjectPickerOptions(t *testing.T) {
+	t.Parallel()
+
+	got := projectPickerOptions([]string{"a/b", "c/d"})
+	want := []string{projectAll, "a/b", "c/d"}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("projectPickerOptions = %v, want %v", got, want)
+	}
+}
+
+func TestProjectPickerOptions_empty(t *testing.T) {
+	t.Parallel()
+
+	got := projectPickerOptions(nil)
+	if len(got) != 1 || got[0] != projectAll {
+		t.Errorf("projectPickerOptions(nil) = %v, want [%q]", got, projectAll)
 	}
 }

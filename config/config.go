@@ -59,9 +59,10 @@ type BranchConfig struct {
 // IssueTrackerConfig holds connection parameters for one tracker instance.
 // Never log values of this type — Token is a secret.
 type IssueTrackerConfig struct {
-	Type  string `json:"type"  mapstructure:"type"`
-	URL   string `json:"url"   mapstructure:"url"`
-	Token string `json:"token" mapstructure:"token"`
+	Type     string   `json:"type"     mapstructure:"type"`
+	URL      string   `json:"url"      mapstructure:"url"`
+	Token    string   `json:"token"    mapstructure:"token"`
+	Projects []string `json:"projects" mapstructure:"projects"`
 }
 
 // AppConfig is the top-level configuration for the application.
@@ -107,8 +108,8 @@ func Load() (*AppConfig, error) {
 		cfg.Branch.Base = viper.GetString("branch.base")
 	}
 
-	// issue-tracker has no slice fields, so zeroSlice is not needed — absent
-	// keys keep their defaults under mapstructure's merge behaviour.
+	// issue-tracker is decoded without zeroSlice: Projects defaults to nil, so
+	// a user-supplied slice fully replaces it without merge ambiguity.
 	if viper.IsSet("issue-tracker") {
 		if err := viper.UnmarshalKey("issue-tracker", &cfg.IssueTracker); err != nil {
 			return nil, fmt.Errorf("unmarshal issue-tracker: %w", err)

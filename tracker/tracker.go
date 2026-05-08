@@ -15,6 +15,7 @@ type Issue struct {
 	Subject     string
 	Description string
 	Status      string
+	Project     string
 }
 
 // Tracker is the contract every adapter must satisfy.

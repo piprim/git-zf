@@ -24,11 +24,18 @@ type status struct {
 	Name string `json:"name"`
 }
 
+type project struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Identifier string `json:"identifier"`
+}
+
 type issue struct {
-	ID          int     `json:"id"`
-	Subject     string  `json:"subject"`
-	Description string  `json:"description"`
-	Status      *status `json:"status"`
+	ID          int      `json:"id"`
+	Subject     string   `json:"subject"`
+	Description string   `json:"description"`
+	Status      *status  `json:"status"`
+	Project     *project `json:"project"`
 }
 
 type issuesResponse struct {
@@ -85,20 +92,30 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 		return nil, fmt.Errorf("decode redmine issues: %w", err)
 	}
 
-	result := make([]tracker.Issue, len(payload.Issues))
-	for i, iss := range payload.Issues {
+	projectsSet := toRedmineProjectsSet(a.cfg.Projects)
+
+	result := make([]tracker.Issue, 0, len(payload.Issues))
+	for _, iss := range payload.Issues {
 		statusName := ""
 		if iss.Status != nil {
 			statusName = iss.Status.Name
 		}
 
-		result[i] = tracker.Issue{
+		proj := redmineProjectName(iss.Project)
+		if projectsSet != nil {
+			if _, ok := projectsSet[proj]; !ok {
+				continue
+			}
+		}
+
+		result = append(result, tracker.Issue{
 			TrackerType: trackerType,
 			ID:          strconv.Itoa(iss.ID),
 			Subject:     iss.Subject,
 			Description: iss.Description,
 			Status:      statusName,
-		}
+			Project:     proj,
+		})
 	}
 
 	return result, nil
@@ -193,4 +210,35 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 	}
 
 	return nil
+}
+
+// toRedmineProjectsSet builds a lookup set from cfg.Projects. Returns nil when
+// the slice is empty so callers can short-circuit the filter.
+func toRedmineProjectsSet(list []string) map[string]struct{} {
+	if len(list) == 0 {
+		return nil
+	}
+
+	out := make(map[string]struct{}, len(list))
+	for _, p := range list {
+		out[p] = struct{}{}
+	}
+
+	return out
+}
+
+// redmineProjectName picks the slug, then the display name, then the numeric
+// ID as a last resort; returns "" when the project is omitted from the response.
+func redmineProjectName(p *project) string {
+	if p == nil {
+		return ""
+	}
+	if p.Identifier != "" {
+		return p.Identifier
+	}
+	if p.Name != "" {
+		return p.Name
+	}
+
+	return strconv.Itoa(p.ID)
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/config"
+	_ "github.com/piprim/git-zf/tracker/github"  // registers github adapter
 	_ "github.com/piprim/git-zf/tracker/redmine" // registers redmine adapter
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
