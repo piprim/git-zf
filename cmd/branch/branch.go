@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -286,7 +286,7 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, f
 
 		merged, mergeErr := pruner.IsMergedInto(rows[i].BranchName, base)
 		if mergeErr != nil {
-			log.Printf("merge check for %q: %v", rows[i].BranchName, mergeErr)
+			slog.Warn("merge check failed", "branch", rows[i].BranchName, "error", mergeErr)
 
 			continue
 		}

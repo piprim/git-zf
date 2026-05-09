@@ -2,7 +2,7 @@ package tui
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -105,7 +105,7 @@ func CommitMessageGroup(commitTypes []config.CommitTypeOption, items []config.Co
 			}
 			msgFields = append(msgFields, txt)
 		default:
-			log.Printf("unknown form type %q for field %q, skipping", f.Form, f.Name)
+			slog.Warn("unknown form type, skipping", "form", f.Form, "field", f.Name)
 		}
 	}
 

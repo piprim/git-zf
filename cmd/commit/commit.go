@@ -2,7 +2,7 @@ package commit
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/piprim/git-zf/branch"
 	commitpkg "github.com/piprim/git-zf/commit"
@@ -68,7 +68,7 @@ func (c Commit) runE(flags tui.CommitOption) error {
 
 	authors, err := client.Authors()
 	if err != nil {
-		log.Printf("could not load author list: %v", err)
+		slog.Warn("could not load author list", "error", err)
 		authors = []string{}
 	}
 

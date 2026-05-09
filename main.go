@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"log/slog"
+	"os"
 
 	"github.com/piprim/git-zf/cmd"
 	"github.com/spf13/cobra"
@@ -20,8 +21,9 @@ func main() {
 }
 
 func fatalError(ccmd *cobra.Command, err error) {
-	log.SetOutput(ccmd.OutOrStderr())
+	h := slog.NewTextHandler(ccmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelError})
+	slog.New(h).Error(err.Error())
 
 	//nolint:revive // It's call by main only.
-	log.Fatal(err)
+	os.Exit(1)
 }

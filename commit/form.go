@@ -3,7 +3,7 @@ package commit
 import (
 	"bytes"
 	"fmt"
-	"log"
+	"log/slog"
 	"slices"
 	"strings"
 	"text/template"
@@ -37,8 +37,6 @@ func FillOutForm(cfg *config.AppConfig, defaults tui.CommitOption, hint IssueHin
 
 	var buf bytes.Buffer
 	if err := assembleMessage(&buf, tmplText, answers); err != nil {
-		log.Printf("assemble failed, err=%v\n", err)
-
 		return nil, tui.CommitOption{}, fmt.Errorf("assemble message: %w", err)
 	}
 
@@ -152,7 +150,7 @@ func loadForm(
 	defaults tui.CommitOption,
 	hint IssueHint,
 ) (form *huh.Form, extractMsg func() map[string]any, extractOpts func() tui.CommitOption) {
-	log.Printf("message tmpl: %s", cfg.CommitMessage.Template)
+	slog.Debug("message template", "template", cfg.CommitMessage.Template)
 
 	items := applyIssueHint(cfg.CommitMessage.Items, hint)
 
