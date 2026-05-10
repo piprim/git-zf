@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/piprim/git-zf/git"
 	_ "modernc.org/sqlite" // Import for side-effect: registers sqlite driver
 )
 
@@ -341,6 +342,26 @@ func parseSQLiteTime(s string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("unrecognised datetime format %q", s)
+}
+
+// OpenRepo opens the local store inside the current git repository's .git directory.
+func OpenRepo(ctx context.Context) (*Store, error) {
+	client, err := git.NewClient(nil)
+	if err != nil {
+		return nil, fmt.Errorf("not a git repository: %w", err)
+	}
+
+	root, err := client.WorkingTreeRoot()
+	if err != nil {
+		return nil, fmt.Errorf("working tree root: %w", err)
+	}
+
+	s, err := Open(ctx, filepath.Join(root, ".git"))
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+
+	return s, nil
 }
 
 func (s *Store) migrate(ctx context.Context) error {

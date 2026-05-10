@@ -140,7 +140,7 @@ func HomeDir() (string, error) {
 
 // RepoDir returns the configuration directory path in the git repository of the project.
 func RepoDir() string {
-	client, err := git.NewClient()
+	client, err := git.NewClient(nil)
 	if err != nil {
 		return ""
 	}

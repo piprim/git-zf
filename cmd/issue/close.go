@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tui"
@@ -27,13 +26,17 @@ update the local store, update the remote tracker, then optionally delete the lo
 func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
-	s, err := pkg.GetStore(ctx)
+	s, err := store.OpenRepo(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get store: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	client, err := git.NewClient()
+	client, err := git.NewClient(&git.IO{
+		In:  cmd.InOrStdin(),
+		Out: cmd.OutOrStdout(),
+		Err: cmd.ErrOrStderr(),
+	})
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}

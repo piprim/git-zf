@@ -9,7 +9,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tty"
@@ -51,7 +50,7 @@ func (ir Issue) getIssueListCmd() *cobra.Command {
 
 func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 	ctx := cmd.Context()
-	s, err := pkg.GetStore(ctx)
+	s, err := store.OpenRepo(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get store: %w", err)
 	}

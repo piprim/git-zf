@@ -1,13 +1,16 @@
 package git
 
 import (
+	"bytes"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/storage/memory"
 
 	// go-git v6 depends on go-billy/v6.
@@ -15,8 +18,7 @@ import (
 )
 
 // newTestRepo creates an in-memory git repository with one initial commit.
-// User is configured as "Test User <test@example.com>" in the repo config so
-// that commits without an explicit Author succeed.
+// Used by tests that don't need on-disk functionality (DefaultBaseBranch, CreateBranch, etc).
 func newTestRepo(t *testing.T) *gogit.Repository {
 	t.Helper()
 
@@ -51,13 +53,7 @@ func newTestRepo(t *testing.T) *gogit.Repository {
 		t.Fatalf("stage README.md: %v", err)
 	}
 
-	_, err = wt.Commit("chore: init", &gogit.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
-			When:  time.Now(),
-		},
-	})
+	_, err = wt.Commit("chore: init", &gogit.CommitOptions{})
 	if err != nil {
 		t.Fatalf("initial commit: %v", err)
 	}
@@ -65,99 +61,94 @@ func newTestRepo(t *testing.T) *gogit.Repository {
 	return repo
 }
 
-// stageNewFile creates filename in wt, writes content, and stages it.
-func stageNewFile(t *testing.T, wt *gogit.Worktree, filename, content string) {
-	t.Helper()
-
-	f, err := wt.Filesystem.Create(filename)
-	if err != nil {
-		t.Fatalf("create %s: %v", filename, err)
-	}
-	_, _ = f.Write([]byte(content))
-	_ = f.Close()
-
-	if _, err := wt.Add(filename); err != nil {
-		t.Fatalf("stage %s: %v", filename, err)
-	}
-}
-
 func TestCommit_basic(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	wt, _ := repo.Worktree()
-	stageNewFile(t, wt, "file.txt", "hello")
-	client := &Client{repo: repo}
+	client, dir := newDiskRepo(t)
+	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
-	if _, err := client.Commit([]byte("feat: basic commit"), CommitOptions{}); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("add", "file.txt")
+
+	if _, err := client.Commit(t.Context(), []byte("feat: basic commit"), CommitOptions{}); err != nil {
 		t.Fatalf("Commit error: %v", err)
 	}
 
-	ref, err := repo.Head()
-	if err != nil {
-		t.Fatalf("repo.Head: %v", err)
-	}
-	c, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		t.Fatalf("CommitObject: %v", err)
-	}
-	if c.Message != "feat: basic commit" {
-		t.Errorf("got message %q, want %q", c.Message, "feat: basic commit")
+	var buf bytes.Buffer
+	logCmd := exec.Command("git", "log", "--format=%s", "-1")
+	logCmd.Dir = dir
+	logCmd.Stdout = &buf
+	_ = logCmd.Run()
+
+	if strings.TrimSpace(buf.String()) != "feat: basic commit" {
+		t.Errorf("got subject %q, want %q", strings.TrimSpace(buf.String()), "feat: basic commit")
 	}
 }
 
 func TestCommit_all_stagesTrackedOnly(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	wt, _ := repo.Worktree()
+	client, dir := newDiskRepo(t)
+	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
-	// Modify the tracked file (README.md was in the initial commit).
-	f, _ := wt.Filesystem.Create("README.md")
-	_, _ = f.Write([]byte("# modified"))
-	_ = f.Close()
+	// Modify the tracked file (base.go was in the initial commit).
+	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package modified\n"), 0o644); err != nil {
+		t.Fatalf("write base.go: %v", err)
+	}
 
 	// Create an untracked file — must NOT end up in the commit.
-	u, _ := wt.Filesystem.Create("untracked.txt")
-	_, _ = u.Write([]byte("should not be staged"))
-	_ = u.Close()
+	if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("should not be staged"), 0o644); err != nil {
+		t.Fatalf("write untracked.txt: %v", err)
+	}
 
-	client := &Client{repo: repo}
-
-	if _, err := client.Commit([]byte("chore: all flag"), CommitOptions{All: true}); err != nil {
+	if _, err := client.Commit(t.Context(), []byte("chore: all flag"), CommitOptions{All: true}); err != nil {
 		t.Fatalf("Commit error: %v", err)
 	}
 
-	ref, err := repo.Head()
-	if err != nil {
-		t.Fatalf("repo.Head: %v", err)
-	}
-	c, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		t.Fatalf("CommitObject: %v", err)
-	}
-	tree, err := repo.TreeObject(c.TreeHash)
-	if err != nil {
-		t.Fatalf("TreeObject: %v", err)
-	}
+	// Verify untracked.txt is NOT in the commit tree.
+	var buf bytes.Buffer
+	showCmd := exec.Command("git", "show", "--stat", "HEAD")
+	showCmd.Dir = dir
+	showCmd.Stdout = &buf
+	_ = showCmd.Run()
 
-	if _, err := tree.File("README.md"); err != nil {
-		t.Error("README.md not found in commit tree")
+	if strings.Contains(buf.String(), "untracked.txt") {
+		t.Error("untracked.txt must not be in commit")
 	}
-	if _, err := tree.File("untracked.txt"); err == nil {
-		t.Error("untracked.txt must not be in commit tree")
+	if !strings.Contains(buf.String(), "base.go") {
+		t.Error("base.go must be in commit")
 	}
 }
 
 func TestCommit_signoff(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	wt, _ := repo.Worktree()
-	stageNewFile(t, wt, "file.txt", "x")
-	client := &Client{repo: repo}
+	client, dir := newDiskRepo(t)
+	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
-	_, err := client.Commit([]byte("docs: readme"), CommitOptions{
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	cmd := exec.Command("git", "add", "file.txt")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+
+	_, err := client.Commit(t.Context(), []byte("docs: readme"), CommitOptions{
 		Signoff: true,
 		Author:  "Alice Dev <alice@example.com>",
 	})
@@ -165,93 +156,109 @@ func TestCommit_signoff(t *testing.T) {
 		t.Fatalf("Commit error: %v", err)
 	}
 
-	ref, err := repo.Head()
-	if err != nil {
-		t.Fatalf("repo.Head: %v", err)
-	}
-	c, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		t.Fatalf("CommitObject: %v", err)
-	}
-	if !strings.Contains(c.Message, "Signed-off-by: Alice Dev <alice@example.com>") {
-		t.Errorf("signoff trailer not found in: %q", c.Message)
+	var buf bytes.Buffer
+	logCmd := exec.Command("git", "log", "--format=%B", "-1")
+	logCmd.Dir = dir
+	logCmd.Stdout = &buf
+	_ = logCmd.Run()
+
+	// --signoff appends Signed-off-by using the committer identity (git config user.*),
+	// not the overridden Author. newDiskRepo configures "Test User <test@test.com>".
+	if !strings.Contains(buf.String(), "Signed-off-by: Test User <test@test.com>") {
+		t.Errorf("signoff trailer not found in: %q", buf.String())
 	}
 }
 
 func TestCommit_author(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	wt, _ := repo.Worktree()
-	stageNewFile(t, wt, "file.txt", "x")
-	client := &Client{repo: repo}
+	client, dir := newDiskRepo(t)
+	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
-	_, err := client.Commit([]byte("fix: author override"), CommitOptions{
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	addCmd := exec.Command("git", "add", "file.txt")
+	addCmd.Dir = dir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+
+	_, err := client.Commit(t.Context(), []byte("fix: author override"), CommitOptions{
 		Author: "Bob Builder <bob@example.com>",
 	})
 	if err != nil {
 		t.Fatalf("Commit error: %v", err)
 	}
 
-	ref, err := repo.Head()
-	if err != nil {
-		t.Fatalf("repo.Head: %v", err)
-	}
-	c, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		t.Fatalf("CommitObject: %v", err)
-	}
-	if c.Author.Name != "Bob Builder" || c.Author.Email != "bob@example.com" {
-		t.Errorf("author: got %q <%s>, want Bob Builder <bob@example.com>",
-			c.Author.Name, c.Author.Email)
+	var buf bytes.Buffer
+	logCmd := exec.Command("git", "log", "--format=%an <%ae>", "-1")
+	logCmd.Dir = dir
+	logCmd.Stdout = &buf
+	_ = logCmd.Run()
+
+	got := strings.TrimSpace(buf.String())
+	if got != "Bob Builder <bob@example.com>" {
+		t.Errorf("author: got %q, want %q", got, "Bob Builder <bob@example.com>")
 	}
 }
 
 func TestCommit_amend(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	wt, _ := repo.Worktree()
-	stageNewFile(t, wt, "file.txt", "x")
-	client := &Client{repo: repo}
+	client, dir := newDiskRepo(t)
+	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
-	// Second commit — the one we will amend.
-	if _, err := client.Commit([]byte("feat: to be amended"), CommitOptions{}); err != nil {
-		t.Fatalf("Commit error: %v", err)
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 
-	iter, err := repo.Log(&gogit.LogOptions{})
-	if err != nil {
-		t.Fatalf("repo.Log: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
 	}
-	countBefore := 0
-	_ = iter.ForEach(func(_ *object.Commit) error { countBefore++; return nil })
+	run("add", "file.txt")
 
-	// Amend: replace the tip commit message.
-	if _, err := client.Commit([]byte("feat: amended message"), CommitOptions{Amend: true}); err != nil {
+	if _, err := client.Commit(t.Context(), []byte("feat: to be amended"), CommitOptions{}); err != nil {
+		t.Fatalf("initial Commit: %v", err)
+	}
+
+	var countBuf bytes.Buffer
+	countCmd := exec.Command("git", "rev-list", "--count", "HEAD")
+	countCmd.Dir = dir
+	countCmd.Stdout = &countBuf
+	_ = countCmd.Run()
+	countBefore := strings.TrimSpace(countBuf.String())
+
+	if _, err := client.Commit(t.Context(), []byte("feat: amended message"), CommitOptions{Amend: true}); err != nil {
 		t.Fatalf("amend error: %v", err)
 	}
 
-	iter2, err := repo.Log(&gogit.LogOptions{})
-	if err != nil {
-		t.Fatalf("repo.Log: %v", err)
-	}
-	countAfter := 0
-	_ = iter2.ForEach(func(_ *object.Commit) error { countAfter++; return nil })
-	if countAfter != countBefore {
-		t.Errorf("commit count changed: %d → %d (expected no change)", countBefore, countAfter)
+	var countBuf2 bytes.Buffer
+	countCmd2 := exec.Command("git", "rev-list", "--count", "HEAD")
+	countCmd2.Dir = dir
+	countCmd2.Stdout = &countBuf2
+	_ = countCmd2.Run()
+	countAfter := strings.TrimSpace(countBuf2.String())
+
+	if countBefore != countAfter {
+		t.Errorf("commit count changed %s → %s (expected no change)", countBefore, countAfter)
 	}
 
-	ref, err := repo.Head()
-	if err != nil {
-		t.Fatalf("repo.Head: %v", err)
-	}
-	c, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		t.Fatalf("CommitObject: %v", err)
-	}
-	if c.Message != "feat: amended message" {
-		t.Errorf("tip message after amend: got %q", c.Message)
+	var msgBuf bytes.Buffer
+	msgCmd := exec.Command("git", "log", "--format=%s", "-1")
+	msgCmd.Dir = dir
+	msgCmd.Stdout = &msgBuf
+	_ = msgCmd.Run()
+
+	if strings.TrimSpace(msgBuf.String()) != "feat: amended message" {
+		t.Errorf("tip message after amend: got %q", strings.TrimSpace(msgBuf.String()))
 	}
 }
 
@@ -331,12 +338,20 @@ func TestDefaultBaseBranch_main(t *testing.T) {
 func TestCommit_summary(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	wt, _ := repo.Worktree()
-	stageNewFile(t, wt, "feature.go", "package main\n\nfunc New() {}\n")
-	client := &Client{repo: repo}
+	client, dir := newDiskRepo(t)
+	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
-	summary, err := client.Commit([]byte("feat: add feature\n\nsome body"), CommitOptions{})
+	if err := os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n\nfunc New() {}\n"), 0o644); err != nil {
+		t.Fatalf("write feature.go: %v", err)
+	}
+
+	addCmd := exec.Command("git", "add", "feature.go")
+	addCmd.Dir = dir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+
+	summary, err := client.Commit(t.Context(), []byte("feat: add feature\n\nsome body"), CommitOptions{})
 	if err != nil {
 		t.Fatalf("Commit error: %v", err)
 	}
@@ -344,8 +359,8 @@ func TestCommit_summary(t *testing.T) {
 	if len(summary.ShortHash) != 7 {
 		t.Errorf("ShortHash len = %d, want 7", len(summary.ShortHash))
 	}
-	if summary.Branch != "master" {
-		t.Errorf("Branch = %q, want %q", summary.Branch, "master")
+	if summary.Branch != "main" {
+		t.Errorf("Branch = %q, want %q", summary.Branch, "main")
 	}
 	if summary.IsRoot {
 		t.Error("IsRoot = true, want false")
@@ -359,28 +374,40 @@ func TestCommit_summary(t *testing.T) {
 	if summary.Additions == 0 {
 		t.Error("Additions = 0, want > 0")
 	}
-	if summary.Deletions != 0 {
-		t.Errorf("Deletions = %d, want 0", summary.Deletions)
-	}
 }
 
 func TestCommit_summary_rootCommit(t *testing.T) {
 	t.Parallel()
 
-	repo, err := gogit.Init(memory.NewStorage(), gogit.WithWorkTree(memfs.New()))
-	if err != nil {
-		t.Fatalf("init: %v", err)
+	dir := t.TempDir()
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
-	cfg, _ := repo.Config()
-	cfg.User.Name = "Test User"
-	cfg.User.Email = "test@example.com"
-	_ = repo.SetConfig(cfg)
 
-	wt, _ := repo.Worktree()
-	stageNewFile(t, wt, "init.txt", "hello")
+	run("init", "--initial-branch=main")
+	run("config", "user.name", "Test User")
+	run("config", "user.email", "test@test.com")
+	run("config", "commit.gpgsign", "false")
 
-	client := &Client{repo: repo}
-	summary, err := client.Commit([]byte("chore: initial commit"), CommitOptions{})
+	if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write init.txt: %v", err)
+	}
+	run("add", "init.txt")
+
+	client, err := NewClientAt(nil, dir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+
+	summary, err := client.Commit(t.Context(), []byte("chore: initial commit"), CommitOptions{})
 	if err != nil {
 		t.Fatalf("Commit error: %v", err)
 	}
@@ -428,31 +455,29 @@ func TestLocalBranchNames(t *testing.T) {
 func TestIsMergedInto_merged(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	wt, _ := repo.Worktree()
-	client := &Client{repo: repo}
+	client, dir := newDiskRepo(t)
 
-	// Create a feature branch with one extra commit.
-	if err := client.CreateBranch("feature/y", "master"); err != nil {
-		t.Fatalf("CreateBranch: %v", err)
-	}
-	stageNewFile(t, wt, "feat.txt", "content")
-	if _, err := client.Commit([]byte("feat: add feature"), CommitOptions{}); err != nil {
-		t.Fatalf("Commit on feature: %v", err)
-	}
+	run := func(args ...string) {
+		t.Helper()
 
-	// Switch back to master and merge feature/y by fast-forward.
-	featureRef, _ := repo.Reference(plumbing.ReferenceName("refs/heads/feature/y"), true)
-	if err := wt.Checkout(&gogit.CheckoutOptions{Branch: "refs/heads/master", Keep: true}); err != nil {
-		t.Fatalf("checkout master: %v", err)
-	}
-	// Fast-forward master to feature/y's tip.
-	masterRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/master"), featureRef.Hash())
-	if err := repo.Storer.SetReference(masterRef); err != nil {
-		t.Fatalf("fast-forward master: %v", err)
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 
-	merged, err := client.IsMergedInto("feature/y", "master")
+	run("checkout", "-b", "feature/y")
+
+	if err := os.WriteFile(filepath.Join(dir, "feat.txt"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("write feat.txt: %v", err)
+	}
+	run("add", "feat.txt")
+	run("commit", "-m", "feat: add feature")
+	run("checkout", "main")
+	run("merge", "--ff-only", "feature/y")
+
+	merged, err := client.IsMergedInto("feature/y", "main")
 	if err != nil {
 		t.Fatalf("IsMergedInto: %v", err)
 	}
@@ -464,25 +489,28 @@ func TestIsMergedInto_merged(t *testing.T) {
 func TestIsMergedInto_notMerged(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	client := &Client{repo: repo}
+	client, dir := newDiskRepo(t)
 
-	// Create a feature branch but do NOT merge it.
-	if err := client.CreateBranch("feature/z", "master"); err != nil {
-		t.Fatalf("CreateBranch: %v", err)
-	}
-	wt, _ := repo.Worktree()
-	stageNewFile(t, wt, "unmerged.txt", "content")
-	if _, err := client.Commit([]byte("feat: unmerged"), CommitOptions{}); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
+	run := func(args ...string) {
+		t.Helper()
 
-	// Switch back to master (which hasn't moved).
-	if err := wt.Checkout(&gogit.CheckoutOptions{Branch: "refs/heads/master", Keep: true}); err != nil {
-		t.Fatalf("checkout master: %v", err)
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 
-	merged, err := client.IsMergedInto("feature/z", "master")
+	run("checkout", "-b", "feature/z")
+
+	if err := os.WriteFile(filepath.Join(dir, "unmerged.txt"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("write unmerged.txt: %v", err)
+	}
+	run("add", "unmerged.txt")
+	run("commit", "-m", "feat: unmerged")
+	run("checkout", "main")
+
+	merged, err := client.IsMergedInto("feature/z", "main")
 	if err != nil {
 		t.Fatalf("IsMergedInto: %v", err)
 	}

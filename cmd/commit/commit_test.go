@@ -52,7 +52,7 @@ func TestIssueHintFromClient_issueBranch(t *testing.T) {
 	initRepoOnDisk(t, dir)
 	gitCheckoutNewBranch(t, t.Context(), dir, testIssueBranch)
 
-	client, err := git.NewClientAt(dir)
+	client, err := git.NewClientAt(nil, dir)
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestIssueHintFromClient_nonIssueBranch(t *testing.T) {
 	dir := t.TempDir()
 	initRepoOnDisk(t, dir)
 
-	client, err := git.NewClientAt(dir)
+	client, err := git.NewClientAt(nil, dir)
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestIssueHintFromClient_emptyRepo(t *testing.T) {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 
-	client, err := git.NewClientAt(dir)
+	client, err := git.NewClientAt(nil, dir)
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}

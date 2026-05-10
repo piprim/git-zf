@@ -39,7 +39,7 @@ func newDiskRepo(t *testing.T) (*Client, string) {
 	run("commit", "-m", "chore: init")
 	run("branch", "-M", "main")
 
-	c, err := NewClientAt(dir)
+	c, err := NewClientAt(nil, dir)
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}

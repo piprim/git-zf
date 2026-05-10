@@ -32,7 +32,16 @@ var (
 
 // GetRootCmd builds and returns the root Cobra command.
 func GetRootCmd() (*cobra.Command, error) {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
+	if err := initConfig(); err != nil {
+		return nil, err
+	}
+
 	rootCmd := &cobra.Command{
+		Use:  appConfig.ProgName,
 		Long: `Command line utility to standardize git commit messages, golang version.`,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			cmd.SilenceUsage = true
@@ -45,16 +54,6 @@ func GetRootCmd() (*cobra.Command, error) {
 			}
 		},
 	}
-
-	slog.SetDefault(slog.New(slog.NewTextHandler(rootCmd.ErrOrStderr(), &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
-
-	if err := initConfig(); err != nil {
-		return nil, err
-	}
-
-	rootCmd.Use = appConfig.ProgName
 
 	rootCmd.PersistentFlags().BoolVarP(&isDebug, "debug", "d", false,
 		"debug mode, print debug info to stdout")

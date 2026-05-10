@@ -6,7 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/piprim/git-zf/internal/pkg"
 )
+
+// runInteractive runs a git command in dir with the client's configured IO
+// streams. Stdout/stderr are teed to the terminal live and captured for errors.
+func (c *Client) runInteractive(ctx context.Context, dir string, args ...string) error {
+	return pkg.RunInteractive(ctx, c.io.In, c.io.Out, c.io.Err, "git", dir, args...)
+}
 
 // MergeDryRun checks whether branchName merges cleanly into baseBranch.
 // It performs the check in a temporary git worktree so the main working tree
@@ -75,22 +83,22 @@ func (c *Client) MergeSquash(ctx context.Context, branchName, baseBranch, author
 		return fmt.Errorf("working tree root: %w", err)
 	}
 
-	if out, err := exec.CommandContext(ctx, "git", "-C", root, "checkout", baseBranch).CombinedOutput(); err != nil {
-		return fmt.Errorf("checkout %s: %w: %s", baseBranch, err, out)
+	if err := c.runInteractive(ctx, root, "checkout", baseBranch); err != nil {
+		return fmt.Errorf("checkout %s: %w", baseBranch, err)
 	}
 
-	if out, err := exec.CommandContext(ctx, "git", "-C", root, "merge", "--squash", branchName).CombinedOutput(); err != nil {
-		return fmt.Errorf("merge --squash %s: %w: %s", branchName, err, out)
+	if err := c.runInteractive(ctx, root, "merge", "--squash", branchName); err != nil {
+		return fmt.Errorf("merge --squash %s: %w", branchName, err)
 	}
 
 	msg := "squash merge '" + branchName + "'"
-	commitArgs := []string{"-C", root, "commit", "-m", msg}
+	commitArgs := []string{"commit", "-m", msg}
 	if author != "" {
 		commitArgs = append(commitArgs, "--author="+author)
 	}
 
-	if out, err := exec.CommandContext(ctx, "git", commitArgs...).CombinedOutput(); err != nil {
-		return fmt.Errorf("commit squash: %w: %s", err, out)
+	if err := c.runInteractive(ctx, root, commitArgs...); err != nil {
+		return fmt.Errorf("commit squash: %w", err)
 	}
 
 	return nil
@@ -104,12 +112,12 @@ func (c *Client) MergeNoFF(ctx context.Context, branchName, baseBranch string) e
 		return fmt.Errorf("working tree root: %w", err)
 	}
 
-	if out, err := exec.CommandContext(ctx, "git", "-C", root, "checkout", baseBranch).CombinedOutput(); err != nil {
-		return fmt.Errorf("checkout %s: %w: %s", baseBranch, err, out)
+	if err := c.runInteractive(ctx, root, "checkout", baseBranch); err != nil {
+		return fmt.Errorf("checkout %s: %w", baseBranch, err)
 	}
 
-	if out, err := exec.CommandContext(ctx, "git", "-C", root, "merge", "--no-ff", branchName).CombinedOutput(); err != nil {
-		return fmt.Errorf("merge --no-ff %s: %w: %s", branchName, err, out)
+	if err := c.runInteractive(ctx, root, "merge", "--no-ff", branchName); err != nil {
+		return fmt.Errorf("merge --no-ff %s: %w", branchName, err)
 	}
 
 	return nil

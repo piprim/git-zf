@@ -14,7 +14,6 @@ import (
 	issuecmd "github.com/piprim/git-zf/cmd/issue"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tty"
@@ -90,7 +89,7 @@ func listCmd() *cobra.Command {
 
 func listRunE(cmd *cobra.Command, flags listFlags) error {
 	ctx := cmd.Context()
-	s, err := pkg.GetStore(ctx)
+	s, err := store.OpenRepo(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get store: %w", err)
 	}
@@ -234,13 +233,17 @@ type pruner interface {
 
 func pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	ctx := cmd.Context()
-	s, err := pkg.GetStore(ctx)
+	s, err := store.OpenRepo(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get store: %w", err)
 	}
 	defer func() { _ = s.Close() }()
 
-	c, err := git.NewClient()
+	c, err := git.NewClient(&git.IO{
+		In:  cmd.InOrStdin(),
+		Out: cmd.OutOrStdout(),
+		Err: cmd.ErrOrStderr(),
+	})
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}

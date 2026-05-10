@@ -1,11 +1,13 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strings"
-	"time"
 
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -25,39 +27,55 @@ type CommitSummary struct {
 
 // CommitOptions configures Client.Commit.
 type CommitOptions struct {
-	All   bool
-	Amend bool
-	// NoVerify — go-git v6 does not execute hooks; reserved for a future subprocess fallback.
+	All        bool
+	Amend      bool
 	NoVerify   bool
 	Signoff    bool
 	AllowEmpty bool
 	Author     string // "Name <email>"; empty = git config identity
 }
 
+// IO holds the standard streams used for interactive git subprocess operations.
+type IO struct {
+	In  io.Reader
+	Out io.Writer
+	Err io.Writer
+}
+
 // Client wraps a go-git repository and exposes commit operations.
 type Client struct {
 	repo *gogit.Repository
+	io   IO
 }
 
 // NewClient opens the git repository that contains the current directory.
-func NewClient() (*Client, error) {
+// ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
+func NewClient(ioStreams *IO) (*Client, error) {
+	if ioStreams == nil {
+		ioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
+	}
+
 	repo, err := gogit.PlainOpenWithOptions(".", &gogit.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
 		return nil, fmt.Errorf("open git repository: %w", err)
 	}
 
-	return &Client{repo: repo}, nil
+	return &Client{repo: repo, io: *ioStreams}, nil
 }
 
 // NewClientAt opens the git repository rooted at dir.
-// Used in tests and tooling that need to open a repo at a specific path.
-func NewClientAt(dir string) (*Client, error) {
+// ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
+func NewClientAt(ioStreams *IO, dir string) (*Client, error) {
+	if ioStreams == nil {
+		ioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
+	}
+
 	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open git repository at %s: %w", dir, err)
 	}
 
-	return &Client{repo: repo}, nil
+	return &Client{repo: repo, io: *ioStreams}, nil
 }
 
 // WorkingTreeRoot returns the absolute path of the repository's working tree root.
@@ -129,55 +147,60 @@ func (c *Client) Authors() ([]string, error) {
 	return list, nil
 }
 
-// Commit records a commit with msg and the given options.
+// Commit records a commit with msg and the given options using the system git
+// binary so that all configured hooks (pre-commit, commit-msg, post-commit) run.
 // It returns a CommitSummary suitable for printing to the user.
-func (c *Client) Commit(msg []byte, opts CommitOptions) (CommitSummary, error) {
-	wt, err := c.repo.Worktree()
+func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) (CommitSummary, error) {
+	root, err := c.WorkingTreeRoot()
 	if err != nil {
-		return CommitSummary{}, fmt.Errorf("get worktree: %w", err)
+		return CommitSummary{}, fmt.Errorf("working tree root: %w", err)
 	}
 
-	finalMsg := string(msg)
+	f, err := os.CreateTemp("", "git-zf-msg-*")
+	if err != nil {
+		return CommitSummary{}, fmt.Errorf("create temp msg file: %w", err)
+	}
+	defer os.Remove(f.Name())
+
+	if _, err := f.Write(msg); err != nil {
+		_ = f.Close()
+
+		return CommitSummary{}, fmt.Errorf("write commit msg: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return CommitSummary{}, fmt.Errorf("close temp msg file: %w", err)
+	}
+
+	args := []string{"commit", "-F", f.Name()}
+	if opts.All {
+		args = append(args, "--all")
+	}
+	if opts.Amend {
+		args = append(args, "--amend")
+	}
+	if opts.NoVerify {
+		args = append(args, "--no-verify")
+	}
 	if opts.Signoff {
-		signer := opts.Author
-		if signer == "" {
-			if cfg, err := c.repo.Config(); err == nil && cfg.User.Name != "" {
-				signer = cfg.User.Name + " <" + cfg.User.Email + ">"
-			}
-		}
-		if signer != "" {
-			finalMsg = strings.TrimRight(finalMsg, "\n") + "\n\nSigned-off-by: " + signer
-		}
+		args = append(args, "--signoff")
 	}
-
-	// CommitOptions.All stages only tracked modified/deleted files, matching
-	// `git commit --all` semantics (untracked files are NOT included).
-	commitOpts := &gogit.CommitOptions{
-		All:               opts.All,
-		AllowEmptyCommits: opts.AllowEmpty,
-		Amend:             opts.Amend,
+	if opts.AllowEmpty {
+		args = append(args, "--allow-empty")
 	}
-
 	if opts.Author != "" {
-		name, email := parseAuthor(opts.Author)
-		commitOpts.Author = &object.Signature{
-			Name:  name,
-			Email: email,
-			When:  time.Now(),
-		}
+		args = append(args, "--author="+opts.Author)
 	}
 
-	hash, err := wt.Commit(finalMsg, commitOpts)
-	if err != nil {
+	if err := c.runInteractive(ctx, root, args...); err != nil {
 		return CommitSummary{}, fmt.Errorf("commit: %w", err)
 	}
 
-	summary, err := c.buildSummary(hash, finalMsg)
+	head, err := c.repo.Head()
 	if err != nil {
-		return CommitSummary{}, err
+		return CommitSummary{}, fmt.Errorf("read HEAD after commit: %w", err)
 	}
 
-	return summary, nil
+	return c.buildSummary(head.Hash(), string(msg))
 }
 
 func (c *Client) buildSummary(hash plumbing.Hash, msg string) (CommitSummary, error) {
@@ -214,17 +237,6 @@ func (c *Client) buildSummary(hash plumbing.Hash, msg string) (CommitSummary, er
 		Additions: add,
 		Deletions: del,
 	}, nil
-}
-
-// parseAuthor splits "Name <email>" into name and email parts.
-func parseAuthor(s string) (name, email string) {
-	lt := strings.LastIndex(s, "<")
-	gt := strings.LastIndex(s, ">")
-	if lt >= 0 && gt > lt {
-		return strings.TrimSpace(s[:lt]), s[lt+1 : gt]
-	}
-
-	return s, ""
 }
 
 // DefaultBaseBranch resolves the default base branch in priority order:

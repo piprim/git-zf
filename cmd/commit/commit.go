@@ -46,8 +46,8 @@ func (c Commit) GetRootCmd() *cobra.Command {
 	f.BoolVar(&allowEmpty, "allow-empty", false, "allow a commit with no changes")
 	f.StringVar(&author, "author", "", `override commit author as "Name <email>"`)
 
-	cmd.RunE = func(_ *cobra.Command, _ []string) error {
-		return c.runE(tui.CommitOption{
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		return c.runE(cmd, tui.CommitOption{
 			All:        all,
 			Amend:      amend,
 			NoVerify:   noVerify,
@@ -60,8 +60,12 @@ func (c Commit) GetRootCmd() *cobra.Command {
 	return cmd
 }
 
-func (c Commit) runE(flags tui.CommitOption) error {
-	client, err := git.NewClient()
+func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
+	client, err := git.NewClient(&git.IO{
+		In:  cmd.InOrStdin(),
+		Out: cmd.OutOrStdout(),
+		Err: cmd.ErrOrStderr(),
+	})
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
@@ -82,7 +86,7 @@ func (c Commit) runE(flags tui.CommitOption) error {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
 
-	summary, err := client.Commit(msg, git.CommitOptions{
+	summary, err := client.Commit(cmd.Context(), msg, git.CommitOptions{
 		All:        opts.All,
 		Amend:      opts.Amend,
 		NoVerify:   opts.NoVerify,

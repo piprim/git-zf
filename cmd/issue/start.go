@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
@@ -34,12 +33,15 @@ func (i Issue) startRunE(cmd *cobra.Command, _ []string) error {
 // `issue start` (tracker pre-selected); false for `branch new` (manual pre-selected).
 func (i Issue) RunIssueStart(cmd *cobra.Command, flags issue.IssueStartFlags) error {
 	ctx := cmd.Context()
-	client, err := git.NewClient()
+	client, err := git.NewClient(nil)
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	allowedBranchTypes := pkg.GetAllowedBranchType(i.appConfig.CommitTypes)
+	allowedBranchTypes := make([]string, 0, len(i.appConfig.CommitTypes))
+	for _, t := range i.appConfig.CommitTypes {
+		allowedBranchTypes = append(allowedBranchTypes, t.Name)
+	}
 	if len(allowedBranchTypes) == 0 {
 		return errors.New("config: no commit types found")
 	}
@@ -174,7 +176,7 @@ func (i Issue) updateTrackerIssueStatus(cmd *cobra.Command, t tracker.Tracker, i
 }
 
 func persist(ctx context.Context, b *branch.Branch, rawTitle string, trackerType *string) error {
-	s, err := pkg.GetStore(ctx)
+	s, err := store.OpenRepo(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get store: %w", err)
 	}
