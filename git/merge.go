@@ -13,7 +13,12 @@ import (
 // runInteractive runs a git command in dir with the client's configured IO
 // streams. Stdout/stderr are teed to the terminal live and captured for errors.
 func (c *Client) runInteractive(ctx context.Context, dir string, args ...string) error {
-	return pkg.RunInteractive(ctx, c.io.In, c.io.Out, c.io.Err, "git", dir, args...)
+	err := pkg.RunInteractive(ctx, c.io.In, c.io.Out, c.io.Err, "git", dir, args...)
+	if err != nil {
+		return fmt.Errorf("failed to launch git command: %w", err)
+	}
+
+	return nil
 }
 
 // MergeDryRun checks whether branchName merges cleanly into baseBranch.

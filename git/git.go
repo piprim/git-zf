@@ -51,8 +51,9 @@ type Client struct {
 // NewClient opens the git repository that contains the current directory.
 // ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
 func NewClient(ioStreams *IO) (*Client, error) {
+	lioStreams := ioStreams
 	if ioStreams == nil {
-		ioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
+		lioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
 	}
 
 	repo, err := gogit.PlainOpenWithOptions(".", &gogit.PlainOpenOptions{DetectDotGit: true})
@@ -60,14 +61,15 @@ func NewClient(ioStreams *IO) (*Client, error) {
 		return nil, fmt.Errorf("open git repository: %w", err)
 	}
 
-	return &Client{repo: repo, io: *ioStreams}, nil
+	return &Client{repo: repo, io: *lioStreams}, nil
 }
 
 // NewClientAt opens the git repository rooted at dir.
 // ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
 func NewClientAt(ioStreams *IO, dir string) (*Client, error) {
+	lioStreams := ioStreams
 	if ioStreams == nil {
-		ioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
+		lioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
 	}
 
 	repo, err := gogit.PlainOpen(dir)
@@ -75,7 +77,7 @@ func NewClientAt(ioStreams *IO, dir string) (*Client, error) {
 		return nil, fmt.Errorf("open git repository at %s: %w", dir, err)
 	}
 
-	return &Client{repo: repo, io: *ioStreams}, nil
+	return &Client{repo: repo, io: *lioStreams}, nil
 }
 
 // WorkingTreeRoot returns the absolute path of the repository's working tree root.
