@@ -488,6 +488,46 @@ func TestFillOutForm_mainFormAbortPropagates(t *testing.T) {
 	}
 }
 
+func TestFillOutForm_emptyHistoryPreservesAnswers(t *testing.T) {
+	call := 0
+	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+		call++
+		switch call {
+		case 1:
+			// Main form: user presses ctrl+r.
+			return &stubFormRunner{wantHistoryVal: true}, nil
+		case 2:
+			// "No commit history yet." dialog: user dismisses it.
+			return &stubFormRunner{}, nil
+		default:
+			// Re-opened main form: user submits.
+			return &stubFormRunner{}, nil
+		}
+	})
+
+	hs := &fakeHistoryStore{} // empty history → triggers errNoHistory path
+
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, hs)
+	if err != nil {
+		t.Fatalf("FillOutForm: %v", err)
+	}
+
+	// Three runFormFn invocations: main form, dialog, main form again.
+	if call != 3 {
+		t.Errorf("runFormFn calls: got %d, want 3", call)
+	}
+
+	// The original answers ("my change" from minimalCfg) must have been preserved
+	// across the empty-history detour, so the final submission saves them.
+	if len(hs.inserts) != 1 {
+		t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
+	}
+	if hs.inserts[0]["subject"] != "my change" {
+		t.Errorf("saved subject = %q, want %q (answers were lost on empty-history detour)",
+			hs.inserts[0]["subject"], "my change")
+	}
+}
+
 func TestFillOutForm_pickerAbortExitsFlow(t *testing.T) {
 	call := 0
 	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {

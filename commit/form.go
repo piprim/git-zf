@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"slices"
 	"strings"
 	"text/template"
@@ -25,6 +24,11 @@ const (
 	historyCmd    = "commit"
 	newBlankLabel = "New blank commit"
 )
+
+// errNoHistory signals that ListCommandHistory returned no rows.
+// FillOutForm catches it to re-open the form with current answers preserved
+// and an inline note, instead of silently re-rendering blank.
+var errNoHistory = errors.New("no commit history yet")
 
 // historyStore is the subset of *store.Store used by FillOutForm.
 // Injected as an interface so tests can supply a fake.
@@ -78,7 +82,8 @@ func historyLabel(tmplText string, row store.CommandHistoryRow) (string, error) 
 }
 
 // runHistoryPicker presents a select of the last historyLimit history entries.
-// Returns (nil, nil) when history is empty (message printed) or user picks "New blank commit".
+// Returns (nil, errNoHistory) when history is empty (caller shows inline note).
+// Returns (nil, nil) when user picks "New blank commit".
 // Returns (payload, nil) when user selects a history entry.
 // Returns (nil, huh.ErrUserAborted) when the user aborts the picker (ctrl+c / esc).
 // Returns (nil, err) on unexpected errors.
@@ -89,9 +94,9 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 	}
 
 	if len(entries) == 0 {
-		fmt.Fprintln(os.Stderr, "No commit history yet.")
+		showNoHistoryDialog()
 
-		return nil, nil
+		return nil, errNoHistory
 	}
 
 	opts := make([]huh.Option[int], 0, len(entries)+1)
@@ -135,6 +140,21 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 	return payload, nil
 }
 
+// showNoHistoryDialog renders a modal "No commit history yet." note the user dismisses
+// with enter/esc/ctrl+c. Any runner error is logged and swallowed; the dialog is purely
+// informational and never blocks the calling flow.
+func showNoHistoryDialog() {
+	dialog := huh.NewForm(huh.NewGroup(
+		huh.NewNote().
+			Title("Commit history").
+			Description("No commit history yet.\n\nPress enter to continue."),
+	))
+
+	if _, err := runFormFn(dialog); err != nil && !errors.Is(err, huh.ErrUserAborted) {
+		slog.Warn("could not show no-history dialog", "error", err)
+	}
+}
+
 // FillOutForm presents the commit TUI form and orchestrates the ctrl+r history flow.
 // hs must not be nil; pass a *store.Store opened from store.OpenRepo.
 //
@@ -161,6 +181,12 @@ func FillOutForm(
 
 		if runner.WantHistory() {
 			prefill, err = runHistoryPicker(ctx, cfg.CommitMessage.Template, hs)
+			if errors.Is(err, errNoHistory) {
+				// Preserve current answers so re-opening the form is not destructive.
+				prefill = extractMsg()
+
+				continue
+			}
 			if err != nil {
 				return nil, tui.CommitOption{}, err
 			}
