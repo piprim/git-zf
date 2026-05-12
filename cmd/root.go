@@ -33,7 +33,7 @@ var (
 // GetRootCmd builds and returns the root Cobra command.
 func GetRootCmd() (*cobra.Command, error) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: slog.LevelWarn,
 	})))
 
 	if err := initConfig(); err != nil {

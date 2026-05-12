@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"slices"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/piprim/git-zf/internal/pkg"
 )
 
 // CommitSummary holds display information about a newly created commit.
@@ -35,49 +35,32 @@ type CommitOptions struct {
 	Author     string // "Name <email>"; empty = git config identity
 }
 
-// IO holds the standard streams used for interactive git subprocess operations.
-type IO struct {
-	In  io.Reader
-	Out io.Writer
-	Err io.Writer
-}
-
 // Client wraps a go-git repository and exposes commit operations.
 type Client struct {
 	repo *gogit.Repository
-	io   IO
+	io   *pkg.IO
 }
 
 // NewClient opens the git repository that contains the current directory.
 // ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
-func NewClient(ioStreams *IO) (*Client, error) {
-	lioStreams := ioStreams
-	if ioStreams == nil {
-		lioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
-	}
-
+func NewClient(ioStreams *pkg.IO) (*Client, error) {
 	repo, err := gogit.PlainOpenWithOptions(".", &gogit.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
 		return nil, fmt.Errorf("open git repository: %w", err)
 	}
 
-	return &Client{repo: repo, io: *lioStreams}, nil
+	return &Client{repo: repo, io: ioStreams}, nil
 }
 
 // NewClientAt opens the git repository rooted at dir.
 // ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
-func NewClientAt(ioStreams *IO, dir string) (*Client, error) {
-	lioStreams := ioStreams
-	if ioStreams == nil {
-		lioStreams = &IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
-	}
-
+func NewClientAt(ioStreams *pkg.IO, dir string) (*Client, error) {
 	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return nil, fmt.Errorf("open git repository at %s: %w", dir, err)
 	}
 
-	return &Client{repo: repo, io: *lioStreams}, nil
+	return &Client{repo: repo, io: ioStreams}, nil
 }
 
 // WorkingTreeRoot returns the absolute path of the repository's working tree root.

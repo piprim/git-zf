@@ -1,8 +1,10 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,9 +15,9 @@ import (
 // runInteractive runs a git command in dir with the client's configured IO
 // streams. Stdout/stderr are teed to the terminal live and captured for errors.
 func (c *Client) runInteractive(ctx context.Context, dir string, args ...string) error {
-	err := pkg.RunInteractive(ctx, c.io.In, c.io.Out, c.io.Err, "git", dir, args...)
+	err := pkg.RunInteractive(ctx, c.io, "git", dir, args...)
 	if err != nil {
-		return fmt.Errorf("failed to launch git command: %w", err)
+		return fmt.Errorf("git command failed: %w", err)
 	}
 
 	return nil
@@ -25,6 +27,7 @@ func (c *Client) runInteractive(ctx context.Context, dir string, args ...string)
 // It performs the check in a temporary git worktree so the main working tree
 // is never modified. Returns the list of conflicting file paths, or nil if clean.
 func (c *Client) MergeDryRun(ctx context.Context, branchName, baseBranch string) ([]string, error) {
+	slog.Debug("Git dry run merge…")
 	root, err := c.WorkingTreeRoot()
 	if err != nil {
 		return nil, fmt.Errorf("working tree root: %w", err)
@@ -36,32 +39,45 @@ func (c *Client) MergeDryRun(ctx context.Context, branchName, baseBranch string)
 	}
 
 	// --detach avoids "already checked out" error when baseBranch is current.
-	addOut, addErr := exec.CommandContext(ctx,
-		"git", "-C", root, "worktree", "add", "--detach", tmpDir, baseBranch,
-	).CombinedOutput()
+	// addOut, addErr :=  c.runInteractive(ctx, root, "merge", "--squash", branchName)
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "worktree", "add", "--detach", tmpDir, baseBranch)
+	buf := new(bytes.Buffer)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = buf
+	slog.Debug("creating git worktree…")
+	addErr := cmd.Run()
+
 	if addErr != nil {
 		_ = os.RemoveAll(tmpDir)
 
-		return nil, fmt.Errorf("add worktree: %w: %s", addErr, addOut)
+		return nil, fmt.Errorf("add worktree: %w: %s", addErr, buf.String())
 	}
+
+	slog.Debug(buf.String())
 
 	defer func() {
 		rmCmd := exec.CommandContext(context.Background(),
 			"git", "-C", root, "worktree", "remove", "--force", tmpDir)
+		slog.Debug("Removing git worktree")
 		_ = rmCmd.Run()
 		_ = os.RemoveAll(tmpDir)
 	}()
 
 	mergeCmd := exec.CommandContext(ctx, "git", "merge", "--no-commit", "--no-ff", branchName)
+	mergeCmd.Stdin = os.Stdin
+	mergeCmd.Stdout = os.Stdout
 	mergeCmd.Dir = tmpDir
+	slog.Debug("git merge --no-commit in the worktree…")
 	out, mergeErr := mergeCmd.CombinedOutput()
 
 	// Always abort the in-progress merge to restore the worktree.
+	slog.Debug("Aborting git merge --no-commit in the worktree…")
 	abortCmd := exec.CommandContext(context.Background(), "git", "merge", "--abort")
 	abortCmd.Dir = tmpDir
 	if abortErr := abortCmd.Run(); abortErr != nil {
 		// merge --abort fails when there were no conflicts (merge was staged but clean).
 		// Fall back to hard reset.
+		slog.Debug("Fall back to hard reset!")
 		resetCmd := exec.CommandContext(context.Background(), "git", "reset", "--hard", "HEAD")
 		resetCmd.Dir = tmpDir
 		_ = resetCmd.Run()
@@ -71,6 +87,7 @@ func (c *Client) MergeDryRun(ctx context.Context, branchName, baseBranch string)
 		return nil, nil
 	}
 
+	slog.Debug("Parsing git merge conflict files…")
 	conflicts := parseConflictFiles(string(out))
 	if len(conflicts) == 0 {
 		return nil, fmt.Errorf("merge dry-run failed: %w: %s", mergeErr, out)

@@ -14,6 +14,7 @@ import (
 	issuecmd "github.com/piprim/git-zf/cmd/issue"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tty"
@@ -239,7 +240,7 @@ func pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	c, err := git.NewClient(&git.IO{
+	c, err := git.NewClient(&pkg.IO{
 		In:  cmd.InOrStdin(),
 		Out: cmd.OutOrStdout(),
 		Err: cmd.ErrOrStderr(),

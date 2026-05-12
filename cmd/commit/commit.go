@@ -8,6 +8,7 @@ import (
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
@@ -61,7 +62,7 @@ func (c Commit) GetRootCmd() *cobra.Command {
 }
 
 func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
-	client, err := git.NewClient(&git.IO{
+	client, err := git.NewClient(&pkg.IO{
 		In:  cmd.InOrStdin(),
 		Out: cmd.OutOrStdout(),
 		Err: cmd.ErrOrStderr(),

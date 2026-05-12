@@ -1,29 +1,51 @@
 package pkg
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 )
 
-// RunInteractive runs cmd with args in dir, wiring in/out/errW to the
-// subprocess. Stdout and stderr are teed: output streams live to the caller's
-// writers and is captured in a buffer included in any error returned.
-func RunInteractive(ctx context.Context, in io.Reader, out, errW io.Writer, cmd, dir string, args ...string) error {
-	var buf bytes.Buffer
+// IO holds the standard streams used for interactive subprocess operations.
+type IO struct {
+	In  io.Reader
+	Out io.Writer
+	Err io.Writer
+}
 
-	c := exec.CommandContext(ctx, cmd, args...)
-	c.Dir = dir
-	c.Stdin = in
-	c.Stdout = io.MultiWriter(out, &buf)
-	c.Stderr = io.MultiWriter(errW, &buf)
-
-	if err := c.Run(); err != nil {
-		return fmt.Errorf("%w: %s", err, buf.String())
+// RunInteractive runs cmd with args in dir.
+// See [Cmd].
+func RunInteractive(ctx context.Context, ioStreams *IO, cmd, dir string, args ...string) error {
+	if err := Cmd(ctx, ioStreams, cmd, dir, args...).Run(); err != nil {
+		return fmt.Errorf("%w", err)
 	}
 
 	return nil
 }
 
+// Cmd return a [cmd.CommandContext] running cmd with args in dir, wiring
+// in/out/errW directly to the subprocess. When out/errW are *os.File (e.g.
+// os.Stdout), the file descriptor is passed through so the subprocess sees a
+// real TTY and can emit colors.
+func Cmd(ctx context.Context, ioStreams *IO, cmd, dir string, args ...string) *exec.Cmd {
+	lio := IO{}
+	if ioStreams == nil || ioStreams.In == nil {
+		lio.In = os.Stdin
+	}
+	if ioStreams == nil || ioStreams.Out == nil {
+		lio.Out = os.Stdout
+	}
+	if ioStreams == nil || ioStreams.Err == nil {
+		lio.Err = os.Stderr
+	}
+
+	c := exec.CommandContext(ctx, cmd, args...)
+	c.Dir = dir
+	c.Stdin = lio.In
+	c.Stdout = lio.Out
+	c.Stderr = lio.Err
+
+	return c
+}

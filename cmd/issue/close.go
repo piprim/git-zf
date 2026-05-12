@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tui"
@@ -32,7 +33,7 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	client, err := git.NewClient(&git.IO{
+	client, err := git.NewClient(&pkg.IO{
 		In:  cmd.InOrStdin(),
 		Out: cmd.OutOrStdout(),
 		Err: cmd.ErrOrStderr(),

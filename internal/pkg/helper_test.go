@@ -27,7 +27,7 @@ func TestRunInteractive_outputTeed(t *testing.T) {
 	}
 }
 
-func TestRunInteractive_errorIncludesOutput(t *testing.T) {
+func TestRunInteractive_failedCommandReturnsError(t *testing.T) {
 	t.Parallel()
 
 	var out, errW bytes.Buffer
