@@ -2,10 +2,18 @@ package commit
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/charmbracelet/huh"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/tui"
 )
 
 func TestAssembleMessage(t *testing.T) {
@@ -326,4 +334,181 @@ func assertFieldValue(t *testing.T, items []config.CommitItem, name, want string
 	}
 
 	t.Errorf("field %q not found in result", name)
+}
+
+// fakeHistoryStore is a test double for historyStore.
+type fakeHistoryStore struct {
+	rows    []store.CommandHistoryRow
+	err     error
+	inserts []map[string]any // captured InsertCommandHistory payloads
+}
+
+func (f *fakeHistoryStore) InsertCommandHistory(_ context.Context, _ string, payload any) error {
+	if m, ok := payload.(map[string]any); ok {
+		f.inserts = append(f.inserts, m)
+	}
+
+	return f.err
+}
+
+func (f *fakeHistoryStore) ListCommandHistory(_ context.Context, _ string, _ int) ([]store.CommandHistoryRow, error) {
+	return f.rows, f.err
+}
+
+// stubFormRunner is a formRunner stub for use in tests.
+type stubFormRunner struct{ wantHistoryVal bool }
+
+func (s *stubFormRunner) WantHistory() bool { return s.wantHistoryVal }
+
+// swapRunFormFn replaces runFormFn for the test and restores it in Cleanup.
+func swapRunFormFn(t *testing.T, fn func(*huh.Form) (formRunner, error)) {
+	t.Helper()
+
+	orig := runFormFn
+	runFormFn = fn
+	t.Cleanup(func() { runFormFn = orig })
+}
+
+func TestApplyPayload_setsMatchingItems(t *testing.T) {
+	items := []config.CommitItem{
+		{Name: "scope"},
+		{Name: "subject"},
+		{Name: "body"},
+	}
+	payload := map[string]any{
+		"scope":   "auth",
+		"subject": "add OAuth",
+		"unknown": "ignored",
+	}
+
+	got := applyPayload(items, payload)
+
+	assertFieldValue(t, got, "scope", "auth")
+	assertFieldValue(t, got, "subject", "add OAuth")
+	assertFieldValue(t, got, "body", "")
+}
+
+func TestApplyPayload_doesNotMutateInput(t *testing.T) {
+	items := []config.CommitItem{{Name: "scope"}, {Name: "subject"}}
+	original := slices.Clone(items)
+
+	applyPayload(items, map[string]any{"scope": "changed"})
+
+	assertNoInputMutation(t, items, original)
+}
+
+func TestApplyPayload_nonStringValuesIgnored(t *testing.T) {
+	items := []config.CommitItem{{Name: "scope"}}
+
+	got := applyPayload(items, map[string]any{"scope": 42})
+
+	assertFieldValue(t, got, "scope", "")
+}
+
+func TestHistoryLabel_format(t *testing.T) {
+	row := store.CommandHistoryRow{
+		ID:        1,
+		Payload:   []byte(`{"type":"feat","scope":"auth","subject":"add OAuth"}`),
+		CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
+	}
+	tmpl := `{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}`
+
+	label, err := historyLabel(tmpl, row)
+
+	if err != nil {
+		t.Fatalf("historyLabel: %v", err)
+	}
+	if !strings.Contains(label, "feat(auth): add OAuth") {
+		t.Errorf("label does not contain message: %q", label)
+	}
+	if !strings.Contains(label, "[2026-05-10 14:32]") {
+		t.Errorf("label does not contain date: %q", label)
+	}
+}
+
+func TestHistoryLabel_truncatesLongSubject(t *testing.T) {
+	longSubject := strings.Repeat("x", 80)
+	row := store.CommandHistoryRow{
+		ID:        2,
+		Payload:   []byte(`{"type":"feat","subject":"` + longSubject + `"}`),
+		CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
+	}
+
+	label, err := historyLabel(`{{.type}}: {{.subject}}`, row)
+	if err != nil {
+		t.Fatalf("historyLabel: %v", err)
+	}
+
+	subject := strings.SplitN(label, "  [", 2)[0]
+	if len(strings.TrimRight(subject, " ")) > maxLabelLen {
+		t.Errorf("subject portion too long: %d > %d", len(strings.TrimRight(subject, " ")), maxLabelLen)
+	}
+}
+
+// minimalCfg returns a minimal AppConfig sufficient for FillOutForm integration tests.
+func minimalCfg() *config.AppConfig {
+	return &config.AppConfig{
+		CommitTypes: []config.CommitTypeOption{{Name: "feat"}},
+		CommitMessage: config.CommitMessageConfig{
+			Template: "{{.type}}: {{.subject}}",
+			Items:    []config.CommitItem{{Name: "subject", Form: "input", Value: "my change"}},
+		},
+	}
+}
+
+func TestFillOutForm_savesHistoryAfterCompletion(t *testing.T) {
+	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+		return &stubFormRunner{}, nil
+	})
+
+	hs := &fakeHistoryStore{}
+
+	// AnyOptionSet() == true skips the options form group (cleaner test).
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, hs)
+	if err != nil {
+		t.Fatalf("FillOutForm: %v", err)
+	}
+
+	if len(hs.inserts) != 1 {
+		t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
+	}
+	if hs.inserts[0]["subject"] != "my change" {
+		t.Errorf("saved subject = %q, want %q", hs.inserts[0]["subject"], "my change")
+	}
+}
+
+func TestFillOutForm_mainFormAbortPropagates(t *testing.T) {
+	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+		return nil, huh.ErrUserAborted
+	})
+
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, &fakeHistoryStore{})
+	if !errors.Is(err, huh.ErrUserAborted) {
+		t.Errorf("err = %v, want huh.ErrUserAborted", err)
+	}
+}
+
+func TestFillOutForm_pickerAbortExitsFlow(t *testing.T) {
+	call := 0
+	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+		call++
+		if call == 1 {
+			// Main form: user presses ctrl+r.
+			return &stubFormRunner{wantHistoryVal: true}, nil
+		}
+
+		// Picker form: user aborts.
+		return nil, huh.ErrUserAborted
+	})
+
+	hs := &fakeHistoryStore{
+		rows: []store.CommandHistoryRow{
+			{ID: 1, Payload: []byte(`{"type":"feat","subject":"prev"}`), CreatedAt: time.Now()},
+		},
+	}
+
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, hs)
+	if !errors.Is(err, huh.ErrUserAborted) {
+		t.Errorf("err = %v, want huh.ErrUserAborted", err)
+	}
 }

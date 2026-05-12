@@ -109,6 +109,10 @@ func CommitMessageGroup(commitTypes []config.CommitTypeOption, items []config.Co
 		}
 	}
 
+	msgFields = append(msgFields,
+		huh.NewNote().Description("ctrl+r  pick from history"),
+	)
+
 	return huh.NewGroup(msgFields...)
 }
 

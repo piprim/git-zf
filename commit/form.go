@@ -2,8 +2,12 @@ package commit
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"strings"
 	"text/template"
@@ -11,36 +15,173 @@ import (
 	"github.com/charmbracelet/huh"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
 
-// FillOutForm presents the commit TUI form.
-// Group 1: type select + commit message fields (scope, subject, body, footer).
-// Group 2: commit options (author, all, amend, no-verify, signoff, allow-empty).
-//
-//	Group 2 is skipped when defaults.AnyOptionSet() is true (flags were passed).
-//
-// The hint pre-populates one message field and pre-selects the commit type
-// when it matches a configured type. Zero hint = no pre-population.
-//
-// Returns the assembled commit message bytes and the (possibly user-modified) options.
-func FillOutForm(cfg *config.AppConfig, defaults tui.CommitOption, hint IssueHint) ([]byte, tui.CommitOption, error) {
-	form, extractMsg, extractOpts := loadForm(cfg, defaults, hint)
-	tmplText := cfg.CommitMessage.Template
+const (
+	historyLimit  = 50
+	maxLabelLen   = 60
+	historyCmd    = "commit"
+	newBlankLabel = "New blank commit"
+)
 
-	if err := form.Run(); err != nil {
-		return nil, tui.CommitOption{}, fmt.Errorf("failed to run the form: %w", err)
+// historyStore is the subset of *store.Store used by FillOutForm.
+// Injected as an interface so tests can supply a fake.
+type historyStore interface {
+	InsertCommandHistory(ctx context.Context, command string, payload any) error
+	ListCommandHistory(ctx context.Context, command string, limit int) ([]store.CommandHistoryRow, error)
+}
+
+// formRunner is satisfied by *tui.FormRunner; the package-level var lets tests inject a stub.
+type formRunner interface {
+	WantHistory() bool
+}
+
+// runFormFn is the form runner used by FillOutForm and runHistoryPicker.
+// Tests can replace it with a stub to avoid requiring a real terminal.
+var runFormFn = func(form *huh.Form) (formRunner, error) {
+	return tui.RunForm(form)
+}
+
+// applyPayload clones items and sets each item's Value from payload (string values only).
+// Returns the clone unmodified for keys that don't match any item name.
+func applyPayload(items []config.CommitItem, payload map[string]any) []config.CommitItem {
+	out := slices.Clone(items)
+	for k, v := range payload {
+		if s, ok := v.(string); ok {
+			setItemValue(out, k, s)
+		}
 	}
 
-	answers := extractMsg()
-	opts := extractOpts()
+	return out
+}
+
+// historyLabel builds the picker display string for one history entry.
+func historyLabel(tmplText string, row store.CommandHistoryRow) (string, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(row.Payload, &payload); err != nil {
+		return "", fmt.Errorf("unmarshal history payload: %w", err)
+	}
 
 	var buf bytes.Buffer
-	if err := assembleMessage(&buf, tmplText, answers); err != nil {
-		return nil, tui.CommitOption{}, fmt.Errorf("assemble message: %w", err)
+	if err := assembleMessage(&buf, tmplText, payload); err != nil {
+		return "", fmt.Errorf("assemble history label: %w", err)
 	}
 
-	return buf.Bytes(), opts, nil
+	subject := strings.SplitN(buf.String(), "\n", 2)[0]
+	if len(subject) > maxLabelLen {
+		subject = subject[:maxLabelLen]
+	}
+
+	return fmt.Sprintf("%-60s  [%s]", subject, row.CreatedAt.Format("2006-01-02 15:04")), nil
+}
+
+// runHistoryPicker presents a select of the last historyLimit history entries.
+// Returns (nil, nil) when history is empty (message printed) or user picks "New blank commit".
+// Returns (payload, nil) when user selects a history entry.
+// Returns (nil, huh.ErrUserAborted) when the user aborts the picker (ctrl+c / esc).
+// Returns (nil, err) on unexpected errors.
+func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (map[string]any, error) {
+	entries, err := hs.ListCommandHistory(ctx, historyCmd, historyLimit)
+	if err != nil {
+		return nil, fmt.Errorf("list history: %w", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Fprintln(os.Stderr, "No commit history yet.")
+
+		return nil, nil
+	}
+
+	opts := make([]huh.Option[int], 0, len(entries)+1)
+	opts = append(opts, huh.NewOption(newBlankLabel, -1))
+
+	for i, e := range entries {
+		label, labelErr := historyLabel(tmplText, e)
+		if labelErr != nil {
+			slog.Warn("could not build history label", "error", labelErr)
+			label = fmt.Sprintf("entry #%d", e.ID)
+		}
+
+		opts = append(opts, huh.NewOption(label, i))
+	}
+
+	selected := -1
+	pickerForm := huh.NewForm(huh.NewGroup(
+		huh.NewSelect[int]().
+			Title("Pick a past commit:").
+			Options(opts...).
+			Value(&selected),
+	))
+
+	_, runErr := runFormFn(pickerForm)
+	if errors.Is(runErr, huh.ErrUserAborted) {
+		return nil, huh.ErrUserAborted
+	}
+	if runErr != nil {
+		return nil, fmt.Errorf("run picker: %w", runErr)
+	}
+
+	if selected == -1 {
+		return nil, nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(entries[selected].Payload, &payload); err != nil {
+		return nil, fmt.Errorf("unmarshal selected payload: %w", err)
+	}
+
+	return payload, nil
+}
+
+// FillOutForm presents the commit TUI form and orchestrates the ctrl+r history flow.
+// hs must not be nil; pass a *store.Store opened from store.OpenRepo.
+//
+// Exit conditions:
+//   - form completed → saves payload to history, assembles and returns the commit message.
+//   - ctrl+r         → shows history picker, then re-opens form (pre-filled or blank).
+//   - ctrl+c / esc   → returns ("", zero, huh.ErrUserAborted).
+func FillOutForm(
+	ctx context.Context,
+	cfg *config.AppConfig,
+	defaults tui.CommitOption,
+	hint IssueHint,
+	hs historyStore,
+) ([]byte, tui.CommitOption, error) {
+	var prefill map[string]any
+
+	for {
+		form, extractMsg, extractOpts := loadForm(cfg, defaults, hint, prefill)
+
+		runner, err := runFormFn(form)
+		if err != nil {
+			return nil, tui.CommitOption{}, fmt.Errorf("failed to run the form: %w", err)
+		}
+
+		if runner.WantHistory() {
+			prefill, err = runHistoryPicker(ctx, cfg.CommitMessage.Template, hs)
+			if err != nil {
+				return nil, tui.CommitOption{}, err
+			}
+
+			continue
+		}
+
+		answers := extractMsg()
+		opts := extractOpts()
+
+		var buf bytes.Buffer
+		if err := assembleMessage(&buf, cfg.CommitMessage.Template, answers); err != nil {
+			return nil, tui.CommitOption{}, fmt.Errorf("assemble message: %w", err)
+		}
+
+		if saveErr := hs.InsertCommandHistory(ctx, historyCmd, answers); saveErr != nil {
+			slog.Warn("could not save commit history", "error", saveErr)
+		}
+
+		return buf.Bytes(), opts, nil
+	}
 }
 
 // BuildAuthorList deduplicates all (may contain duplicates), sorts alphabetically,
@@ -126,7 +267,7 @@ func applyIssueHint(items []config.CommitItem, hint IssueHint) []config.CommitIt
 
 // setItemValue finds the first item with the given name and sets its Value.
 // Reports whether a match was found.
-func setItemValue(items []config.CommitItem, name string, value string) bool {
+func setItemValue(items []config.CommitItem, name, value string) bool {
 	for i := range items {
 		if items[i].Name == name {
 			items[i].Value = value
@@ -149,6 +290,7 @@ func loadForm(
 	cfg *config.AppConfig,
 	defaults tui.CommitOption,
 	hint IssueHint,
+	prefill map[string]any,
 ) (form *huh.Form, extractMsg func() map[string]any, extractOpts func() tui.CommitOption) {
 	slog.Debug("message template", "template", cfg.CommitMessage.Template)
 
@@ -157,6 +299,13 @@ func loadForm(
 	var selectedType string
 	if isValidCommitType(cfg.CommitTypes, hint.BranchType) {
 		selectedType = hint.BranchType
+	}
+
+	if prefill != nil {
+		items = applyPayload(items, prefill)
+		if t, ok := prefill["type"].(string); ok && isValidCommitType(cfg.CommitTypes, t) {
+			selectedType = t
+		}
 	}
 
 	extractMsg = func() map[string]any {

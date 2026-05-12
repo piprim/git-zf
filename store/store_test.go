@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -22,7 +23,7 @@ func TestOpen_createsMigrations(t *testing.T) {
 	s := openTestStore(t)
 
 	// Verify all three tables exist by querying sqlite_master.
-	tables := []string{"statuses", "issues", "branches"}
+	tables := []string{"statuses", "issues", "branches", "command_history"}
 	for _, tbl := range tables {
 		var name string
 		row := s.db.QueryRow(
@@ -444,5 +445,125 @@ func TestListBranches_includesIssueID(t *testing.T) {
 
 	if rows[0].IssueID <= 0 {
 		t.Errorf("IssueID = %d, want > 0", rows[0].IssueID)
+	}
+}
+
+func TestInsertCommandHistory_roundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	payload := map[string]any{"type": "feat", "scope": "auth", "subject": "add OAuth"}
+
+	if err := s.InsertCommandHistory(t.Context(), "commit", payload); err != nil {
+		t.Fatalf("InsertCommandHistory: %v", err)
+	}
+
+	rows, err := s.ListCommandHistory(t.Context(), "commit", 10)
+	if err != nil {
+		t.Fatalf("ListCommandHistory: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(rows[0].Payload, &got); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got["type"] != "feat" {
+		t.Errorf(`type = %q, want "feat"`, got["type"])
+	}
+	if got["scope"] != "auth" {
+		t.Errorf(`scope = %q, want "auth"`, got["scope"])
+	}
+	if got["subject"] != "add OAuth" {
+		t.Errorf(`subject = %q, want "add OAuth"`, got["subject"])
+	}
+}
+
+func TestListCommandHistory_newestFirst(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	for _, subj := range []string{"first", "second", "third"} {
+		if err := s.InsertCommandHistory(t.Context(), "commit", map[string]any{"subject": subj}); err != nil {
+			t.Fatalf("insert %s: %v", subj, err)
+		}
+	}
+
+	rows, err := s.ListCommandHistory(t.Context(), "commit", 10)
+	if err != nil {
+		t.Fatalf("ListCommandHistory: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+
+	var last map[string]any
+	if err := json.Unmarshal(rows[0].Payload, &last); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// ORDER BY created_at DESC, id DESC: in fast in-process tests all rows share the same
+	// CURRENT_TIMESTAMP second, so id (AUTOINCREMENT) is the effective tiebreaker.
+	// Inserting "first", "second", "third" gives "third" the highest id → it appears first.
+	if last["subject"] != "third" {
+		t.Errorf(`rows[0].subject = %q, want "third" (most recent insertion)`, last["subject"])
+	}
+}
+
+func TestListCommandHistory_limit(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	for i := range 5 {
+		if err := s.InsertCommandHistory(t.Context(), "commit", map[string]any{"n": i}); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	rows, err := s.ListCommandHistory(t.Context(), "commit", 3)
+	if err != nil {
+		t.Fatalf("ListCommandHistory: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Errorf("got %d rows, want 3", len(rows))
+	}
+}
+
+func TestListCommandHistory_commandIsolation(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	if err := s.InsertCommandHistory(t.Context(), "commit", map[string]any{"a": 1}); err != nil {
+		t.Fatalf("insert commit: %v", err)
+	}
+	if err := s.InsertCommandHistory(t.Context(), "branch", map[string]any{"b": 2}); err != nil {
+		t.Fatalf("insert branch: %v", err)
+	}
+
+	rows, err := s.ListCommandHistory(t.Context(), "commit", 10)
+	if err != nil {
+		t.Fatalf("ListCommandHistory: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("got %d rows, want 1 (branch entry must not appear)", len(rows))
+	}
+}
+
+func TestListCommandHistory_empty(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	rows, err := s.ListCommandHistory(t.Context(), "commit", 10)
+	if err != nil {
+		t.Fatalf("ListCommandHistory: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("got %d rows, want 0", len(rows))
 	}
 }

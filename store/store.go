@@ -82,6 +82,13 @@ type IssueRow struct {
 	Branch        *BranchRow `json:"branch"`         // nil → not started locally
 }
 
+// CommandHistoryRow is one row from the command_history table.
+type CommandHistoryRow struct {
+	ID        int64
+	Payload   json.RawMessage // raw JSON; caller unmarshals into the shape they need
+	CreatedAt time.Time
+}
+
 const dbName = "git-zf.db"
 
 // Open opens (or creates) the SQLite database at dir/[dbName] and runs pending migrations.
@@ -417,4 +424,67 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// InsertCommandHistory records one completed form submission.
+// payload is marshalled to JSON internally; it must be JSON-serialisable.
+func (s *Store) InsertCommandHistory(ctx context.Context, command string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO command_history (command, payload) VALUES (?, ?)`,
+		command, string(data),
+	)
+	if err != nil {
+		return fmt.Errorf("insert command history: %w", err)
+	}
+
+	return nil
+}
+
+// ListCommandHistory returns the most recent limit entries for command, newest-first.
+func (s *Store) ListCommandHistory(ctx context.Context, command string, limit int) ([]CommandHistoryRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, payload, created_at FROM command_history
+		 WHERE command = ? ORDER BY created_at DESC, id DESC LIMIT ?`,
+		command, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list command history query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []CommandHistoryRow
+
+	for rows.Next() {
+		var r CommandHistoryRow
+		var payloadStr, createdAtStr string
+
+		if err := rows.Scan(&r.ID, &payloadStr, &createdAtStr); err != nil {
+			return nil, fmt.Errorf("scan command history row: %w", err)
+		}
+
+		r.Payload = json.RawMessage(payloadStr)
+
+		t, parseErr := parseSQLiteTime(createdAtStr)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse command_history created_at %q: %w", createdAtStr, parseErr)
+		}
+
+		r.CreatedAt = t
+		result = append(result, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate command history: %w", err)
+	}
+
+	if result == nil {
+		result = []CommandHistoryRow{}
+	}
+
+	return result, nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
+	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
@@ -82,7 +83,13 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 
 	hint := issueHintFromClient(client)
 
-	msg, opts, err := commitpkg.FillOutForm(c.appConfig, defaults, hint)
+	s, err := store.OpenRepo(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, hint, s)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
