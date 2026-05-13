@@ -99,11 +99,90 @@ In the interactive TUI:
 **`issue close`** — close an in-progress issue: pick from the list of in-progress branches (the currently checked-out branch is pre-selected), merge into the base branch, update the local store, and optionally update the tracker status and delete the local branch.
 
 The close flow:
-1. A conflict dry-run is performed in a temporary git worktree — if conflicts are detected the command aborts without touching anything.
-2. Choose merge strategy: **Squash** (default, combines all commits into one) or **Classic** (`--no-ff`, preserves full history). For squash, the commit author is pre-filled from your git config identity.
+1. A conflict dry-run is performed via `git merge-tree` — if conflicts are detected the command aborts without touching anything.
+2. Choose merge strategy: **Rebase** (default, recommended — single clean commit, submodule-safe), **Squash** (`git merge --squash`, fast but not submodule-safe), or **Classic** (`--no-ff`, preserves full history). For Rebase and Squash, the final commit is composed through the commitizen TUI form, pre-filled from the branch's issue ID and type.
 3. Confirm the merge. After a successful merge the branch is marked as `merged` in the local store and the issue is marked as `closed`.
 4. If a tracker is configured, a status picker lets you update the remote issue status (or skip).
-5. Optionally delete the local branch. Safe delete (`-d`) is used for classic merges; force delete (`-D`) for squash merges (squash does not preserve ancestry so git requires `-D`).
+5. Optionally delete the local branch. Safe delete (`-d`) is used for classic merges; force delete (`-D`) for Squash and Rebase (neither preserves ancestry, so git requires `-D`).
+
+#### Merge strategies
+
+| Strategy | Mechanism | History on base | Submodule-safe |
+|---|---|---|---|
+| **Rebase** *(default)* | Real `git merge origin/<base>` + `git reset --soft origin/<base>` | one clean commit | ✅ yes |
+| **Squash** | `git merge --squash` | one commit, no merge parent | ⚠️ no — `--squash` is known to mishandle submodule gitlinks |
+| **Classic** | `git merge --no-ff` | merge commit + full feature history | ✅ yes |
+
+#### Rebase strategy — detailed flow
+
+Rebase produces the same end state as Squash (one clean commit on the local base branch) but uses a different mechanic under the hood that correctly handles submodule pointers. The work happens on your feature branch, then fast-forwards onto local base. Concretely:
+
+```
+1. Pre-flight
+   - `git status --porcelain --untracked-files=no` → abort if dirty.
+     (Untracked files are intentionally ignored — they survive rollback
+     and don't put your work at risk.)
+
+2. Setup
+   - Checkout the feature branch (idempotent — no `post-checkout` hook
+     fires if you're already there).
+   - Capture the feature tip SHA for safe rollback.
+   - `git fetch origin` to pick up the latest remote base.
+   - `git merge-base --is-ancestor feature origin/<base>` → if feature
+     has no commits ahead of `origin/<base>`, abort cleanly
+     ("already integrated?"). Avoids producing an empty commit.
+   - `git merge-tree` dry-run against `origin/<base>` → abort with the
+     conflict file list if the endpoint can't merge cleanly.
+
+3. Execute
+   - `git merge --no-edit origin/<base>` — a *real* merge, which handles
+     submodule gitlinks correctly. `--no-edit` suppresses $EDITOR for
+     the transient merge-commit message.
+   - `git reset --soft origin/<base>` — collapse the merge into one
+     staged diff against `origin/<base>`. HEAD moves back, working tree
+     stays at the merged state, the index is fully staged.
+
+4. TUI commit form
+   - The commitizen form opens pre-filled with type, scope, and the
+     subject `Squashed close of <feature-tip> into <origin-base-tip>.`
+   - Submit → `git commit` lands one clean commit on the feature branch.
+   - Esc / Ctrl+C / hook rejection → atomic rollback: feature is reset
+     to its captured original tip via `git reset --hard`. You see
+     `Rolled back: feature branch "<name>" restored to <sha>` on stderr.
+
+5. Deploy
+   - Checkout local `<base>` (idempotent).
+   - `git merge --ff-only feature` to land the new commit.
+
+6. Bookkeeping
+   - Update local store and (if configured) tracker; prompt to delete
+     the feature branch.
+```
+
+##### Why a real `git merge` instead of `git rebase`
+
+A `git rebase` mechanism would have replayed the feature's commits one at a time. If commit #2 conflicts but commit #4 fixes it, the merge-tree dry-run reports the endpoint as clean — but the rebase still halts mid-way on commit #2, dumping you into a detached HEAD with conflict markers. A real merge looks at the *endpoint* of both branches, which is exactly what merge-tree predicts, so the dry-run's "clean" verdict is a guarantee.
+
+Submodules are handled correctly because the gitlink quirk only affects `merge --squash`. Plain `git merge` resolves submodule pointers three-way like any other file.
+
+##### Rollback semantics
+
+The rebase orchestrator captures the feature ref's SHA *before* mutating anything. From that point until the final commit lands, any failure — TUI abort, pre-commit hook rejection, commit-msg hook rejection, signing failure — triggers `git reset --hard <featureOrigSHA>` on the feature branch. The feature is restored atomically and you see a `Rolled back: …` message on stderr. If the rollback itself fails, both the original error and the rollback error are surfaced so you know the repo is in a half-state and why.
+
+The *post-commit* failure mode is treated differently. If the commit landed on the feature branch but `git merge --ff-only` refuses (because local `<base>` has diverged from `origin/<base>`), the commit is **not** rolled back — it already exists as a clean, valid commit on the feature branch. Instead you see:
+
+```
+Commit created on "<feature>" but local <base> has diverged from origin/<base>.
+Run `git pull --ff-only` on <base>, then `git merge --ff-only <feature>` to land it.
+```
+
+The store and tracker are not updated, the delete-branch prompt is skipped, and the close exits cleanly. You reconcile local base manually and FF the feature commit yourself.
+
+##### When to choose each strategy
+
+- **Rebase** — your repo has submodules, or you want a clean linear history with one commit per issue. Recommended default.
+- **Squash** — no submodules involved, you want the existing `git merge --squash` semantics (fast, fewer git operations).
+- **Classic** — you want to preserve the feature's full commit history on the base branch via a merge commit. Use when intermediate commits have value (large features, bisect surface, audit trail).
 
 ### Branch
 ```

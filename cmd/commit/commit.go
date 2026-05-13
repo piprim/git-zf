@@ -89,7 +89,9 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, hint, s)
+	prefill := hint.Prefill(c.appConfig.CommitMessage.Items)
+
+	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}

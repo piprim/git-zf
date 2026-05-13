@@ -15,6 +15,7 @@ import (
 
 	// go-git v6 depends on go-billy/v6.
 	"github.com/go-git/go-billy/v6/memfs"
+	"github.com/piprim/git-zf/internal/pkg"
 )
 
 // newTestRepo creates an in-memory git repository with one initial commit.
@@ -65,7 +66,7 @@ func TestCommit_basic(t *testing.T) {
 	t.Parallel()
 
 	client, dir := newDiskRepo(t)
-	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
 	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
@@ -101,7 +102,7 @@ func TestCommit_all_stagesTrackedOnly(t *testing.T) {
 	t.Parallel()
 
 	client, dir := newDiskRepo(t)
-	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
 	// Modify the tracked file (base.go was in the initial commit).
 	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package modified\n"), 0o644); err != nil {
@@ -136,7 +137,7 @@ func TestCommit_signoff(t *testing.T) {
 	t.Parallel()
 
 	client, dir := newDiskRepo(t)
-	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
 	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
@@ -173,7 +174,7 @@ func TestCommit_author(t *testing.T) {
 	t.Parallel()
 
 	client, dir := newDiskRepo(t)
-	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
 	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
@@ -208,7 +209,7 @@ func TestCommit_amend(t *testing.T) {
 	t.Parallel()
 
 	client, dir := newDiskRepo(t)
-	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
 	run := func(args ...string) {
 		t.Helper()
@@ -339,7 +340,7 @@ func TestCommit_summary(t *testing.T) {
 	t.Parallel()
 
 	client, dir := newDiskRepo(t)
-	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
 	if err := os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n\nfunc New() {}\n"), 0o644); err != nil {
 		t.Fatalf("write feature.go: %v", err)
@@ -405,7 +406,7 @@ func TestCommit_summary_rootCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}
-	client.io = IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
 
 	summary, err := client.Commit(t.Context(), []byte("chore: initial commit"), CommitOptions{})
 	if err != nil {
@@ -615,5 +616,151 @@ func TestCurrentBranch_emptyRepo(t *testing.T) {
 
 	if _, err := client.CurrentBranch(); err == nil {
 		t.Error("CurrentBranch on empty repo: expected error, got nil")
+	}
+}
+
+func TestClientIO_returnsInjectedStreams(t *testing.T) {
+	t.Parallel()
+
+	in := bytes.NewBufferString("")
+	out := &bytes.Buffer{}
+	errW := &bytes.Buffer{}
+
+	c, dir := newDiskRepo(t)
+	_ = dir
+
+	c.io = &pkg.IO{In: in, Out: out, Err: errW}
+
+	got := c.IO()
+	if got == nil {
+		t.Fatal("IO() returned nil")
+	}
+
+	if got.In != in || got.Out != out || got.Err != errW {
+		t.Errorf("IO() returned a different struct than was injected")
+	}
+}
+
+func TestIsDirty_clean(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newDiskRepo(t)
+
+	dirty, err := c.IsDirty(t.Context())
+	if err != nil {
+		t.Fatalf("IsDirty: %v", err)
+	}
+
+	if dirty {
+		t.Error("expected clean repo to report dirty=false")
+	}
+}
+
+func TestIsDirty_modifiedTracked(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package other\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	dirty, err := c.IsDirty(t.Context())
+	if err != nil {
+		t.Fatalf("IsDirty: %v", err)
+	}
+
+	if !dirty {
+		t.Error("expected modified tracked file to report dirty=true")
+	}
+}
+
+func TestIsDirty_stagedChange(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	if err := os.WriteFile(filepath.Join(dir, "new.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	stage := exec.CommandContext(t.Context(), "git", "add", "new.go")
+	stage.Dir = dir
+	if out, err := stage.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+
+	dirty, err := c.IsDirty(t.Context())
+	if err != nil {
+		t.Fatalf("IsDirty: %v", err)
+	}
+
+	if !dirty {
+		t.Error("expected staged file to report dirty=true")
+	}
+}
+
+func TestIsDirty_untrackedIgnored(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("note\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	dirty, err := c.IsDirty(t.Context())
+	if err != nil {
+		t.Fatalf("IsDirty: %v", err)
+	}
+
+	if dirty {
+		t.Error("expected untracked-only repo to report dirty=false")
+	}
+}
+
+func TestCheckout_switchesBranch(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	newBranch := exec.CommandContext(t.Context(), "git", "checkout", "-b", "feature-x")
+	newBranch.Dir = dir
+	if out, err := newBranch.CombinedOutput(); err != nil {
+		t.Fatalf("create feature-x: %v\n%s", err, out)
+	}
+
+	if err := c.Checkout(t.Context(), "main"); err != nil {
+		t.Fatalf("Checkout main: %v", err)
+	}
+
+	got, err := c.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+
+	if got != "main" {
+		t.Errorf("CurrentBranch = %q, want %q", got, "main")
+	}
+}
+
+func TestCheckout_idempotentOnSameBranch(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	hookPath := filepath.Join(dir, ".git", "hooks", "post-checkout")
+	markerPath := filepath.Join(dir, "post-checkout-fired")
+	hook := "#!/bin/sh\ntouch " + markerPath + "\n"
+	if err := os.WriteFile(hookPath, []byte(hook), 0o755); err != nil {
+		t.Fatalf("write post-checkout hook: %v", err)
+	}
+
+	if err := c.Checkout(t.Context(), "main"); err != nil {
+		t.Fatalf("Checkout main (already on main): %v", err)
+	}
+
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("post-checkout hook should NOT fire when already on target branch, stat err = %v", err)
 	}
 }

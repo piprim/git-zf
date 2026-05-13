@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -219,24 +220,38 @@ func TestMergeSquash(t *testing.T) {
 	run("commit", "-m", "feat: add feat.go")
 	run("checkout", "main")
 
-	if err := client.MergeSquash(t.Context(), "feature", "main", "Test User <test@test.com>"); err != nil {
+	if err := client.MergeSquash(t.Context(), "feature", "main"); err != nil {
 		t.Fatalf("MergeSquash: %v", err)
 	}
 
-	// Verify feat.go exists on main.
+	// After MergeSquash the working tree must show staged changes but no new commit.
+	var statusBuf bytes.Buffer
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Dir = dir
+	statusCmd.Stdout = &statusBuf
+	if err := statusCmd.Run(); err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if !strings.Contains(statusBuf.String(), "feat.go") {
+		t.Errorf("status missing feat.go after MergeSquash: %q", statusBuf.String())
+	}
+
+	// Caller materializes the commit (mirrors close.go's responsibility).
+	run("commit", "-m", "feat: squash test")
+
 	if _, err := os.Stat(filepath.Join(dir, "feat.go")); err != nil {
 		t.Error("feat.go not found on main after squash merge")
 	}
 
-	// Verify exactly one squash commit was created (parent count on tip = 1, not a merge commit).
 	var squashBuf bytes.Buffer
 	logCmd := exec.Command("git", "log", "--oneline", "-1")
 	logCmd.Dir = dir
 	logCmd.Stdout = &squashBuf
-	_ = logCmd.Run()
-
-	if !strings.Contains(squashBuf.String(), "squash merge") {
-		t.Errorf("squash commit message not found in: %q", squashBuf.String())
+	if err := logCmd.Run(); err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if !strings.Contains(squashBuf.String(), "feat: squash test") {
+		t.Errorf("tip commit subject not found: %q", squashBuf.String())
 	}
 }
 
@@ -333,6 +348,106 @@ func TestDeleteLocalBranch_safeDelete(t *testing.T) {
 	}
 }
 
+// newDiskRepoWithOrigin sets up a bare "origin" repo + a working clone.
+// Returns the client (rooted at the clone), the clone dir, and the origin dir.
+// The clone has one commit on "main" tracked against origin/main.
+func newDiskRepoWithOrigin(t *testing.T) (*Client, string, string) {
+	t.Helper()
+
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+	cloneDir := t.TempDir()
+
+	mustRun := func(cwd string, args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, cwd, err, out)
+		}
+	}
+
+	if err := os.MkdirAll(originDir, 0o755); err != nil {
+		t.Fatalf("mkdir origin: %v", err)
+	}
+	mustRun(originDir, "init", "--bare", "--initial-branch=main")
+
+	seedDir := t.TempDir()
+	mustRun(seedDir, "init", "--initial-branch=main")
+	mustRun(seedDir, "config", "user.name", "Test User")
+	mustRun(seedDir, "config", "user.email", "test@test.com")
+	mustRun(seedDir, "config", "commit.gpgsign", "false")
+
+	if err := os.WriteFile(filepath.Join(seedDir, "base.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	mustRun(seedDir, "add", "base.go")
+	mustRun(seedDir, "commit", "-m", "chore: init")
+	mustRun(seedDir, "remote", "add", "origin", originDir)
+	mustRun(seedDir, "push", "origin", "main")
+
+	mustRun(filepath.Dir(cloneDir), "clone", originDir, filepath.Base(cloneDir))
+	mustRun(cloneDir, "config", "user.name", "Test User")
+	mustRun(cloneDir, "config", "user.email", "test@test.com")
+	mustRun(cloneDir, "config", "commit.gpgsign", "false")
+
+	c, err := NewClientAt(nil, cloneDir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	return c, cloneDir, originDir
+}
+
+func TestFetchOrigin_updatesRemoteTrackingRef(t *testing.T) {
+	t.Parallel()
+
+	c, _, originDir := newDiskRepoWithOrigin(t)
+
+	pusher := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = pusher
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("clone", originDir, ".")
+	run("config", "user.name", "Pusher")
+	run("config", "user.email", "pusher@test.com")
+	run("config", "commit.gpgsign", "false")
+
+	if err := os.WriteFile(filepath.Join(pusher, "added.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	run("add", "added.go")
+	run("commit", "-m", "feat: added")
+	run("push", "origin", "main")
+
+	if err := c.FetchOrigin(t.Context()); err != nil {
+		t.Fatalf("FetchOrigin: %v", err)
+	}
+
+	originTip, err := c.ResolveRef("refs/remotes/origin/main")
+	if err != nil {
+		t.Fatalf("resolve origin/main: %v", err)
+	}
+
+	mainTip, err := c.ResolveRef("refs/heads/main")
+	if err != nil {
+		t.Fatalf("resolve main: %v", err)
+	}
+
+	if originTip == mainTip {
+		t.Errorf("expected origin/main to advance past local main; both = %s", originTip)
+	}
+}
+
 func TestDeleteLocalBranch_forceDelete(t *testing.T) {
 	t.Parallel()
 
@@ -359,8 +474,14 @@ func TestDeleteLocalBranch_forceDelete(t *testing.T) {
 	run("checkout", "main")
 
 	// Squash merge — safe -d would fail because squash doesn't preserve ancestry.
-	if err := client.MergeSquash(t.Context(), "feature", "main", "Test User <test@test.com>"); err != nil {
+	if err := client.MergeSquash(t.Context(), "feature", "main"); err != nil {
 		t.Fatalf("MergeSquash: %v", err)
+	}
+
+	commitCmd := exec.Command("git", "commit", "-m", "feat: squash test")
+	commitCmd.Dir = dir
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
 	}
 
 	if err := client.DeleteLocalBranch(t.Context(), "feature", true); err != nil {
@@ -375,5 +496,419 @@ func TestDeleteLocalBranch_forceDelete(t *testing.T) {
 
 	if strings.Contains(forceBuf.String(), "feature") {
 		t.Errorf("feature branch still exists after force delete: %s", forceBuf.String())
+	}
+}
+
+func TestIsAncestor(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("checkout", "-b", "feature")
+
+	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write feat.go: %v", err)
+	}
+
+	run("add", "feat.go")
+	run("commit", "-m", "feat: f1")
+	run("checkout", "main")
+
+	if err := os.WriteFile(filepath.Join(dir, "main2.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main2.go: %v", err)
+	}
+
+	run("add", "main2.go")
+	run("commit", "-m", "chore: m2")
+
+	cases := []struct {
+		name      string
+		child     string
+		ancestor  string
+		want      bool
+		wantError bool
+	}{
+		{"main is ancestor of itself", "main", "main", true, false},
+		{"main is NOT ancestor of feature (siblings)", "main", "feature", false, false},
+		{"feature is NOT ancestor of main (siblings)", "feature", "main", false, false},
+		{"missing ref errors", "nonexistent", "main", false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := c.IsAncestor(t.Context(), tc.child, tc.ancestor)
+			if tc.wantError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("IsAncestor: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResetHard_restoresTracked(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	origHash, err := c.ResolveRef("HEAD")
+	if err != nil {
+		t.Fatalf("resolve HEAD: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package mutated\n"), 0o644); err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "staged.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write staged: %v", err)
+	}
+
+	addCmd := exec.CommandContext(t.Context(), "git", "add", "staged.go")
+	addCmd.Dir = dir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+
+	if err := c.ResetHard(t.Context(), origHash.String()); err != nil {
+		t.Fatalf("ResetHard: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "base.go"))
+	if err != nil {
+		t.Fatalf("read base.go: %v", err)
+	}
+
+	if string(got) != "package main\n" {
+		t.Errorf("base.go = %q, want %q", got, "package main\n")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "staged.go")); !os.IsNotExist(err) {
+		t.Errorf("expected staged.go to be removed after ResetHard, stat err = %v", err)
+	}
+}
+
+func TestFastForwardOnly_clean(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("checkout", "-b", "feature")
+
+	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write feat.go: %v", err)
+	}
+
+	run("add", "feat.go")
+	run("commit", "-m", "feat: f1")
+
+	featTip, err := c.ResolveRef("refs/heads/feature")
+	if err != nil {
+		t.Fatalf("resolve feature: %v", err)
+	}
+
+	if err := c.FastForwardOnly(t.Context(), "feature", "main"); err != nil {
+		t.Fatalf("FastForwardOnly: %v", err)
+	}
+
+	mainTip, err := c.ResolveRef("refs/heads/main")
+	if err != nil {
+		t.Fatalf("resolve main: %v", err)
+	}
+
+	if mainTip != featTip {
+		t.Errorf("main = %s, want %s (FF should equalize)", mainTip, featTip)
+	}
+}
+
+func TestFastForwardOnly_diverged(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("checkout", "-b", "feature")
+
+	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write feat.go: %v", err)
+	}
+
+	run("add", "feat.go")
+	run("commit", "-m", "feat: f1")
+	run("checkout", "main")
+
+	if err := os.WriteFile(filepath.Join(dir, "main2.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main2.go: %v", err)
+	}
+
+	run("add", "main2.go")
+	run("commit", "-m", "chore: m2")
+
+	err := c.FastForwardOnly(t.Context(), "feature", "main")
+	if err == nil {
+		t.Fatal("expected FF on diverged branches to fail, got nil")
+	}
+}
+
+func TestMergeRebase_clean(t *testing.T) {
+	t.Parallel()
+
+	c, cloneDir, originDir := newDiskRepoWithOrigin(t)
+
+	pusher := t.TempDir()
+	run := func(cwd string, args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, cwd, err, out)
+		}
+	}
+
+	run(filepath.Dir(pusher), "clone", originDir, filepath.Base(pusher))
+	run(pusher, "config", "user.name", "Pusher")
+	run(pusher, "config", "user.email", "pusher@test.com")
+	run(pusher, "config", "commit.gpgsign", "false")
+
+	if err := os.WriteFile(filepath.Join(pusher, "remote.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write remote.go: %v", err)
+	}
+
+	run(pusher, "add", "remote.go")
+	run(pusher, "commit", "-m", "feat: remote change")
+	run(pusher, "push", "origin", "main")
+
+	run(cloneDir, "checkout", "-b", "feature")
+
+	for i := 1; i <= 2; i++ {
+		name := fmt.Sprintf("feat%d.go", i)
+		if err := os.WriteFile(filepath.Join(cloneDir, name), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+
+		run(cloneDir, "add", name)
+		run(cloneDir, "commit", "-m", fmt.Sprintf("feat: f%d", i))
+	}
+
+	if err := c.FetchOrigin(t.Context()); err != nil {
+		t.Fatalf("FetchOrigin: %v", err)
+	}
+
+	if err := c.MergeRebase(t.Context(), "feature", "main"); err != nil {
+		t.Fatalf("MergeRebase: %v", err)
+	}
+
+	branch, err := c.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+
+	if branch != "feature" {
+		t.Errorf("CurrentBranch = %q, want %q", branch, "feature")
+	}
+
+	featTip, err := c.ResolveRef("refs/heads/feature")
+	if err != nil {
+		t.Fatalf("resolve feature: %v", err)
+	}
+
+	origTip, err := c.ResolveRef("refs/remotes/origin/main")
+	if err != nil {
+		t.Fatalf("resolve origin/main: %v", err)
+	}
+
+	if featTip != origTip {
+		t.Errorf("after MergeRebase: feature=%s, origin/main=%s — should be equal", featTip, origTip)
+	}
+
+	if _, err := os.Stat(filepath.Join(cloneDir, ".git", "MERGE_HEAD")); !os.IsNotExist(err) {
+		t.Errorf("MERGE_HEAD should not exist after MergeRebase, stat err = %v", err)
+	}
+
+	statusCmd := exec.CommandContext(t.Context(), "git", "-C", cloneDir, "status", "--porcelain")
+	statusOut, err := statusCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v\n%s", err, statusOut)
+	}
+
+	if !strings.Contains(string(statusOut), "feat1.go") || !strings.Contains(string(statusOut), "feat2.go") {
+		t.Errorf("expected feat1.go and feat2.go staged after MergeRebase, got:\n%s", statusOut)
+	}
+
+	if strings.Contains(string(statusOut), "remote.go") {
+		t.Errorf("remote.go should be in HEAD's tree (not staged), got:\n%s", statusOut)
+	}
+}
+
+// newDiskRepoWithOrigin_andSubmodule extends newDiskRepoWithOrigin by:
+//   - creating a separate "submodule" bare repo with 2 commits (subA, subB).
+//   - adding the submodule to the SUT clone at path "sub", pinned to subA.
+//   - pushing the submodule registration to origin/main.
+//
+// Returns the SUT client, clone dir, origin (bare parent) dir, and the two
+// submodule commit SHAs (subA = initial pinning, subB = next pointer).
+func newDiskRepoWithOrigin_andSubmodule(t *testing.T) (*Client, string, string, string, string) {
+	t.Helper()
+
+	c, cloneDir, originDir := newDiskRepoWithOrigin(t)
+
+	run := func(cwd string, args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, cwd, err, out)
+		}
+	}
+
+	capture := func(cwd string, args ...string) string {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = cwd
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v in %s: %v", args, cwd, err)
+		}
+
+		return strings.TrimSpace(string(out))
+	}
+
+	subOriginDir := filepath.Join(t.TempDir(), "subm.git")
+	if err := os.MkdirAll(subOriginDir, 0o755); err != nil {
+		t.Fatalf("mkdir subm: %v", err)
+	}
+
+	run(subOriginDir, "init", "--bare", "--initial-branch=main")
+
+	subSeed := t.TempDir()
+	run(subSeed, "init", "--initial-branch=main")
+	run(subSeed, "config", "user.name", "Sub Author")
+	run(subSeed, "config", "user.email", "sub@test.com")
+	run(subSeed, "config", "commit.gpgsign", "false")
+
+	if err := os.WriteFile(filepath.Join(subSeed, "a.txt"), []byte("A\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+
+	run(subSeed, "add", "a.txt")
+	run(subSeed, "commit", "-m", "subA")
+	subA := capture(subSeed, "rev-parse", "HEAD")
+
+	if err := os.WriteFile(filepath.Join(subSeed, "b.txt"), []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write b.txt: %v", err)
+	}
+
+	run(subSeed, "add", "b.txt")
+	run(subSeed, "commit", "-m", "subB")
+	subB := capture(subSeed, "rev-parse", "HEAD")
+
+	run(subSeed, "remote", "add", "origin", subOriginDir)
+	run(subSeed, "push", "origin", "main")
+
+	run(cloneDir, "-c", "protocol.file.allow=always", "submodule", "add", subOriginDir, "sub")
+	run(cloneDir, "-C", "sub", "checkout", subA)
+	run(cloneDir, "add", ".gitmodules", "sub")
+	run(cloneDir, "commit", "-m", "chore: add sub pinned to subA")
+	run(cloneDir, "push", "origin", "main")
+
+	return c, cloneDir, originDir, subA, subB
+}
+
+func TestMergeRebase_preservesSubmodulePointer(t *testing.T) {
+	t.Parallel()
+
+	c, cloneDir, originDir, subA, subB := newDiskRepoWithOrigin_andSubmodule(t)
+	_ = subA
+
+	run := func(cwd string, args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, cwd, err, out)
+		}
+	}
+
+	pusher := t.TempDir()
+	run(filepath.Dir(pusher), "clone", originDir, filepath.Base(pusher))
+	run(pusher, "config", "user.name", "Pusher")
+	run(pusher, "config", "user.email", "pusher@test.com")
+	run(pusher, "config", "commit.gpgsign", "false")
+
+	if err := os.WriteFile(filepath.Join(pusher, "remote.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write remote.go: %v", err)
+	}
+
+	run(pusher, "add", "remote.go")
+	run(pusher, "commit", "-m", "feat: remote change")
+	run(pusher, "push", "origin", "main")
+
+	run(cloneDir, "checkout", "-b", "feature")
+	run(cloneDir, "-C", "sub", "fetch", "origin")
+	run(cloneDir, "-C", "sub", "checkout", subB)
+	run(cloneDir, "add", "sub")
+	run(cloneDir, "commit", "-m", "feat: bump sub to subB")
+
+	if err := c.FetchOrigin(t.Context()); err != nil {
+		t.Fatalf("FetchOrigin: %v", err)
+	}
+
+	if err := c.MergeRebase(t.Context(), "feature", "main"); err != nil {
+		t.Fatalf("MergeRebase: %v", err)
+	}
+
+	run(cloneDir, "commit", "-m", "feat: rebase close")
+
+	lsTree := exec.CommandContext(t.Context(), "git", "-C", cloneDir, "ls-tree", "HEAD", "sub")
+	out, err := lsTree.Output()
+	if err != nil {
+		t.Fatalf("ls-tree: %v", err)
+	}
+
+	if !strings.Contains(string(out), subB) {
+		t.Errorf("submodule pointer wrong after MergeRebase + commit.\nls-tree: %s\nwant subB: %s", out, subB)
 	}
 }

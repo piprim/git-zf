@@ -134,12 +134,23 @@ func TestIssueBranchPicker_defaultsToFirstWhenCurrentUnknown(t *testing.T) {
 	}
 }
 
-func TestIssueMergeStrategy_defaultsToSquash(t *testing.T) {
-	squash := false
-	IssueMergeStrategy(&squash)
+func TestIssueMergeStrategy_rendersGivenOptions(t *testing.T) {
+	t.Parallel()
 
-	if !squash {
-		t.Error("IssueMergeStrategy should default squash to true")
+	selected := ""
+	opts := []StrategyOption{
+		{Value: "a", Label: "A", Hint: "first"},
+		{Value: "b", Label: "B", Hint: "second"},
+		{Value: "c", Label: "C", Hint: ""},
+	}
+
+	group := IssueMergeStrategy(&selected, opts)
+	if group == nil {
+		t.Fatal("IssueMergeStrategy returned nil group")
+	}
+
+	if selected != "a" {
+		t.Errorf("selected = %q, want %q (first option's value)", selected, "a")
 	}
 }
 

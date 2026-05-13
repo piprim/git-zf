@@ -15,8 +15,7 @@ func TestRunInteractive_outputTeed(t *testing.T) {
 	var out, errW bytes.Buffer
 	err := pkg.RunInteractive(
 		context.Background(),
-		strings.NewReader(""),
-		&out, &errW,
+		&pkg.IO{In: strings.NewReader(""), Out: &out, Err: &errW},
 		"echo", t.TempDir(), "hello",
 	)
 	if err != nil {
@@ -33,8 +32,7 @@ func TestRunInteractive_failedCommandReturnsError(t *testing.T) {
 	var out, errW bytes.Buffer
 	err := pkg.RunInteractive(
 		context.Background(),
-		strings.NewReader(""),
-		&out, &errW,
+		&pkg.IO{In: strings.NewReader(""), Out: &out, Err: &errW},
 		"false", t.TempDir(),
 	)
 	if err == nil {

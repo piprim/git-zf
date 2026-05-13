@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -229,92 +230,15 @@ func TestIsValidCommitType_emptyTypes(t *testing.T) {
 	}
 }
 
-func TestApplyIssueHint(t *testing.T) {
-	tests := []struct {
-		name      string
-		items     []config.CommitItem
-		hint      IssueHint
-		wantField string // empty = no field set
-		wantValue string
-	}{
-		{
-			name: "scope_wins_over_footer_and_subject",
-			items: []config.CommitItem{
-				{Name: "subject"}, {Name: "scope"}, {Name: "footer"},
-			},
-			hint:      IssueHint{IssueID: testIssueID},
-			wantField: "scope",
-			wantValue: testIssueID,
-		},
-		{
-			name: "footer_used_when_scope_missing",
-			items: []config.CommitItem{
-				{Name: "subject"}, {Name: "footer"},
-			},
-			hint:      IssueHint{IssueID: testIssueID},
-			wantField: "footer",
-			wantValue: "Refs: " + testIssueID,
-		},
-		{
-			name:      "subject_used_when_only_subject_present",
-			items:     []config.CommitItem{{Name: "subject"}},
-			hint:      IssueHint{IssueID: testIssueID},
-			wantField: "subject",
-			wantValue: "(" + testIssueID + ")",
-		},
-		{
-			name:      "no_matching_field_no_change",
-			items:     []config.CommitItem{{Name: "body"}},
-			hint:      IssueHint{IssueID: testIssueID},
-			wantField: "",
-		},
-		{
-			name:      "empty_issue_id_early_return",
-			items:     []config.CommitItem{{Name: "scope"}, {Name: "footer"}},
-			hint:      IssueHint{IssueID: ""},
-			wantField: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Snapshot original to ensure applyIssueHint never mutates the input.
-			originalCopy := slices.Clone(tt.items)
-
-			got := applyIssueHint(tt.items, tt.hint)
-
-			assertNoInputMutation(t, tt.items, originalCopy)
-
-			if tt.wantField == "" {
-				assertNoFieldSet(t, got)
-
-				return
-			}
-
-			assertFieldValue(t, got, tt.wantField, tt.wantValue)
-		})
-	}
-}
-
 func assertNoInputMutation(t *testing.T, got, want []config.CommitItem) {
 	t.Helper()
 
 	for i := range got {
 		// CommitItem is not comparable (Options is a slice), so compare the
-		// fields applyIssueHint could touch.
+		// Name and Value fields manually.
 		if got[i].Name != want[i].Name || got[i].Value != want[i].Value {
 			t.Errorf("input mutated at [%d]: got %+v, want %+v",
 				i, got[i], want[i])
-		}
-	}
-}
-
-func assertNoFieldSet(t *testing.T, items []config.CommitItem) {
-	t.Helper()
-
-	for _, item := range items {
-		if item.Value != "" {
-			t.Errorf("expected no field set, but %q = %q", item.Name, item.Value)
 		}
 	}
 }
@@ -464,7 +388,7 @@ func TestFillOutForm_savesHistoryAfterCompletion(t *testing.T) {
 	hs := &fakeHistoryStore{}
 
 	// AnyOptionSet() == true skips the options form group (cleaner test).
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, hs)
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
 	if err != nil {
 		t.Fatalf("FillOutForm: %v", err)
 	}
@@ -482,7 +406,7 @@ func TestFillOutForm_mainFormAbortPropagates(t *testing.T) {
 		return nil, huh.ErrUserAborted
 	})
 
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, &fakeHistoryStore{})
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, &fakeHistoryStore{}, nil)
 	if !errors.Is(err, huh.ErrUserAborted) {
 		t.Errorf("err = %v, want huh.ErrUserAborted", err)
 	}
@@ -507,7 +431,7 @@ func TestFillOutForm_emptyHistoryPreservesAnswers(t *testing.T) {
 
 	hs := &fakeHistoryStore{} // empty history → triggers errNoHistory path
 
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, hs)
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
 	if err != nil {
 		t.Fatalf("FillOutForm: %v", err)
 	}
@@ -547,8 +471,127 @@ func TestFillOutForm_pickerAbortExitsFlow(t *testing.T) {
 		},
 	}
 
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, IssueHint{}, hs)
+	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
 	if !errors.Is(err, huh.ErrUserAborted) {
 		t.Errorf("err = %v, want huh.ErrUserAborted", err)
+	}
+}
+
+func TestIssueHint_Prefill(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		items []config.CommitItem
+		hint  IssueHint
+		want  map[string]any
+	}{
+		{
+			name: "scope_present_uses_scope",
+			items: []config.CommitItem{
+				{Name: "subject"}, {Name: "scope"}, {Name: "footer"},
+			},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix"},
+			want: map[string]any{
+				"scope": testIssueID,
+				"type":  "fix",
+			},
+		},
+		{
+			name: "footer_used_when_scope_missing",
+			items: []config.CommitItem{
+				{Name: "subject"}, {Name: "footer"},
+			},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix"},
+			want: map[string]any{
+				"footer": "Refs: " + testIssueID,
+				"type":   "fix",
+			},
+		},
+		{
+			name:  "subject_used_when_only_subject_present",
+			items: []config.CommitItem{{Name: "subject"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix"},
+			want: map[string]any{
+				"subject": "(" + testIssueID + ")",
+				"type":    "fix",
+			},
+		},
+		{
+			name:  "no_matching_field_only_type",
+			items: []config.CommitItem{{Name: "body"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix"},
+			want: map[string]any{
+				"type": "fix",
+			},
+		},
+		{
+			name:  "empty_issue_id_only_type",
+			items: []config.CommitItem{{Name: "scope"}},
+			hint:  IssueHint{BranchType: "fix"},
+			want: map[string]any{
+				"type": "fix",
+			},
+		},
+		{
+			name:  "empty_branchtype_only_issue",
+			items: []config.CommitItem{{Name: "scope"}},
+			hint:  IssueHint{IssueID: testIssueID},
+			want: map[string]any{
+				"scope": testIssueID,
+			},
+		},
+		{
+			name:  "fully_empty_hint_empty_map",
+			items: []config.CommitItem{{Name: "scope"}},
+			hint:  IssueHint{},
+			want:  map[string]any{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tt.hint.Prefill(tt.items)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Prefill() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFillOutForm_initialPrefillReachesForm(t *testing.T) {
+	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+		return &stubFormRunner{}, nil
+	})
+
+	hs := &fakeHistoryStore{}
+	prefill := map[string]any{
+		"subject": "Squashed merge of abc1234 into def5678.",
+		"type":    "feat",
+	}
+
+	msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, prefill)
+	if err != nil {
+		t.Fatalf("FillOutForm: %v", err)
+	}
+
+	got := string(msg)
+	if !strings.Contains(got, "Squashed merge of abc1234 into def5678.") {
+		t.Errorf("rendered message %q does not contain prefilled subject", got)
+	}
+	if !strings.HasPrefix(got, "feat") {
+		t.Errorf("rendered message %q does not start with prefilled type \"feat\"", got)
+	}
+
+	if len(hs.inserts) != 1 {
+		t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
+	}
+	if hs.inserts[0]["subject"] != "Squashed merge of abc1234 into def5678." {
+		t.Errorf("saved subject = %q", hs.inserts[0]["subject"])
+	}
+	if hs.inserts[0]["type"] != "feat" {
+		t.Errorf("saved type = %q", hs.inserts[0]["type"])
 	}
 }

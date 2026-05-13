@@ -166,13 +166,13 @@ func FillOutForm(
 	ctx context.Context,
 	cfg *config.AppConfig,
 	defaults tui.CommitOption,
-	hint IssueHint,
 	hs historyStore,
+	initialPrefill map[string]any,
 ) ([]byte, tui.CommitOption, error) {
-	var prefill map[string]any
+	prefill := initialPrefill
 
 	for {
-		form, extractMsg, extractOpts := loadForm(cfg, defaults, hint, prefill)
+		form, extractMsg, extractOpts := loadForm(cfg, defaults, prefill)
 
 		runner, err := runFormFn(form)
 		if err != nil {
@@ -267,28 +267,43 @@ type IssueHint struct {
 	BranchType string
 }
 
-// applyIssueHint pre-populates one field using the fallback chain:
-// scope → footer (Refs: ID) → subject ((ID)).
-// Always returns a clone of items; never mutates the original slice. If
-// hint.IssueID is empty, the clone is returned unmodified.
-func applyIssueHint(items []config.CommitItem, hint IssueHint) []config.CommitItem {
-	out := slices.Clone(items)
+// Prefill returns the issue-hint contribution to a FillOutForm prefill map.
+// IssueID populates one field using the fallback chain
+//
+//	"scope" → "footer" (as "Refs: <id>") → "subject" (as "(<id>)").
+//
+// BranchType is emitted as "type" when non-empty; loadForm validates it
+// against cfg.CommitTypes and silently ignores an unconfigured value.
+func (h IssueHint) Prefill(items []config.CommitItem) map[string]any {
+	out := map[string]any{}
 
-	if hint.IssueID == "" {
-		return out
+	if h.IssueID != "" {
+		switch {
+		case hasItem(items, "scope"):
+			out["scope"] = h.IssueID
+		case hasItem(items, "footer"):
+			out["footer"] = "Refs: " + h.IssueID
+		case hasItem(items, "subject"):
+			out["subject"] = "(" + h.IssueID + ")"
+		}
 	}
 
-	if setItemValue(out, "scope", hint.IssueID) {
-		return out
-	}
-	if setItemValue(out, "footer", "Refs: "+hint.IssueID) {
-		return out
-	}
-	if setItemValue(out, "subject", "("+hint.IssueID+")") {
-		return out
+	if h.BranchType != "" {
+		out["type"] = h.BranchType
 	}
 
 	return out
+}
+
+// hasItem reports whether items contains an entry with the given Name.
+func hasItem(items []config.CommitItem, name string) bool {
+	for i := range items {
+		if items[i].Name == name {
+			return true
+		}
+	}
+
+	return false
 }
 
 // setItemValue finds the first item with the given name and sets its Value.
@@ -315,18 +330,13 @@ func isValidCommitType(types []config.CommitTypeOption, name string) bool {
 func loadForm(
 	cfg *config.AppConfig,
 	defaults tui.CommitOption,
-	hint IssueHint,
 	prefill map[string]any,
 ) (form *huh.Form, extractMsg func() map[string]any, extractOpts func() tui.CommitOption) {
 	slog.Debug("message template", "template", cfg.CommitMessage.Template)
 
-	items := applyIssueHint(cfg.CommitMessage.Items, hint)
+	items := slices.Clone(cfg.CommitMessage.Items)
 
 	var selectedType string
-	if isValidCommitType(cfg.CommitTypes, hint.BranchType) {
-		selectedType = hint.BranchType
-	}
-
 	if prefill != nil {
 		items = applyPayload(items, prefill)
 		if t, ok := prefill["type"].(string); ok && isValidCommitType(cfg.CommitTypes, t) {

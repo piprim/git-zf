@@ -30,15 +30,17 @@ func RunInteractive(ctx context.Context, ioStreams *IO, cmd, dir string, args ..
 // os.Stdout), the file descriptor is passed through so the subprocess sees a
 // real TTY and can emit colors.
 func Cmd(ctx context.Context, ioStreams *IO, cmd, dir string, args ...string) *exec.Cmd {
-	lio := IO{}
-	if ioStreams == nil || ioStreams.In == nil {
-		lio.In = os.Stdin
-	}
-	if ioStreams == nil || ioStreams.Out == nil {
-		lio.Out = os.Stdout
-	}
-	if ioStreams == nil || ioStreams.Err == nil {
-		lio.Err = os.Stderr
+	lio := IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}
+	if ioStreams != nil {
+		if ioStreams.In != nil {
+			lio.In = ioStreams.In
+		}
+		if ioStreams.Out != nil {
+			lio.Out = ioStreams.Out
+		}
+		if ioStreams.Err != nil {
+			lio.Err = ioStreams.Err
+		}
 	}
 
 	c := exec.CommandContext(ctx, cmd, args...)

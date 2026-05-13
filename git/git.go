@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 
@@ -77,6 +78,69 @@ func (c *Client) WorkingTreeRoot() (string, error) {
 	}
 
 	return "", fmt.Errorf("filesystem type %T does not expose Root()", wt.Filesystem)
+}
+
+// IO returns the injected IO streams. Callers should write status/diagnostic
+// messages through these instead of os.Stdout/os.Stderr so Cobra-aware
+// redirection (tests, subcommand piping, future TUI capture) keeps working.
+func (c *Client) IO() *pkg.IO {
+	return c.io
+}
+
+// IsDirty reports whether the working tree has tracked-file modifications or
+// staged-but-uncommitted changes. Wraps `git status --porcelain --untracked-files=no`.
+// Untracked files are intentionally NOT counted as dirty: `git reset --hard`
+// does not touch untracked content, so their presence does not put user work
+// at risk during rollback.
+func (c *Client) IsDirty(ctx context.Context) (bool, error) {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return false, fmt.Errorf("working tree root: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=no")
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git status: %w", err)
+	}
+
+	return len(out) > 0, nil
+}
+
+// Checkout switches the working tree to branchName. Wraps `git checkout <name>`.
+// Idempotent: when the working tree is already on branchName, the call is a
+// no-op — the underlying `git checkout` is skipped so heavyweight `post-checkout`
+// hooks don't fire for a same-branch "switch".
+// Returns a wrapped error from the git CLI on failure (e.g. unknown branch,
+// untracked file collision).
+func (c *Client) Checkout(ctx context.Context, branchName string) error {
+	current, err := c.CurrentBranch()
+	if err == nil && current == branchName {
+		return nil
+	}
+
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	if err := c.runInteractive(ctx, root, "checkout", branchName); err != nil {
+		return fmt.Errorf("checkout %s: %w", branchName, err)
+	}
+
+	return nil
+}
+
+// ResolveRef returns the commit hash that `name` resolves to (with reference
+// indirection followed). Use it for read-only ref lookups from packages that
+// need a plumbing.Hash without taking a dependency on go-git's plumbing API.
+func (c *Client) ResolveRef(name string) (plumbing.Hash, error) {
+	ref, err := c.repo.Reference(plumbing.ReferenceName(name), true)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("resolve ref %q: %w", name, err)
+	}
+
+	return ref.Hash(), nil
 }
 
 // CurrentBranch returns the short name of the branch HEAD points to.

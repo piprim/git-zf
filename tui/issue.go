@@ -555,18 +555,37 @@ func IssueBranchPicker(rows []store.BranchRow, currentBranch string, selected *s
 	)
 }
 
-// IssueMergeStrategy lets the user choose between squash (default) and classic merge.
-func IssueMergeStrategy(squash *bool) *huh.Group {
-	*squash = true
+// StrategyOption is one entry rendered by IssueMergeStrategy. The picker does
+// not know what the strategies mean — callers own the option list.
+type StrategyOption struct {
+	Value string
+	Label string
+	Hint  string
+}
+
+// IssueMergeStrategy renders a single-select picker from the given options and
+// writes the chosen Value to *selected. *selected is pre-populated with the
+// first option's Value as the default.
+func IssueMergeStrategy(selected *string, options []StrategyOption) *huh.Group {
+	if len(options) > 0 {
+		*selected = options[0].Value
+	}
+
+	huhOpts := make([]huh.Option[string], len(options))
+	for i, o := range options {
+		label := o.Label
+		if o.Hint != "" {
+			label = o.Label + "\n" + descStyle.Render(o.Hint)
+		}
+
+		huhOpts[i] = huh.NewOption(label, o.Value)
+	}
 
 	return huh.NewGroup(
-		huh.NewSelect[bool]().
+		huh.NewSelect[string]().
 			Title("Merge strategy:").
-			Options(
-				huh.NewOption("Squash — combine into one commit (default)", true),
-				huh.NewOption("Classic — preserve full history (--no-ff)", false),
-			).
-			Value(squash),
+			Options(huhOpts...).
+			Value(selected),
 	)
 }
 
@@ -591,12 +610,8 @@ func IssueMergeAuthor(authors []string, author *string) *huh.Group {
 }
 
 // IssueMergeConfirm shows a merge summary and asks for final confirmation.
-// author is empty for classic merges.
-func IssueMergeConfirm(branchName, baseBranch, strategy, author string, confirmed *bool) *huh.Group {
+func IssueMergeConfirm(branchName, baseBranch, strategy string, confirmed *bool) *huh.Group {
 	desc := fmt.Sprintf("%s → %s (%s)", branchName, baseBranch, strategy)
-	if author != "" {
-		desc += "\nAuthor: " + author
-	}
 
 	return huh.NewGroup(
 		huh.NewConfirm().
