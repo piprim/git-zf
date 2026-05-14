@@ -33,7 +33,7 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 	}
 
 	c := gogithub.NewClient(nil).WithAuthToken(cfg.Token)
-	if cfg.URL != "" && cfg.URL != "https://api.github.com" {
+	if url := strings.TrimRight(cfg.URL, "/"); url != "" && url != "https://api.github.com" && url != "https://github.com" {
 		var err error
 
 		c, err = c.WithEnterpriseURLs(cfg.URL, cfg.URL)
