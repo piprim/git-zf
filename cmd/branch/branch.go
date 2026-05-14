@@ -60,7 +60,7 @@ func (b Branch) runE(cmd *cobra.Command, args []string) error {
 	case tui.BranchActionNameNew:
 		return b.newRunE(cmd, args)
 	case tui.BranchActionNamePrune:
-		return pruneRunE(cmd, pruneFlags{})
+		return b.pruneRunE(cmd, pruneFlags{})
 	default:
 		fmt.Println("Not yet implemented.")
 
@@ -218,7 +218,7 @@ func (b Branch) pruneCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flags.base, "base", "", "base branch for merge detection (default: auto-detected)")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return pruneRunE(cmd, flags)
+		return b.pruneRunE(cmd, flags)
 	}
 
 	return cmd
@@ -232,7 +232,7 @@ type pruner interface {
 	IsMergedInto(branchName, base string) (bool, error)
 }
 
-func pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
+func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	ctx := cmd.Context()
 	s, err := store.OpenRepo(ctx)
 	if err != nil {
@@ -247,6 +247,10 @@ func pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	})
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
+	}
+
+	if b.appConfig.Branch.Remote != "" {
+		c.SetRemote(b.appConfig.Branch.Remote)
 	}
 
 	return runPrune(ctx, os.Stdout, s, c, flags)

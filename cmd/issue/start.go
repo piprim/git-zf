@@ -38,6 +38,10 @@ func (i Issue) RunIssueStart(cmd *cobra.Command, flags issue.IssueStartFlags) er
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
+	if i.appConfig.Branch.Remote != "" {
+		client.SetRemote(i.appConfig.Branch.Remote)
+	}
+
 	allowedBranchTypes := make([]string, 0, len(i.appConfig.CommitTypes))
 	for _, t := range i.appConfig.CommitTypes {
 		allowedBranchTypes = append(allowedBranchTypes, t.Name)

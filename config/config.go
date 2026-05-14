@@ -55,8 +55,10 @@ type CommitMessageConfig struct {
 
 // BranchConfig holds branch-related settings.
 // Base is the branch new branches are cut from; empty means auto-detect.
+// Remote is the git remote name to use; empty means auto-detect.
 type BranchConfig struct {
-	Base string `json:"base" toml:"base" mapstructure:"base"`
+	Base   string `json:"base"   toml:"base"   mapstructure:"base"`
+	Remote string `json:"remote" toml:"remote" mapstructure:"remote"`
 }
 
 // IssueTrackerConfig holds connection parameters for one tracker instance.
@@ -109,6 +111,10 @@ func Load() (*AppConfig, error) {
 
 	if viper.IsSet("branch.base") {
 		cfg.Branch.Base = viper.GetString("branch.base")
+	}
+
+	if viper.IsSet("branch.remote") {
+		cfg.Branch.Remote = viper.GetString("branch.remote")
 	}
 
 	// issue-tracker is decoded without zeroSlice: Projects defaults to nil, so

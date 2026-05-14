@@ -76,14 +76,18 @@ func (c *Client) MergeSquash(ctx context.Context, branchName, baseBranch string)
 	return nil
 }
 
-// MergeRebase prepares featureBranch for a single-commit close. The mechanic
-// is a real `git merge --no-edit origin/<baseBranch>` (submodule-safe — handles
-// gitlinks correctly, unlike `merge --squash`) followed by `git reset --soft
-// origin/<baseBranch>`, leaving HEAD at origin/<baseBranch>, the working tree
-// at the merged state, and the index staged with the consolidated diff. The
-// transient merge commit produced by the merge step is unreachable after the
-// reset and is eventually garbage-collected — `--no-edit` is what prevents
-// git from opening $EDITOR for that throwaway commit message.
+// MergeRebase prepares featureBranch for a single-commit close. When a remote
+// is configured, it merges against remote/<baseBranch> and soft-resets to the
+// same ref. When no remote is available (local-only repo), it uses the local
+// baseBranch directly.
+//
+// The mechanic is a real `git merge --no-edit <remoteBase>` (submodule-safe —
+// handles gitlinks correctly, unlike `merge --squash`) followed by `git reset
+// --soft <remoteBase>`, leaving HEAD at <remoteBase>, the working tree at the
+// merged state, and the index staged with the consolidated diff. The transient
+// merge commit produced by the merge step is unreachable after the reset and is
+// eventually garbage-collected — `--no-edit` is what prevents git from opening
+// $EDITOR for that throwaway commit message.
 //
 // Caller is responsible for the final commit (typically via the commitizen TUI
 // form) and for rollback on failure.
@@ -93,7 +97,17 @@ func (c *Client) MergeRebase(ctx context.Context, featureBranch, baseBranch stri
 		return fmt.Errorf("working tree root: %w", err)
 	}
 
-	remoteBase := "origin/" + baseBranch
+	remote, err := c.Remote()
+	if err != nil {
+		return fmt.Errorf("resolve remote: %w", err)
+	}
+
+	var remoteBase string
+	if remote != "" {
+		remoteBase = remote + "/" + baseBranch
+	} else {
+		remoteBase = baseBranch
+	}
 
 	if err := c.Checkout(ctx, featureBranch); err != nil {
 		return fmt.Errorf("checkout %s: %w", featureBranch, err)
@@ -170,16 +184,26 @@ func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool)
 	return nil
 }
 
-// FetchOrigin runs `git fetch origin`. Returns a wrapped error when the remote
-// is unreachable or auth fails.
-func (c *Client) FetchOrigin(ctx context.Context) error {
+// Fetch runs `git fetch <remote>`. Returns nil immediately when no remote is
+// configured (local-only repo). Returns a wrapped error when the remote is
+// unreachable or auth fails.
+func (c *Client) Fetch(ctx context.Context) error {
+	remote, err := c.Remote()
+	if err != nil {
+		return fmt.Errorf("resolve remote: %w", err)
+	}
+
+	if remote == "" {
+		return nil
+	}
+
 	root, err := c.WorkingTreeRoot()
 	if err != nil {
 		return fmt.Errorf("working tree root: %w", err)
 	}
 
-	if err := c.runInteractive(ctx, root, "fetch", "origin"); err != nil {
-		return fmt.Errorf("fetch origin: %w", err)
+	if err := c.runInteractive(ctx, root, "fetch", remote); err != nil {
+		return fmt.Errorf("fetch %s: %w", remote, err)
 	}
 
 	return nil

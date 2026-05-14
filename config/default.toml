@@ -64,6 +64,7 @@ form = "multiline"
 
 [branch]
 base = ""
+remote = ""
 
 [issue-tracker]
 projects = []

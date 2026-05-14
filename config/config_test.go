@@ -39,6 +39,9 @@ func TestLoad(t *testing.T) {
 		if cfg.IssueTracker.Type != "" {
 			t.Errorf("IssueTracker.Type = %q, want empty", cfg.IssueTracker.Type)
 		}
+		if cfg.Branch.Remote != "" {
+			t.Errorf("Branch.Remote default = %q, want empty string", cfg.Branch.Remote)
+		}
 	})
 
 	t.Run("overrides commit types when viper key is set", func(t *testing.T) {
@@ -196,6 +199,22 @@ token = "tok"
 		// template preserved from built-in default (neither file sets it).
 		if cfg.CommitMessage.Template == "" {
 			t.Error("CommitMessage.Template should be preserved from built-in default")
+		}
+	})
+
+	t.Run("branch.remote is loaded when viper key is set", func(t *testing.T) {
+		viper.Reset()
+		defer viper.Reset()
+
+		viper.Set("branch.remote", "upstream")
+
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		if cfg.Branch.Remote != "upstream" {
+			t.Errorf("Branch.Remote = %q, want %q", cfg.Branch.Remote, "upstream")
 		}
 	})
 }

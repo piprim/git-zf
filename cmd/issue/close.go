@@ -72,6 +72,10 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
+	if i.appConfig.Branch.Remote != "" {
+		client.SetRemote(i.appConfig.Branch.Remote)
+	}
+
 	picked, err := getPickedBranch(ctx, s, client)
 	if err != nil {
 		return err
@@ -316,9 +320,10 @@ func (i Issue) closeTrackerIssue(cmd *cobra.Command, issueSlug string) {
 }
 
 // doRebaseClose runs the Rebase strategy: pre-flights the working tree, fetches
-// origin, validates the merge endpoint with merge-tree, performs a real
-// `git merge origin/<base>` (submodule-safe), soft-resets feature back to
-// origin/<base> so the merged diff is staged, drives the commitizen TUI form,
+// the configured remote (no-op when none), validates the merge endpoint with
+// merge-tree, performs a real `git merge <remote>/<base>` (submodule-safe —
+// falls back to local <base> when no remote), soft-resets feature back to the
+// same ref so the merged diff is staged, drives the commitizen TUI form,
 // commits, and fast-forwards local base. Rollback uses a named-return closure:
 // any failure between the soft-reset and a successful commit triggers
 // `git reset --hard <featureOrigSHA>` to atomically restore the feature ref.
@@ -343,11 +348,21 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 		return fmt.Errorf("resolve HEAD: %w", err)
 	}
 
-	if err := mc.client.FetchOrigin(ctx); err != nil {
-		return fmt.Errorf("fetch origin: %w", err)
+	remoteName, err := mc.client.Remote()
+	if err != nil {
+		return fmt.Errorf("resolve remote: %w", err)
 	}
 
-	remoteBase := "origin/" + mc.baseBranch
+	if err := mc.client.Fetch(ctx); err != nil {
+		return fmt.Errorf("fetch: %w", err)
+	}
+
+	var remoteBase string
+	if remoteName != "" {
+		remoteBase = remoteName + "/" + mc.baseBranch
+	} else {
+		remoteBase = mc.baseBranch
+	}
 
 	integrated, err := mc.client.IsAncestor(ctx, mc.pickedBranch.BranchName, remoteBase)
 	if err != nil {
@@ -393,9 +408,13 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 			mc.pickedBranch.BranchName, featureOrigSHA.String()[:shortSHALen])
 	}()
 
-	baseOriginSHA, err := mc.client.ResolveRef("refs/remotes/" + remoteBase)
+	baseRef := "refs/remotes/" + remoteBase
+	if remoteName == "" {
+		baseRef = "refs/heads/" + mc.baseBranch
+	}
+	baseOriginSHA, err := mc.client.ResolveRef(baseRef)
 	if err != nil {
-		return fmt.Errorf("resolve %s: %w", remoteBase, err)
+		return fmt.Errorf("resolve %s: %w", baseRef, err)
 	}
 
 	hint := commitpkg.IssueHint{

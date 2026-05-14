@@ -459,7 +459,18 @@ func newDiskRepoWithOrigin(t *testing.T) (*Client, string, string) {
 	return c, cloneDir, originDir
 }
 
-func TestFetchOrigin_updatesRemoteTrackingRef(t *testing.T) {
+func TestFetch_noopWhenNoRemote(t *testing.T) {
+	t.Parallel()
+
+	// newDiskRepo creates a repo with no remotes.
+	c, _ := newDiskRepo(t)
+
+	if err := c.Fetch(t.Context()); err != nil {
+		t.Fatalf("Fetch with no remote: %v", err)
+	}
+}
+
+func TestFetch_updatesRemoteTrackingRef(t *testing.T) {
 	t.Parallel()
 
 	c, _, originDir := newDiskRepoWithOrigin(t)
@@ -488,8 +499,8 @@ func TestFetchOrigin_updatesRemoteTrackingRef(t *testing.T) {
 	run("commit", "-m", "feat: added")
 	run("push", "origin", "main")
 
-	if err := c.FetchOrigin(t.Context()); err != nil {
-		t.Fatalf("FetchOrigin: %v", err)
+	if err := c.Fetch(t.Context()); err != nil {
+		t.Fatalf("Fetch: %v", err)
 	}
 
 	originTip, err := c.ResolveRef("refs/remotes/origin/main")
@@ -742,8 +753,8 @@ func TestMergeRebase_clean(t *testing.T) {
 		run(cloneDir, "commit", "-m", fmt.Sprintf("feat: f%d", i))
 	}
 
-	if err := c.FetchOrigin(t.Context()); err != nil {
-		t.Fatalf("FetchOrigin: %v", err)
+	if err := c.Fetch(t.Context()); err != nil {
+		t.Fatalf("Fetch: %v", err)
 	}
 
 	if err := c.MergeRebase(t.Context(), "feature", "main"); err != nil {
@@ -904,8 +915,8 @@ func TestMergeRebase_preservesSubmodulePointer(t *testing.T) {
 	run(cloneDir, "add", "sub")
 	run(cloneDir, "commit", "-m", "feat: bump sub to subB")
 
-	if err := c.FetchOrigin(t.Context()); err != nil {
-		t.Fatalf("FetchOrigin: %v", err)
+	if err := c.Fetch(t.Context()); err != nil {
+		t.Fatalf("Fetch: %v", err)
 	}
 
 	if err := c.MergeRebase(t.Context(), "feature", "main"); err != nil {
@@ -922,5 +933,45 @@ func TestMergeRebase_preservesSubmodulePointer(t *testing.T) {
 
 	if !strings.Contains(string(out), subB) {
 		t.Errorf("submodule pointer wrong after MergeRebase + commit.\nls-tree: %s\nwant subB: %s", out, subB)
+	}
+}
+
+func TestMergeRebase_noRemote(t *testing.T) {
+	t.Parallel()
+
+	// newDiskRepo: one commit on main, no remote.
+	c, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Create a feature branch with one commit.
+	run("checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	run("add", "feat.go")
+	run("commit", "-m", "feat: something")
+
+	// MergeRebase against local main (no remote) must not error.
+	if err := c.MergeRebase(t.Context(), "feature", "main"); err != nil {
+		t.Fatalf("MergeRebase with no remote: %v", err)
+	}
+
+	branch, err := c.CurrentBranch()
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+
+	if branch != "feature" {
+		t.Errorf("CurrentBranch = %q, want %q", branch, "feature")
 	}
 }

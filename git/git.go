@@ -38,8 +38,10 @@ type CommitOptions struct {
 
 // Client wraps a go-git repository and exposes commit operations.
 type Client struct {
-	repo *gogit.Repository
-	io   *pkg.IO
+	repo           *gogit.Repository
+	io             *pkg.IO
+	remote         string
+	remoteResolved bool
 }
 
 // NewClient opens the git repository that contains the current directory.
@@ -62,6 +64,65 @@ func NewClientAt(ioStreams *pkg.IO, dir string) (*Client, error) {
 	}
 
 	return &Client{repo: repo, io: ioStreams}, nil
+}
+
+// SetRemote pins the remote name used for all remote operations.
+// Call this when the user has configured branch.remote explicitly.
+func (c *Client) SetRemote(name string) {
+	if name == "" {
+		return
+	}
+
+	c.remote = name
+	c.remoteResolved = true
+}
+
+// Remote returns the resolved remote name, auto-detecting on first call.
+//
+// Resolution order:
+//  1. Already pinned via SetRemote → return as-is.
+//  2. Exactly one remote → cache and return its name.
+//  3. Zero remotes → return ("", nil); caller treats this as local-only.
+//  4. Multiple remotes, one named "origin" → use "origin" (git convention).
+//  5. Multiple remotes, none named "origin" → error with actionable message.
+func (c *Client) Remote() (string, error) {
+	if c.remoteResolved {
+		return c.remote, nil
+	}
+
+	remotes, err := c.repo.Remotes()
+	if err != nil {
+		return "", fmt.Errorf("list remotes: %w", err)
+	}
+
+	switch len(remotes) {
+	case 0:
+		c.remoteResolved = true
+
+		return "", nil
+	case 1:
+		c.remote = remotes[0].Config().Name
+		c.remoteResolved = true
+
+		return c.remote, nil
+	default:
+		for _, r := range remotes {
+			if r.Config().Name == "origin" {
+				c.remote = "origin"
+				c.remoteResolved = true
+
+				return c.remote, nil
+			}
+		}
+
+		names := make([]string, len(remotes))
+		for i, r := range remotes {
+			names[i] = r.Config().Name
+		}
+
+		return "", fmt.Errorf("multiple remotes found (%s); set branch.remote in .git-zf.toml",
+			strings.Join(names, ", "))
+	}
 }
 
 // WorkingTreeRoot returns the absolute path of the repository's working tree root.
@@ -289,16 +350,22 @@ func (c *Client) buildSummary(hash plumbing.Hash, msg string) (CommitSummary, er
 }
 
 // DefaultBaseBranch resolves the default base branch in priority order:
-//  1. refs/remotes/origin/HEAD
+//  1. refs/remotes/<remote>/HEAD (skipped when no remote)
 //  2. "main" if the local ref exists
 //  3. "master" if the local ref exists
 func (c *Client) DefaultBaseBranch() (string, error) {
-	// Try remote HEAD first.
-	if ref, err := c.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/HEAD"), false); err == nil {
-		if ref.Type() == plumbing.SymbolicReference {
-			parts := strings.Split(ref.Target().String(), "/")
+	remote, err := c.Remote()
+	if err != nil {
+		return "", fmt.Errorf("resolve remote: %w", err)
+	}
 
-			return parts[len(parts)-1], nil
+	if remote != "" {
+		if ref, err := c.repo.Reference(plumbing.ReferenceName("refs/remotes/"+remote+"/HEAD"), false); err == nil {
+			if ref.Type() == plumbing.SymbolicReference {
+				parts := strings.Split(ref.Target().String(), "/")
+
+				return parts[len(parts)-1], nil
+			}
 		}
 	}
 
@@ -341,8 +408,16 @@ func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
 
 	baseRef, err := c.repo.Reference(plumbing.ReferenceName("refs/heads/"+baseBranch), true)
 	if err != nil {
-		// Try remote tracking branch as fallback.
-		baseRef, err = c.repo.Reference(plumbing.ReferenceName("refs/remotes/origin/"+baseBranch), true)
+		// Try remote tracking branch as fallback when a remote is configured.
+		remote, rErr := c.Remote()
+		if rErr != nil {
+			return false, fmt.Errorf("resolve remote: %w", rErr)
+		}
+
+		if remote != "" {
+			baseRef, err = c.repo.Reference(plumbing.ReferenceName("refs/remotes/"+remote+"/"+baseBranch), true)
+		}
+
 		if err != nil {
 			return false, fmt.Errorf("resolve base branch %q: %w", baseBranch, err)
 		}

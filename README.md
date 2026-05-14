@@ -109,7 +109,7 @@ The close flow:
 
 | Strategy | Mechanism | History on base | Submodule-safe |
 |---|---|---|---|
-| **Rebase** *(default)* | Real `git merge origin/<base>` + `git reset --soft origin/<base>` | one clean commit | ✅ yes |
+| **Rebase** *(default)* | Real `git merge <remote>/<base>` + `git reset --soft <remote>/<base>` | one clean commit | ✅ yes |
 | **Squash** | `git merge --squash` | one commit, no merge parent | ⚠️ no — `--squash` is known to mishandle submodule gitlinks |
 | **Classic** | `git merge --no-ff` | merge commit + full feature history | ✅ yes |
 
@@ -127,24 +127,26 @@ Rebase produces the same end state as Squash (one clean commit on the local base
    - Checkout the feature branch (idempotent — no `post-checkout` hook
      fires if you're already there).
    - Capture the feature tip SHA for safe rollback.
-   - `git fetch origin` to pick up the latest remote base.
-   - `git merge-base --is-ancestor feature origin/<base>` → if feature
-     has no commits ahead of `origin/<base>`, abort cleanly
+   - `git fetch <remote>` to pick up the latest remote base (no-op when
+     no remote is configured — see `branch.remote` below).
+   - `git merge-base --is-ancestor feature <remote>/<base>` → if feature
+     has no commits ahead of `<remote>/<base>`, abort cleanly
      ("already integrated?"). Avoids producing an empty commit.
-   - `git merge-tree` dry-run against `origin/<base>` → abort with the
+   - `git merge-tree` dry-run against `<remote>/<base>` → abort with the
      conflict file list if the endpoint can't merge cleanly.
 
 3. Execute
-   - `git merge --no-edit origin/<base>` — a *real* merge, which handles
+   - `git merge --no-edit <remote>/<base>` — a *real* merge, which handles
      submodule gitlinks correctly. `--no-edit` suppresses $EDITOR for
-     the transient merge-commit message.
-   - `git reset --soft origin/<base>` — collapse the merge into one
-     staged diff against `origin/<base>`. HEAD moves back, working tree
-     stays at the merged state, the index is fully staged.
+     the transient merge-commit message. When no remote is configured,
+     merges against the local `<base>` branch directly.
+   - `git reset --soft <remote>/<base>` — collapse the merge into one
+     staged diff. HEAD moves back, working tree stays at the merged state,
+     the index is fully staged.
 
 4. TUI commit form
    - The commitizen form opens pre-filled with type, scope, and the
-     subject `Squashed close of <feature-tip> into <origin-base-tip>.`
+     subject `Squashed close of <feature-tip> into <base-tip>.`
    - Submit → `git commit` lands one clean commit on the feature branch.
    - Esc / Ctrl+C / hook rejection → atomic rollback: feature is reset
      to its captured original tip via `git reset --hard`. You see
@@ -169,10 +171,10 @@ Submodules are handled correctly because the gitlink quirk only affects `merge -
 
 The rebase orchestrator captures the feature ref's SHA *before* mutating anything. From that point until the final commit lands, any failure — TUI abort, pre-commit hook rejection, commit-msg hook rejection, signing failure — triggers `git reset --hard <featureOrigSHA>` on the feature branch. The feature is restored atomically and you see a `Rolled back: …` message on stderr. If the rollback itself fails, both the original error and the rollback error are surfaced so you know the repo is in a half-state and why.
 
-The *post-commit* failure mode is treated differently. If the commit landed on the feature branch but `git merge --ff-only` refuses (because local `<base>` has diverged from `origin/<base>`), the commit is **not** rolled back — it already exists as a clean, valid commit on the feature branch. Instead you see:
+The *post-commit* failure mode is treated differently. If the commit landed on the feature branch but `git merge --ff-only` refuses (because local `<base>` has diverged from the remote), the commit is **not** rolled back — it already exists as a clean, valid commit on the feature branch. Instead you see:
 
 ```
-Commit created on "<feature>" but local <base> has diverged from origin/<base>.
+Commit created on "<feature>" but local <base> has diverged from <remote>/<base>.
 Run `git pull --ff-only` on <base>, then `git merge --ff-only <feature>` to land it.
 ```
 
@@ -289,7 +291,7 @@ Config file: `.git-zf.json` (JSON). Two locations are supported; the repo-level 
 
 Use `git zf config init` to create the file interactively, or `git zf config show` to inspect the currently active configuration.
 
-The default configuration is embedded in [`config/default.json`](https://github.com/piprim/git-zf/blob/master/config/default.json).
+The default configuration is embedded in [`config/default.toml`](https://github.com/piprim/git-zf/blob/master/config/default.toml).
 
 ### Commit types
 
@@ -331,15 +333,24 @@ Branch names follow the format `{issue-id}@{type}@{slugified-title}@{short-uuid}
 ABC-42@feat@add-oauth-login@550e8400
 ```
 
-To override the base branch (default: auto-detected from `origin/HEAD`, then `main`, then `master`):
+To override the base branch or the remote name:
 
-```json
-{
-  "branch": {
-    "base": "develop"
-  }
-}
+```toml
+[branch]
+base   = "develop"   # default: auto-detected from <remote>/HEAD, then "main", then "master"
+remote = "upstream"  # default: auto-detected (see below)
 ```
+
+**Remote auto-detection** — when `branch.remote` is not set, git-zf resolves the remote as follows:
+
+| Repo state | Remote used |
+|---|---|
+| No remotes | Local-only mode — fetch is skipped, branches merged against local base |
+| Exactly one remote | That remote, regardless of its name |
+| Multiple remotes, one named `"origin"` | `"origin"` (standard git convention) |
+| Multiple remotes, none named `"origin"` | **Error** — set `branch.remote` explicitly |
+
+Set `branch.remote` whenever your primary remote is not named `"origin"` or when you have multiple remotes and want to pin one explicitly.
 
 ### Tracker integration
 

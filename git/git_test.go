@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	gogit "github.com/go-git/go-git/v6"
+	gogitcfg "github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/storage/memory"
 
@@ -419,7 +420,7 @@ func TestDefaultBaseBranch(t *testing.T) {
 			t.Fatalf("set origin/HEAD: %v", err)
 		}
 
-		client := &Client{repo: repo}
+		client := &Client{repo: repo, remote: "origin", remoteResolved: true}
 		base, err := client.DefaultBaseBranch()
 		if err != nil {
 			t.Fatalf("DefaultBaseBranch: %v", err)
@@ -457,6 +458,45 @@ func TestDefaultBaseBranch(t *testing.T) {
 		}
 		if base != "main" {
 			t.Errorf("DefaultBaseBranch = %q, want %q", base, "main")
+		}
+	})
+
+	t.Run("uses configured remote instead of origin for HEAD lookup", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		// Simulate refs/remotes/pi/HEAD pointing to "develop".
+		symRef := plumbing.NewSymbolicReference(
+			plumbing.ReferenceName("refs/remotes/pi/HEAD"),
+			plumbing.ReferenceName("refs/remotes/pi/develop"),
+		)
+		if err := repo.Storer.SetReference(symRef); err != nil {
+			t.Fatalf("set pi/HEAD: %v", err)
+		}
+
+		client := &Client{repo: repo, remote: "pi", remoteResolved: true}
+		base, err := client.DefaultBaseBranch()
+		if err != nil {
+			t.Fatalf("DefaultBaseBranch: %v", err)
+		}
+		if base != "develop" {
+			t.Errorf("DefaultBaseBranch = %q, want %q", base, "develop")
+		}
+	})
+
+	t.Run("skips remote HEAD lookup when no remote and falls back to local", func(t *testing.T) {
+		t.Parallel()
+
+		// newTestRepo creates a repo with no remotes; go-git default branch is "master".
+		repo := newTestRepo(t)
+		client := &Client{repo: repo}
+
+		base, err := client.DefaultBaseBranch()
+		if err != nil {
+			t.Fatalf("DefaultBaseBranch: %v", err)
+		}
+		if base != "master" {
+			t.Errorf("DefaultBaseBranch = %q, want %q", base, "master")
 		}
 	})
 }
@@ -528,6 +568,45 @@ func TestIsMergedInto(t *testing.T) {
 		}
 		if merged {
 			t.Error("IsMergedInto = true, want false for unmerged branch")
+		}
+	})
+
+	t.Run("uses configured remote for tracking ref fallback", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+
+		// Create feature branch from the initial commit.
+		wt, err := repo.Worktree()
+		if err != nil {
+			t.Fatalf("worktree: %v", err)
+		}
+		if err := wt.Checkout(&gogit.CheckoutOptions{Branch: "refs/heads/feature", Create: true}); err != nil {
+			t.Fatalf("checkout feature: %v", err)
+		}
+
+		// Read HEAD hash (same commit on both branches at this point).
+		head, err := repo.Head()
+		if err != nil {
+			t.Fatalf("head: %v", err)
+		}
+
+		// Simulate refs/remotes/pi/main pointing at HEAD.
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(
+			plumbing.ReferenceName("refs/remotes/pi/main"),
+			head.Hash(),
+		)); err != nil {
+			t.Fatalf("set pi/main: %v", err)
+		}
+
+		client := &Client{repo: repo, remote: "pi", remoteResolved: true}
+		// feature == pi/main so it should be considered merged.
+		merged, err := client.IsMergedInto("feature", "main")
+		if err != nil {
+			t.Fatalf("IsMergedInto: %v", err)
+		}
+		if !merged {
+			t.Error("IsMergedInto = false, want true")
 		}
 	})
 }
@@ -739,6 +818,169 @@ func TestIsDirty(t *testing.T) {
 
 		if dirty {
 			t.Error("expected untracked-only repo to report dirty=false")
+		}
+	})
+}
+
+func TestRemote(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns empty string for repo with no remotes", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		c := &Client{repo: repo}
+
+		remote, err := c.Remote()
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if remote != "" {
+			t.Errorf("Remote = %q, want %q", remote, "")
+		}
+	})
+
+	t.Run("returns the sole remote name", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
+			Name: "pi",
+			URLs: []string{"https://example.com/repo.git"},
+		}); err != nil {
+			t.Fatalf("CreateRemote: %v", err)
+		}
+		c := &Client{repo: repo}
+
+		remote, err := c.Remote()
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if remote != "pi" {
+			t.Errorf("Remote = %q, want %q", remote, "pi")
+		}
+	})
+
+	t.Run("returns origin when multiple remotes include origin", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		for _, name := range []string{"origin", "upstream"} {
+			if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
+				Name: name,
+				URLs: []string{"https://example.com/" + name + ".git"},
+			}); err != nil {
+				t.Fatalf("CreateRemote %s: %v", name, err)
+			}
+		}
+		c := &Client{repo: repo}
+
+		remote, err := c.Remote()
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if remote != "origin" {
+			t.Errorf("Remote = %q, want %q", remote, "origin")
+		}
+	})
+
+	t.Run("errors when multiple remotes exist with no origin", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		for _, name := range []string{"pi", "upstream"} {
+			if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
+				Name: name,
+				URLs: []string{"https://example.com/" + name + ".git"},
+			}); err != nil {
+				t.Fatalf("CreateRemote %s: %v", name, err)
+			}
+		}
+		c := &Client{repo: repo}
+
+		_, err := c.Remote()
+		if err == nil {
+			t.Fatal("Remote: expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "branch.remote") {
+			t.Errorf("error %q does not mention branch.remote config key", err.Error())
+		}
+	})
+
+	t.Run("SetRemote pins the name, bypassing detection", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		c := &Client{repo: repo}
+		c.SetRemote("pi")
+
+		remote, err := c.Remote()
+		if err != nil {
+			t.Fatalf("Remote: %v", err)
+		}
+		if remote != "pi" {
+			t.Errorf("Remote = %q, want %q", remote, "pi")
+		}
+	})
+
+	t.Run("caches result on second call", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
+			Name: "pi",
+			URLs: []string{"https://example.com/repo.git"},
+		}); err != nil {
+			t.Fatalf("CreateRemote: %v", err)
+		}
+		c := &Client{repo: repo}
+
+		r1, err := c.Remote()
+		if err != nil {
+			t.Fatalf("first Remote: %v", err)
+		}
+		// Simulate the remote disappearing — cache should win.
+		if err := repo.DeleteRemote("pi"); err != nil {
+			t.Fatalf("DeleteRemote: %v", err)
+		}
+		r2, err := c.Remote()
+		if err != nil {
+			t.Fatalf("second Remote: %v", err)
+		}
+		if r1 != r2 {
+			t.Errorf("second call = %q, want cached %q", r2, r1)
+		}
+	})
+
+	t.Run("caches no-remote result on second call", func(t *testing.T) {
+		t.Parallel()
+
+		repo := newTestRepo(t)
+		c := &Client{repo: repo}
+
+		// First call: no remotes → ("", nil)
+		r1, err := c.Remote()
+		if err != nil {
+			t.Fatalf("first Remote: %v", err)
+		}
+		if r1 != "" {
+			t.Fatalf("first Remote = %q, want empty", r1)
+		}
+
+		// Add a remote — second call must return cached "" (not re-detect)
+		if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
+			Name: "pi",
+			URLs: []string{"https://example.com/repo.git"},
+		}); err != nil {
+			t.Fatalf("CreateRemote: %v", err)
+		}
+
+		r2, err := c.Remote()
+		if err != nil {
+			t.Fatalf("second Remote: %v", err)
+		}
+		if r2 != "" {
+			t.Errorf("second Remote = %q, want cached empty string", r2)
 		}
 	})
 }
