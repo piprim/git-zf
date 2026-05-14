@@ -82,152 +82,188 @@ func TestAssembleMessage(t *testing.T) {
 	}
 }
 
-func TestBuildAuthorList_deduplication(t *testing.T) {
-	all := []string{
-		"Alice <alice@example.com>",
-		"Bob <bob@example.com>",
-		"Alice <alice@example.com>",
-	}
-	got := BuildAuthorList(all, "")
-	want := []string{"Alice <alice@example.com>", "Bob <bob@example.com>"}
-	if len(got) != len(want) {
-		t.Fatalf("len: got %d, want %d — list: %v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("[%d] got %q, want %q", i, got[i], want[i])
+func TestBuildAuthorList(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deduplicates repeated entries", func(t *testing.T) {
+		t.Parallel()
+
+		all := []string{
+			"Alice <alice@example.com>",
+			"Bob <bob@example.com>",
+			"Alice <alice@example.com>",
 		}
-	}
-}
-
-func TestBuildAuthorList_sortOrder(t *testing.T) {
-	all := []string{
-		"Zoe <zoe@example.com>",
-		"Alice <alice@example.com>",
-		"Mia <mia@example.com>",
-	}
-	got := BuildAuthorList(all, "")
-	for i := 1; i < len(got); i++ {
-		if got[i] < got[i-1] {
-			t.Errorf("not sorted at [%d]: %q < %q", i, got[i], got[i-1])
+		got := BuildAuthorList(all, "")
+		want := []string{"Alice <alice@example.com>", "Bob <bob@example.com>"}
+		if len(got) != len(want) {
+			t.Fatalf("len: got %d, want %d — list: %v", len(got), len(want), got)
 		}
-	}
-}
-
-func TestBuildAuthorList_currentUserFirst(t *testing.T) {
-	all := []string{
-		"Alice <alice@example.com>",
-		"Bob <bob@example.com>",
-		"Current User <current@example.com>",
-	}
-	current := "Current User <current@example.com>"
-	got := BuildAuthorList(all, current)
-
-	if len(got) == 0 {
-		t.Fatal("empty list")
-	}
-	if got[0] != current {
-		t.Errorf("first entry: got %q, want %q", got[0], current)
-	}
-	for _, a := range got[1:] {
-		if a == current {
-			t.Errorf("current user duplicated in list: %v", got)
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("[%d] got %q, want %q", i, got[i], want[i])
+			}
 		}
-	}
-}
+	})
 
-func TestBuildAuthorList_currentUserNotInHistory(t *testing.T) {
-	all := []string{"Alice <alice@example.com>", "Bob <bob@example.com>"}
-	current := "New User <new@example.com>"
-	got := BuildAuthorList(all, current)
-	if got[0] != current {
-		t.Errorf("first entry: got %q, want %q", got[0], current)
-	}
-	if len(got) != 3 {
-		t.Errorf("len: got %d, want 3 — list: %v", len(got), got)
-	}
-}
+	t.Run("returns entries in sorted order", func(t *testing.T) {
+		t.Parallel()
 
-func TestBuildAuthorList_nilInput(t *testing.T) {
-	got := BuildAuthorList(nil, "")
-	if len(got) != 0 {
-		t.Errorf("expected empty, got %v", got)
-	}
-	got2 := BuildAuthorList(nil, "Alice <alice@example.com>")
-	if len(got2) != 1 || got2[0] != "Alice <alice@example.com>" {
-		t.Errorf("expected [Alice], got %v", got2)
-	}
-}
+		all := []string{
+			"Zoe <zoe@example.com>",
+			"Alice <alice@example.com>",
+			"Mia <mia@example.com>",
+		}
+		got := BuildAuthorList(all, "")
+		for i := 1; i < len(got); i++ {
+			if got[i] < got[i-1] {
+				t.Errorf("not sorted at [%d]: %q < %q", i, got[i], got[i-1])
+			}
+		}
+	})
 
-func TestBuildAuthorList_currentIsOnlyEntry(t *testing.T) {
-	got := BuildAuthorList([]string{"Alice <alice@example.com>"}, "Alice <alice@example.com>")
-	if len(got) != 1 || got[0] != "Alice <alice@example.com>" {
-		t.Errorf("expected [Alice], got %v", got)
-	}
-}
+	t.Run("places current user first when present in history", func(t *testing.T) {
+		t.Parallel()
 
-func TestBuildAuthorList_currentAppearsMultipleTimes(t *testing.T) {
-	got := BuildAuthorList(
-		[]string{"Alice <alice@example.com>", "Alice <alice@example.com>"},
-		"Alice <alice@example.com>",
-	)
-	if len(got) != 1 || got[0] != "Alice <alice@example.com>" {
-		t.Errorf("expected [Alice] (len 1), got %v", got)
-	}
+		all := []string{
+			"Alice <alice@example.com>",
+			"Bob <bob@example.com>",
+			"Current User <current@example.com>",
+		}
+		current := "Current User <current@example.com>"
+		got := BuildAuthorList(all, current)
+
+		if len(got) == 0 {
+			t.Fatal("empty list")
+		}
+		if got[0] != current {
+			t.Errorf("first entry: got %q, want %q", got[0], current)
+		}
+		for _, a := range got[1:] {
+			if a == current {
+				t.Errorf("current user duplicated in list: %v", got)
+			}
+		}
+	})
+
+	t.Run("prepends current user when not already in history", func(t *testing.T) {
+		t.Parallel()
+
+		all := []string{"Alice <alice@example.com>", "Bob <bob@example.com>"}
+		current := "New User <new@example.com>"
+		got := BuildAuthorList(all, current)
+		if got[0] != current {
+			t.Errorf("first entry: got %q, want %q", got[0], current)
+		}
+		if len(got) != 3 {
+			t.Errorf("len: got %d, want 3 — list: %v", len(got), got)
+		}
+	})
+
+	t.Run("returns empty slice for nil input with no current user", func(t *testing.T) {
+		t.Parallel()
+
+		got := BuildAuthorList(nil, "")
+		if len(got) != 0 {
+			t.Errorf("expected empty, got %v", got)
+		}
+		got2 := BuildAuthorList(nil, "Alice <alice@example.com>")
+		if len(got2) != 1 || got2[0] != "Alice <alice@example.com>" {
+			t.Errorf("expected [Alice], got %v", got2)
+		}
+	})
+
+	t.Run("returns single-entry list when current is the only item", func(t *testing.T) {
+		t.Parallel()
+
+		got := BuildAuthorList([]string{"Alice <alice@example.com>"}, "Alice <alice@example.com>")
+		if len(got) != 1 || got[0] != "Alice <alice@example.com>" {
+			t.Errorf("expected [Alice], got %v", got)
+		}
+	})
+
+	t.Run("deduplicates current user that appears multiple times in history", func(t *testing.T) {
+		t.Parallel()
+
+		got := BuildAuthorList(
+			[]string{"Alice <alice@example.com>", "Alice <alice@example.com>"},
+			"Alice <alice@example.com>",
+		)
+		if len(got) != 1 || got[0] != "Alice <alice@example.com>" {
+			t.Errorf("expected [Alice] (len 1), got %v", got)
+		}
+	})
 }
 
 const testIssueID = "ABC-1"
 
-func TestSetItemValue_found(t *testing.T) {
-	items := []config.CommitItem{
-		{Name: "scope"},
-		{Name: "subject"},
-	}
+func TestSetItemValue(t *testing.T) {
+	t.Parallel()
 
-	ok := setItemValue(items, "scope", testIssueID)
-	if !ok {
-		t.Fatal("setItemValue: returned false, want true")
-	}
-	if items[0].Value != testIssueID {
-		t.Errorf("items[0].Value = %q, want %q", items[0].Value, testIssueID)
-	}
+	t.Run("sets value and returns true when name is found", func(t *testing.T) {
+		t.Parallel()
+
+		items := []config.CommitItem{
+			{Name: "scope"},
+			{Name: "subject"},
+		}
+
+		ok := setItemValue(items, "scope", testIssueID)
+		if !ok {
+			t.Fatal("setItemValue: returned false, want true")
+		}
+		if items[0].Value != testIssueID {
+			t.Errorf("items[0].Value = %q, want %q", items[0].Value, testIssueID)
+		}
+	})
+
+	t.Run("returns false and leaves slice unchanged when name is missing", func(t *testing.T) {
+		t.Parallel()
+
+		items := []config.CommitItem{
+			{Name: "subject"},
+		}
+
+		ok := setItemValue(items, "scope", testIssueID)
+		if ok {
+			t.Error("setItemValue: returned true, want false")
+		}
+		if items[0].Name != "subject" || items[0].Value != "" {
+			t.Errorf("items[0] mutated: got %+v", items[0])
+		}
+	})
 }
 
-func TestSetItemValue_notFound(t *testing.T) {
-	items := []config.CommitItem{
-		{Name: "subject"},
-	}
+func TestIsValidCommitType(t *testing.T) {
+	t.Parallel()
 
-	ok := setItemValue(items, "scope", testIssueID)
-	if ok {
-		t.Error("setItemValue: returned true, want false")
-	}
-	if items[0].Name != "subject" || items[0].Value != "" {
-		t.Errorf("items[0] mutated: got %+v", items[0])
-	}
-}
+	t.Run("returns true when type is in the list", func(t *testing.T) {
+		t.Parallel()
 
-func TestIsValidCommitType_match(t *testing.T) {
-	types := []config.CommitTypeOption{
-		{Name: "feat"},
-		{Name: "fix"},
-	}
-	if !isValidCommitType(types, "feat") {
-		t.Error("isValidCommitType(feat) = false, want true")
-	}
-}
+		types := []config.CommitTypeOption{
+			{Name: "feat"},
+			{Name: "fix"},
+		}
+		if !isValidCommitType(types, "feat") {
+			t.Error("isValidCommitType(feat) = false, want true")
+		}
+	})
 
-func TestIsValidCommitType_noMatch(t *testing.T) {
-	types := []config.CommitTypeOption{{Name: "feat"}}
-	if isValidCommitType(types, "wip") {
-		t.Error("isValidCommitType(wip) = true, want false")
-	}
-}
+	t.Run("returns false when type is not in the list", func(t *testing.T) {
+		t.Parallel()
 
-func TestIsValidCommitType_emptyTypes(t *testing.T) {
-	if isValidCommitType(nil, "feat") {
-		t.Error("isValidCommitType(nil, feat) = true, want false")
-	}
+		types := []config.CommitTypeOption{{Name: "feat"}}
+		if isValidCommitType(types, "wip") {
+			t.Error("isValidCommitType(wip) = true, want false")
+		}
+	})
+
+	t.Run("returns false for a nil type list", func(t *testing.T) {
+		t.Parallel()
+
+		if isValidCommitType(nil, "feat") {
+			t.Error("isValidCommitType(nil, feat) = true, want false")
+		}
+	})
 }
 
 func assertNoInputMutation(t *testing.T, got, want []config.CommitItem) {
@@ -293,80 +329,98 @@ func swapRunFormFn(t *testing.T, fn func(*huh.Form) (formRunner, error)) {
 	t.Cleanup(func() { runFormFn = orig })
 }
 
-func TestApplyPayload_setsMatchingItems(t *testing.T) {
-	items := []config.CommitItem{
-		{Name: "scope"},
-		{Name: "subject"},
-		{Name: "body"},
-	}
-	payload := map[string]any{
-		"scope":   "auth",
-		"subject": "add OAuth",
-		"unknown": "ignored",
-	}
+func TestApplyPayload(t *testing.T) {
+	t.Parallel()
 
-	got := applyPayload(items, payload)
+	t.Run("sets matching string fields and ignores unknown keys", func(t *testing.T) {
+		t.Parallel()
 
-	assertFieldValue(t, got, "scope", "auth")
-	assertFieldValue(t, got, "subject", "add OAuth")
-	assertFieldValue(t, got, "body", "")
+		items := []config.CommitItem{
+			{Name: "scope"},
+			{Name: "subject"},
+			{Name: "body"},
+		}
+		payload := map[string]any{
+			"scope":   "auth",
+			"subject": "add OAuth",
+			"unknown": "ignored",
+		}
+
+		got := applyPayload(items, payload)
+
+		assertFieldValue(t, got, "scope", "auth")
+		assertFieldValue(t, got, "subject", "add OAuth")
+		assertFieldValue(t, got, "body", "")
+	})
+
+	t.Run("does not mutate the input slice", func(t *testing.T) {
+		t.Parallel()
+
+		items := []config.CommitItem{{Name: "scope"}, {Name: "subject"}}
+		original := slices.Clone(items)
+
+		applyPayload(items, map[string]any{"scope": "changed"})
+
+		assertNoInputMutation(t, items, original)
+	})
+
+	t.Run("ignores non-string payload values", func(t *testing.T) {
+		t.Parallel()
+
+		items := []config.CommitItem{{Name: "scope"}}
+
+		got := applyPayload(items, map[string]any{"scope": 42})
+
+		assertFieldValue(t, got, "scope", "")
+	})
 }
 
-func TestApplyPayload_doesNotMutateInput(t *testing.T) {
-	items := []config.CommitItem{{Name: "scope"}, {Name: "subject"}}
-	original := slices.Clone(items)
+func TestHistoryLabel(t *testing.T) {
+	t.Parallel()
 
-	applyPayload(items, map[string]any{"scope": "changed"})
+	t.Run("formats commit message and timestamp", func(t *testing.T) {
+		t.Parallel()
 
-	assertNoInputMutation(t, items, original)
-}
+		row := store.CommandHistoryRow{
+			ID:        1,
+			Payload:   []byte(`{"type":"feat","scope":"auth","subject":"add OAuth"}`),
+			CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
+		}
+		tmpl := `{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}`
 
-func TestApplyPayload_nonStringValuesIgnored(t *testing.T) {
-	items := []config.CommitItem{{Name: "scope"}}
+		label, err := historyLabel(tmpl, row)
 
-	got := applyPayload(items, map[string]any{"scope": 42})
+		if err != nil {
+			t.Fatalf("historyLabel: %v", err)
+		}
+		if !strings.Contains(label, "feat(auth): add OAuth") {
+			t.Errorf("label does not contain message: %q", label)
+		}
+		if !strings.Contains(label, "[2026-05-10 14:32]") {
+			t.Errorf("label does not contain date: %q", label)
+		}
+	})
 
-	assertFieldValue(t, got, "scope", "")
-}
+	t.Run("truncates subject when it exceeds the max label length", func(t *testing.T) {
+		t.Parallel()
 
-func TestHistoryLabel_format(t *testing.T) {
-	row := store.CommandHistoryRow{
-		ID:        1,
-		Payload:   []byte(`{"type":"feat","scope":"auth","subject":"add OAuth"}`),
-		CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
-	}
-	tmpl := `{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}`
+		longSubject := strings.Repeat("x", 80)
+		row := store.CommandHistoryRow{
+			ID:        2,
+			Payload:   []byte(`{"type":"feat","subject":"` + longSubject + `"}`),
+			CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
+		}
 
-	label, err := historyLabel(tmpl, row)
+		label, err := historyLabel(`{{.type}}: {{.subject}}`, row)
+		if err != nil {
+			t.Fatalf("historyLabel: %v", err)
+		}
 
-	if err != nil {
-		t.Fatalf("historyLabel: %v", err)
-	}
-	if !strings.Contains(label, "feat(auth): add OAuth") {
-		t.Errorf("label does not contain message: %q", label)
-	}
-	if !strings.Contains(label, "[2026-05-10 14:32]") {
-		t.Errorf("label does not contain date: %q", label)
-	}
-}
-
-func TestHistoryLabel_truncatesLongSubject(t *testing.T) {
-	longSubject := strings.Repeat("x", 80)
-	row := store.CommandHistoryRow{
-		ID:        2,
-		Payload:   []byte(`{"type":"feat","subject":"` + longSubject + `"}`),
-		CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
-	}
-
-	label, err := historyLabel(`{{.type}}: {{.subject}}`, row)
-	if err != nil {
-		t.Fatalf("historyLabel: %v", err)
-	}
-
-	subject := strings.SplitN(label, "  [", 2)[0]
-	if len(strings.TrimRight(subject, " ")) > maxLabelLen {
-		t.Errorf("subject portion too long: %d > %d", len(strings.TrimRight(subject, " ")), maxLabelLen)
-	}
+		subject := strings.SplitN(label, "  [", 2)[0]
+		if len(strings.TrimRight(subject, " ")) > maxLabelLen {
+			t.Errorf("subject portion too long: %d > %d", len(strings.TrimRight(subject, " ")), maxLabelLen)
+		}
+	})
 }
 
 // minimalCfg returns a minimal AppConfig sufficient for FillOutForm integration tests.
@@ -380,101 +434,140 @@ func minimalCfg() *config.AppConfig {
 	}
 }
 
-func TestFillOutForm_savesHistoryAfterCompletion(t *testing.T) {
-	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
-		return &stubFormRunner{}, nil
-	})
+func TestFillOutForm(t *testing.T) {
+	// Not parallel — subtests swap the global runFormFn.
 
-	hs := &fakeHistoryStore{}
-
-	// AnyOptionSet() == true skips the options form group (cleaner test).
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
-	if err != nil {
-		t.Fatalf("FillOutForm: %v", err)
-	}
-
-	if len(hs.inserts) != 1 {
-		t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
-	}
-	if hs.inserts[0]["subject"] != "my change" {
-		t.Errorf("saved subject = %q, want %q", hs.inserts[0]["subject"], "my change")
-	}
-}
-
-func TestFillOutForm_mainFormAbortPropagates(t *testing.T) {
-	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
-		return nil, huh.ErrUserAborted
-	})
-
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, &fakeHistoryStore{}, nil)
-	if !errors.Is(err, huh.ErrUserAborted) {
-		t.Errorf("err = %v, want huh.ErrUserAborted", err)
-	}
-}
-
-func TestFillOutForm_emptyHistoryPreservesAnswers(t *testing.T) {
-	call := 0
-	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
-		call++
-		switch call {
-		case 1:
-			// Main form: user presses ctrl+r.
-			return &stubFormRunner{wantHistoryVal: true}, nil
-		case 2:
-			// "No commit history yet." dialog: user dismisses it.
+	t.Run("saves history after successful form completion", func(t *testing.T) {
+		swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
 			return &stubFormRunner{}, nil
-		default:
-			// Re-opened main form: user submits.
-			return &stubFormRunner{}, nil
+		})
+
+		hs := &fakeHistoryStore{}
+
+		// AnyOptionSet() == true skips the options form group (cleaner test).
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
+		if err != nil {
+			t.Fatalf("FillOutForm: %v", err)
+		}
+
+		if len(hs.inserts) != 1 {
+			t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
+		}
+		if hs.inserts[0]["subject"] != "my change" {
+			t.Errorf("saved subject = %q, want %q", hs.inserts[0]["subject"], "my change")
 		}
 	})
 
-	hs := &fakeHistoryStore{} // empty history → triggers errNoHistory path
+	t.Run("propagates user abort from the main form", func(t *testing.T) {
+		swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+			return nil, huh.ErrUserAborted
+		})
 
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
-	if err != nil {
-		t.Fatalf("FillOutForm: %v", err)
-	}
-
-	// Three runFormFn invocations: main form, dialog, main form again.
-	if call != 3 {
-		t.Errorf("runFormFn calls: got %d, want 3", call)
-	}
-
-	// The original answers ("my change" from minimalCfg) must have been preserved
-	// across the empty-history detour, so the final submission saves them.
-	if len(hs.inserts) != 1 {
-		t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
-	}
-	if hs.inserts[0]["subject"] != "my change" {
-		t.Errorf("saved subject = %q, want %q (answers were lost on empty-history detour)",
-			hs.inserts[0]["subject"], "my change")
-	}
-}
-
-func TestFillOutForm_pickerAbortExitsFlow(t *testing.T) {
-	call := 0
-	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
-		call++
-		if call == 1 {
-			// Main form: user presses ctrl+r.
-			return &stubFormRunner{wantHistoryVal: true}, nil
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, &fakeHistoryStore{}, nil)
+		if !errors.Is(err, huh.ErrUserAborted) {
+			t.Errorf("err = %v, want huh.ErrUserAborted", err)
 		}
-
-		// Picker form: user aborts.
-		return nil, huh.ErrUserAborted
 	})
 
-	hs := &fakeHistoryStore{
-		rows: []store.CommandHistoryRow{
-			{ID: 1, Payload: []byte(`{"type":"feat","subject":"prev"}`), CreatedAt: time.Now()},
-		},
-	}
+	t.Run("preserves original answers when history is empty", func(t *testing.T) {
+		call := 0
+		swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+			call++
+			switch call {
+			case 1:
+				// Main form: user presses ctrl+r.
+				return &stubFormRunner{wantHistoryVal: true}, nil
+			case 2:
+				// "No commit history yet." dialog: user dismisses it.
+				return &stubFormRunner{}, nil
+			default:
+				// Re-opened main form: user submits.
+				return &stubFormRunner{}, nil
+			}
+		})
 
-	_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
-	if !errors.Is(err, huh.ErrUserAborted) {
-		t.Errorf("err = %v, want huh.ErrUserAborted", err)
-	}
+		hs := &fakeHistoryStore{} // empty history → triggers errNoHistory path
+
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
+		if err != nil {
+			t.Fatalf("FillOutForm: %v", err)
+		}
+
+		// Three runFormFn invocations: main form, dialog, main form again.
+		if call != 3 {
+			t.Errorf("runFormFn calls: got %d, want 3", call)
+		}
+
+		// The original answers ("my change" from minimalCfg) must have been preserved
+		// across the empty-history detour, so the final submission saves them.
+		if len(hs.inserts) != 1 {
+			t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
+		}
+		if hs.inserts[0]["subject"] != "my change" {
+			t.Errorf("saved subject = %q, want %q (answers were lost on empty-history detour)",
+				hs.inserts[0]["subject"], "my change")
+		}
+	})
+
+	t.Run("exits flow when user aborts the history picker", func(t *testing.T) {
+		call := 0
+		swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+			call++
+			if call == 1 {
+				// Main form: user presses ctrl+r.
+				return &stubFormRunner{wantHistoryVal: true}, nil
+			}
+
+			// Picker form: user aborts.
+			return nil, huh.ErrUserAborted
+		})
+
+		hs := &fakeHistoryStore{
+			rows: []store.CommandHistoryRow{
+				{ID: 1, Payload: []byte(`{"type":"feat","subject":"prev"}`), CreatedAt: time.Now()},
+			},
+		}
+
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil)
+		if !errors.Is(err, huh.ErrUserAborted) {
+			t.Errorf("err = %v, want huh.ErrUserAborted", err)
+		}
+	})
+
+	t.Run("prefill values appear in the rendered output", func(t *testing.T) {
+		swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
+			return &stubFormRunner{}, nil
+		})
+
+		hs := &fakeHistoryStore{}
+		prefill := map[string]any{
+			"subject": "Squashed merge of abc1234 into def5678.",
+			"type":    "feat",
+		}
+
+		msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, prefill)
+		if err != nil {
+			t.Fatalf("FillOutForm: %v", err)
+		}
+
+		got := string(msg)
+		if !strings.Contains(got, "Squashed merge of abc1234 into def5678.") {
+			t.Errorf("rendered message %q does not contain prefilled subject", got)
+		}
+		if !strings.HasPrefix(got, "feat") {
+			t.Errorf("rendered message %q does not start with prefilled type \"feat\"", got)
+		}
+
+		if len(hs.inserts) != 1 {
+			t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
+		}
+		if hs.inserts[0]["subject"] != "Squashed merge of abc1234 into def5678." {
+			t.Errorf("saved subject = %q", hs.inserts[0]["subject"])
+		}
+		if hs.inserts[0]["type"] != "feat" {
+			t.Errorf("saved type = %q", hs.inserts[0]["type"])
+		}
+	})
 }
 
 func TestIssueHint_Prefill(t *testing.T) {
@@ -558,40 +651,5 @@ func TestIssueHint_Prefill(t *testing.T) {
 				t.Errorf("Prefill() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestFillOutForm_initialPrefillReachesForm(t *testing.T) {
-	swapRunFormFn(t, func(_ *huh.Form) (formRunner, error) {
-		return &stubFormRunner{}, nil
-	})
-
-	hs := &fakeHistoryStore{}
-	prefill := map[string]any{
-		"subject": "Squashed merge of abc1234 into def5678.",
-		"type":    "feat",
-	}
-
-	msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, prefill)
-	if err != nil {
-		t.Fatalf("FillOutForm: %v", err)
-	}
-
-	got := string(msg)
-	if !strings.Contains(got, "Squashed merge of abc1234 into def5678.") {
-		t.Errorf("rendered message %q does not contain prefilled subject", got)
-	}
-	if !strings.HasPrefix(got, "feat") {
-		t.Errorf("rendered message %q does not start with prefilled type \"feat\"", got)
-	}
-
-	if len(hs.inserts) != 1 {
-		t.Fatalf("inserts: got %d, want 1", len(hs.inserts))
-	}
-	if hs.inserts[0]["subject"] != "Squashed merge of abc1234 into def5678." {
-		t.Errorf("saved subject = %q", hs.inserts[0]["subject"])
-	}
-	if hs.inserts[0]["type"] != "feat" {
-		t.Errorf("saved type = %q", hs.inserts[0]["type"])
 	}
 }

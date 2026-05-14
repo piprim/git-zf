@@ -8,48 +8,54 @@ import (
 	appconfig "github.com/piprim/git-zf/config"
 )
 
-func TestToConfigOutput_masksToken(t *testing.T) {
-	cfg := &appconfig.AppConfig{
-		IssueTracker: appconfig.IssueTrackerConfig{
-			Type:  "plane",
-			URL:   "https://plane.example.com",
-			Token: "super-secret",
-		},
-	}
+func TestToConfigOutput(t *testing.T) {
+	t.Parallel()
 
-	out := toConfigOutput(cfg)
+	t.Run("masks non-empty token with asterisks", func(t *testing.T) {
+		t.Parallel()
 
-	if out.IssueTracker.Token != "***" {
-		t.Errorf("token = %q, want %q", out.IssueTracker.Token, "***")
-	}
-	if out.IssueTracker.Type != "plane" {
-		t.Errorf("type = %q, want %q", out.IssueTracker.Type, "plane")
-	}
-}
+		cfg := &appconfig.AppConfig{
+			IssueTracker: appconfig.IssueTrackerConfig{
+				Type:  "plane",
+				URL:   "https://plane.example.com",
+				Token: "super-secret",
+			},
+		}
 
-func TestToConfigOutput_emptyTokenUnchanged(t *testing.T) {
-	cfg := &appconfig.AppConfig{}
+		out := toConfigOutput(cfg)
 
-	out := toConfigOutput(cfg)
+		if out.IssueTracker.Token != "***" {
+			t.Errorf("token = %q, want %q", out.IssueTracker.Token, "***")
+		}
+		if out.IssueTracker.Type != "plane" {
+			t.Errorf("type = %q, want %q", out.IssueTracker.Type, "plane")
+		}
+	})
 
-	if out.IssueTracker.Token != "" {
-		t.Errorf("empty token should stay empty, got %q", out.IssueTracker.Token)
-	}
-}
+	t.Run("leaves empty token unchanged", func(t *testing.T) {
+		t.Parallel()
 
-func TestToConfigOutput_excludesProgName(t *testing.T) {
-	cfg := &appconfig.AppConfig{ProgName: "git-zf"}
+		out := toConfigOutput(&appconfig.AppConfig{})
 
-	out := toConfigOutput(cfg)
+		if out.IssueTracker.Token != "" {
+			t.Errorf("empty token should stay empty, got %q", out.IssueTracker.Token)
+		}
+	})
 
-	b, err := marshalConfig(&out)
-	if err != nil {
-		t.Fatalf("marshalConfig: %v", err)
-	}
+	t.Run("excludes ProgName from marshalled output", func(t *testing.T) {
+		t.Parallel()
 
-	if strings.Contains(string(b), "ProgName") {
-		t.Errorf("output must not contain ProgName, got: %s", b)
-	}
+		cfg := &appconfig.AppConfig{ProgName: "git-zf"}
+		out := toConfigOutput(cfg)
+
+		b, err := marshalConfig(&out)
+		if err != nil {
+			t.Fatalf("marshalConfig: %v", err)
+		}
+		if strings.Contains(string(b), "ProgName") {
+			t.Errorf("output must not contain ProgName, got: %s", b)
+		}
+	})
 }
 
 func TestShowRunE_printsConfigFileLine(t *testing.T) {

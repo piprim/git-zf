@@ -8,39 +8,42 @@ import (
 	"github.com/piprim/git-zf/store"
 )
 
-func TestRenderIssueTable_hidesProjectColumnWhenSingle(t *testing.T) {
+func TestRenderIssueTable(t *testing.T) {
 	t.Parallel()
 
-	var buf bytes.Buffer
-	rows := []store.IssueRow{
-		{IssueSlug: "1", Title: "a", Project: "octo/cat"},
-		{IssueSlug: "2", Title: "b", Project: "octo/cat"},
-	}
+	t.Run("hides PROJECT column when all rows share one project", func(t *testing.T) {
+		t.Parallel()
 
-	RenderIssueTable(&buf, rows)
-	out := buf.String()
+		var buf bytes.Buffer
+		rows := []store.IssueRow{
+			{IssueSlug: "1", Title: "a", Project: "octo/cat"},
+			{IssueSlug: "2", Title: "b", Project: "octo/cat"},
+		}
 
-	if strings.Contains(out, "PROJECT") {
-		t.Errorf("expected no PROJECT header for single-project rows, got:\n%s", out)
-	}
-}
+		RenderIssueTable(&buf, rows)
 
-func TestRenderIssueTable_showsProjectColumnWhenMultiple(t *testing.T) {
-	t.Parallel()
+		if strings.Contains(buf.String(), "PROJECT") {
+			t.Errorf("expected no PROJECT header for single-project rows, got:\n%s", buf.String())
+		}
+	})
 
-	var buf bytes.Buffer
-	rows := []store.IssueRow{
-		{IssueSlug: "1", Title: "a", Project: "octo/cat"},
-		{IssueSlug: "2", Title: "b", Project: "octo/dog"},
-	}
+	t.Run("shows PROJECT column and values when rows span multiple projects", func(t *testing.T) {
+		t.Parallel()
 
-	RenderIssueTable(&buf, rows)
-	out := buf.String()
+		var buf bytes.Buffer
+		rows := []store.IssueRow{
+			{IssueSlug: "1", Title: "a", Project: "octo/cat"},
+			{IssueSlug: "2", Title: "b", Project: "octo/dog"},
+		}
 
-	if !strings.Contains(out, "PROJECT") {
-		t.Errorf("expected PROJECT header for multi-project rows, got:\n%s", out)
-	}
-	if !strings.Contains(out, "octo/cat") || !strings.Contains(out, "octo/dog") {
-		t.Errorf("expected project values in output, got:\n%s", out)
-	}
+		RenderIssueTable(&buf, rows)
+		out := buf.String()
+
+		if !strings.Contains(out, "PROJECT") {
+			t.Errorf("expected PROJECT header for multi-project rows, got:\n%s", out)
+		}
+		if !strings.Contains(out, "octo/cat") || !strings.Contains(out, "octo/dog") {
+			t.Errorf("expected project values in output, got:\n%s", out)
+		}
+	})
 }

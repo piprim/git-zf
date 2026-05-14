@@ -9,54 +9,58 @@ import (
 
 func newTestRunner() *FormRunner {
 	form := huh.NewForm(huh.NewGroup(huh.NewInput().Title("test")))
-
 	return &FormRunner{form: form}
 }
 
-func TestFormRunner_WantHistory_falseByDefault(t *testing.T) {
-	r := newTestRunner()
+func TestFormRunner(t *testing.T) {
+	t.Parallel()
 
-	if r.WantHistory() {
-		t.Error("WantHistory() = true, want false before any key press")
-	}
-}
+	t.Run("WantHistory is false before any key press", func(t *testing.T) {
+		t.Parallel()
 
-func TestFormRunner_ctrlR_setsWantHistory(t *testing.T) {
-	r := newTestRunner()
+		if newTestRunner().WantHistory() {
+			t.Error("WantHistory() = true, want false before any key press")
+		}
+	})
 
-	msg := tea.KeyMsg{Type: tea.KeyCtrlR}
-	model, cmd := r.Update(msg)
+	t.Run("ctrl+r sets WantHistory and returns quit cmd", func(t *testing.T) {
+		t.Parallel()
 
-	if !r.WantHistory() {
-		t.Error("WantHistory() = false, want true after ctrl+r")
-	}
+		r := newTestRunner()
+		model, cmd := r.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
 
-	if model != r {
-		t.Error("Update must return the same *FormRunner pointer")
-	}
+		if !r.WantHistory() {
+			t.Error("WantHistory() = false, want true after ctrl+r")
+		}
+		if model != r {
+			t.Error("Update must return the same *FormRunner pointer")
+		}
+		if cmd == nil {
+			t.Error("Update must return a non-nil cmd (tea.Quit) on ctrl+r")
+		}
+	})
 
-	if cmd == nil {
-		t.Error("Update must return a non-nil cmd (tea.Quit) on ctrl+r")
-	}
-}
+	t.Run("WantHistory state does not leak between independent runner instances", func(t *testing.T) {
+		t.Parallel()
 
-func TestFormRunner_ctrlR_doesNotCrossContaminate(t *testing.T) {
-	r1 := newTestRunner()
-	r2 := newTestRunner()
+		r1 := newTestRunner()
+		r2 := newTestRunner()
 
-	r1.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+		r1.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
 
-	if r2.WantHistory() {
-		t.Error("r2.WantHistory() = true — mutation leaked between runners")
-	}
-}
+		if r2.WantHistory() {
+			t.Error("r2.WantHistory() = true — mutation leaked between runners")
+		}
+	})
 
-func TestFormRunner_otherKey_doesNotSetWantHistory(t *testing.T) {
-	r := newTestRunner()
+	t.Run("non-history key leaves WantHistory false", func(t *testing.T) {
+		t.Parallel()
 
-	r.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		r := newTestRunner()
+		r.Update(tea.KeyMsg{Type: tea.KeyEsc})
 
-	if r.WantHistory() {
-		t.Error("WantHistory() = true after esc, want false")
-	}
+		if r.WantHistory() {
+			t.Error("WantHistory() = true after esc, want false")
+		}
+	})
 }

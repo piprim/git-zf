@@ -9,33 +9,37 @@ import (
 	"github.com/piprim/git-zf/internal/pkg"
 )
 
-func TestRunInteractive_outputTeed(t *testing.T) {
+func TestRunInteractive(t *testing.T) {
 	t.Parallel()
 
-	var out, errW bytes.Buffer
-	err := pkg.RunInteractive(
-		context.Background(),
-		&pkg.IO{In: strings.NewReader(""), Out: &out, Err: &errW},
-		"echo", t.TempDir(), "hello",
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(out.String(), "hello") {
-		t.Errorf("stdout tee: want %q in %q", "hello", out.String())
-	}
-}
+	t.Run("tees stdout to injected writer", func(t *testing.T) {
+		t.Parallel()
 
-func TestRunInteractive_failedCommandReturnsError(t *testing.T) {
-	t.Parallel()
+		var out, errW bytes.Buffer
+		err := pkg.RunInteractive(
+			context.Background(),
+			&pkg.IO{In: strings.NewReader(""), Out: &out, Err: &errW},
+			"echo", t.TempDir(), "hello",
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(out.String(), "hello") {
+			t.Errorf("stdout tee: want %q in %q", "hello", out.String())
+		}
+	})
 
-	var out, errW bytes.Buffer
-	err := pkg.RunInteractive(
-		context.Background(),
-		&pkg.IO{In: strings.NewReader(""), Out: &out, Err: &errW},
-		"false", t.TempDir(),
-	)
-	if err == nil {
-		t.Fatal("expected error from false, got nil")
-	}
+	t.Run("returns error when command exits non-zero", func(t *testing.T) {
+		t.Parallel()
+
+		var out, errW bytes.Buffer
+		err := pkg.RunInteractive(
+			context.Background(),
+			&pkg.IO{In: strings.NewReader(""), Out: &out, Err: &errW},
+			"false", t.TempDir(),
+		)
+		if err == nil {
+			t.Fatal("expected error from false, got nil")
+		}
+	})
 }

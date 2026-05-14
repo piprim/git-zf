@@ -48,7 +48,7 @@ func newDiskRepo(t *testing.T) (*Client, string) {
 	return c, dir
 }
 
-func TestCurrentBranch(t *testing.T) {
+func TestCurrentBranchOnDisk(t *testing.T) {
 	t.Parallel()
 
 	client, dir := newDiskRepo(t)
@@ -79,120 +79,124 @@ func TestCurrentBranch(t *testing.T) {
 	}
 }
 
-func TestMergeDryRun_clean(t *testing.T) {
+func TestMergeDryRun(t *testing.T) {
 	t.Parallel()
 
-	client, dir := newDiskRepo(t)
+	t.Run("reports no conflicts for non-overlapping changes", func(t *testing.T) {
+		t.Parallel()
 
-	run := func(args ...string) {
-		t.Helper()
+		client, dir := newDiskRepo(t)
 
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
+		run := func(args ...string) {
+			t.Helper()
+
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
 		}
-	}
 
-	// Feature adds a new file — no conflict with main.
-	run("checkout", "-b", "feature")
+		// Feature adds a new file — no conflict with main.
+		run("checkout", "-b", "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "new.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write new.go: %v", err)
-	}
-
-	run("add", "new.go")
-	run("commit", "-m", "feat: add new.go")
-	run("checkout", "main")
-
-	conflicts, err := client.MergeDryRun(t.Context(), "feature", "main")
-	if err != nil {
-		t.Fatalf("MergeDryRun: %v", err)
-	}
-
-	if len(conflicts) != 0 {
-		t.Errorf("expected no conflicts, got: %v", conflicts)
-	}
-
-	// Main working tree must be clean after the dry-run.
-	var buf bytes.Buffer
-	status := exec.Command("git", "status", "--porcelain")
-	status.Dir = dir
-	status.Stdout = &buf
-	_ = status.Run()
-
-	if buf.Len() != 0 {
-		t.Errorf("working tree dirty after dry-run:\n%s", buf.String())
-	}
-}
-
-func TestMergeDryRun_conflict(t *testing.T) {
-	t.Parallel()
-
-	client, dir := newDiskRepo(t)
-
-	run := func(args ...string) {
-		t.Helper()
-
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
+		if err := os.WriteFile(filepath.Join(dir, "new.go"), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("write new.go: %v", err)
 		}
-	}
 
-	// Feature modifies base.go one way.
-	run("checkout", "-b", "feature")
+		run("add", "new.go")
+		run("commit", "-m", "feat: add new.go")
+		run("checkout", "main")
 
-	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package feature\n"), 0o644); err != nil {
-		t.Fatalf("write base.go (feature): %v", err)
-	}
-
-	run("add", "base.go")
-	run("commit", "-m", "feat: feature change")
-
-	// Main modifies base.go a different way.
-	run("checkout", "main")
-
-	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package mainbranch\n"), 0o644); err != nil {
-		t.Fatalf("write base.go (main): %v", err)
-	}
-
-	run("add", "base.go")
-	run("commit", "-m", "chore: main change")
-
-	conflicts, err := client.MergeDryRun(t.Context(), "feature", "main")
-	if err != nil {
-		t.Fatalf("MergeDryRun: %v", err)
-	}
-
-	if len(conflicts) == 0 {
-		t.Error("expected conflicts, got none")
-	}
-
-	found := false
-	for _, f := range conflicts {
-		if f == "base.go" {
-			found = true
-
-			break
+		conflicts, err := client.MergeDryRun(t.Context(), "feature", "main")
+		if err != nil {
+			t.Fatalf("MergeDryRun: %v", err)
 		}
-	}
 
-	if !found {
-		t.Errorf("expected base.go in conflicts, got: %v", conflicts)
-	}
+		if len(conflicts) != 0 {
+			t.Errorf("expected no conflicts, got: %v", conflicts)
+		}
 
-	// Main working tree must be clean after the dry-run.
-	var buf bytes.Buffer
-	status := exec.Command("git", "status", "--porcelain")
-	status.Dir = dir
-	status.Stdout = &buf
-	_ = status.Run()
+		// Main working tree must be clean after the dry-run.
+		var buf bytes.Buffer
+		status := exec.Command("git", "status", "--porcelain")
+		status.Dir = dir
+		status.Stdout = &buf
+		_ = status.Run()
 
-	if buf.Len() != 0 {
-		t.Errorf("working tree dirty after dry-run:\n%s", buf.String())
-	}
+		if buf.Len() != 0 {
+			t.Errorf("working tree dirty after dry-run:\n%s", buf.String())
+		}
+	})
+
+	t.Run("reports conflicting files and leaves working tree clean", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newDiskRepo(t)
+
+		run := func(args ...string) {
+			t.Helper()
+
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+
+		// Feature modifies base.go one way.
+		run("checkout", "-b", "feature")
+
+		if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package feature\n"), 0o644); err != nil {
+			t.Fatalf("write base.go (feature): %v", err)
+		}
+
+		run("add", "base.go")
+		run("commit", "-m", "feat: feature change")
+
+		// Main modifies base.go a different way.
+		run("checkout", "main")
+
+		if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package mainbranch\n"), 0o644); err != nil {
+			t.Fatalf("write base.go (main): %v", err)
+		}
+
+		run("add", "base.go")
+		run("commit", "-m", "chore: main change")
+
+		conflicts, err := client.MergeDryRun(t.Context(), "feature", "main")
+		if err != nil {
+			t.Fatalf("MergeDryRun: %v", err)
+		}
+
+		if len(conflicts) == 0 {
+			t.Error("expected conflicts, got none")
+		}
+
+		found := false
+		for _, f := range conflicts {
+			if f == "base.go" {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			t.Errorf("expected base.go in conflicts, got: %v", conflicts)
+		}
+
+		// Main working tree must be clean after the dry-run.
+		var buf bytes.Buffer
+		status := exec.Command("git", "status", "--porcelain")
+		status.Dir = dir
+		status.Stdout = &buf
+		_ = status.Run()
+
+		if buf.Len() != 0 {
+			t.Errorf("working tree dirty after dry-run:\n%s", buf.String())
+		}
+	})
 }
 
 func TestMergeSquash(t *testing.T) {
@@ -302,50 +306,105 @@ func TestMergeNoFF(t *testing.T) {
 	}
 }
 
-func TestDeleteLocalBranch_safeDelete(t *testing.T) {
+func TestDeleteLocalBranch(t *testing.T) {
 	t.Parallel()
 
-	client, dir := newDiskRepo(t)
+	t.Run("safe delete removes a merged branch", func(t *testing.T) {
+		t.Parallel()
 
-	run := func(args ...string) {
-		t.Helper()
+		client, dir := newDiskRepo(t)
 
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
+		run := func(args ...string) {
+			t.Helper()
+
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
 		}
-	}
 
-	run("checkout", "-b", "feature")
+		run("checkout", "-b", "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write feat.go: %v", err)
-	}
+		if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("write feat.go: %v", err)
+		}
 
-	run("add", "feat.go")
-	run("commit", "-m", "feat: add feat.go")
-	run("checkout", "main")
+		run("add", "feat.go")
+		run("commit", "-m", "feat: add feat.go")
+		run("checkout", "main")
 
-	// Classic merge so safe -d works.
-	if err := client.MergeNoFF(t.Context(), "feature", "main"); err != nil {
-		t.Fatalf("MergeNoFF: %v", err)
-	}
+		// Classic merge so safe -d works.
+		if err := client.MergeNoFF(t.Context(), "feature", "main"); err != nil {
+			t.Fatalf("MergeNoFF: %v", err)
+		}
 
-	if err := client.DeleteLocalBranch(t.Context(), "feature", false); err != nil {
-		t.Fatalf("DeleteLocalBranch: %v", err)
-	}
+		if err := client.DeleteLocalBranch(t.Context(), "feature", false); err != nil {
+			t.Fatalf("DeleteLocalBranch: %v", err)
+		}
 
-	// Verify branch is gone.
-	var safeBuf bytes.Buffer
-	branchCmd := exec.Command("git", "branch")
-	branchCmd.Dir = dir
-	branchCmd.Stdout = &safeBuf
-	_ = branchCmd.Run()
+		// Verify branch is gone.
+		var safeBuf bytes.Buffer
+		branchCmd := exec.Command("git", "branch")
+		branchCmd.Dir = dir
+		branchCmd.Stdout = &safeBuf
+		_ = branchCmd.Run()
 
-	if strings.Contains(safeBuf.String(), "feature") {
-		t.Errorf("feature branch still exists after delete: %s", safeBuf.String())
-	}
+		if strings.Contains(safeBuf.String(), "feature") {
+			t.Errorf("feature branch still exists after delete: %s", safeBuf.String())
+		}
+	})
+
+	t.Run("force delete removes an unmerged branch", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newDiskRepo(t)
+
+		run := func(args ...string) {
+			t.Helper()
+
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+
+		run("checkout", "-b", "feature")
+
+		if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("write feat.go: %v", err)
+		}
+
+		run("add", "feat.go")
+		run("commit", "-m", "feat: add feat.go")
+		run("checkout", "main")
+
+		// Squash merge — safe -d would fail because squash doesn't preserve ancestry.
+		if err := client.MergeSquash(t.Context(), "feature", "main"); err != nil {
+			t.Fatalf("MergeSquash: %v", err)
+		}
+
+		commitCmd := exec.Command("git", "commit", "-m", "feat: squash test")
+		commitCmd.Dir = dir
+		if out, err := commitCmd.CombinedOutput(); err != nil {
+			t.Fatalf("git commit: %v\n%s", err, out)
+		}
+
+		if err := client.DeleteLocalBranch(t.Context(), "feature", true); err != nil {
+			t.Fatalf("DeleteLocalBranch force: %v", err)
+		}
+
+		var forceBuf bytes.Buffer
+		branchCmd := exec.Command("git", "branch")
+		branchCmd.Dir = dir
+		branchCmd.Stdout = &forceBuf
+		_ = branchCmd.Run()
+
+		if strings.Contains(forceBuf.String(), "feature") {
+			t.Errorf("feature branch still exists after force delete: %s", forceBuf.String())
+		}
+	})
 }
 
 // newDiskRepoWithOrigin sets up a bare "origin" repo + a working clone.
@@ -445,57 +504,6 @@ func TestFetchOrigin_updatesRemoteTrackingRef(t *testing.T) {
 
 	if originTip == mainTip {
 		t.Errorf("expected origin/main to advance past local main; both = %s", originTip)
-	}
-}
-
-func TestDeleteLocalBranch_forceDelete(t *testing.T) {
-	t.Parallel()
-
-	client, dir := newDiskRepo(t)
-
-	run := func(args ...string) {
-		t.Helper()
-
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	run("checkout", "-b", "feature")
-
-	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write feat.go: %v", err)
-	}
-
-	run("add", "feat.go")
-	run("commit", "-m", "feat: add feat.go")
-	run("checkout", "main")
-
-	// Squash merge — safe -d would fail because squash doesn't preserve ancestry.
-	if err := client.MergeSquash(t.Context(), "feature", "main"); err != nil {
-		t.Fatalf("MergeSquash: %v", err)
-	}
-
-	commitCmd := exec.Command("git", "commit", "-m", "feat: squash test")
-	commitCmd.Dir = dir
-	if out, err := commitCmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v\n%s", err, out)
-	}
-
-	if err := client.DeleteLocalBranch(t.Context(), "feature", true); err != nil {
-		t.Fatalf("DeleteLocalBranch force: %v", err)
-	}
-
-	var forceBuf bytes.Buffer
-	branchCmd := exec.Command("git", "branch")
-	branchCmd.Dir = dir
-	branchCmd.Stdout = &forceBuf
-	_ = branchCmd.Run()
-
-	if strings.Contains(forceBuf.String(), "feature") {
-		t.Errorf("feature branch still exists after force delete: %s", forceBuf.String())
 	}
 }
 
@@ -608,85 +616,89 @@ func TestResetHard_restoresTracked(t *testing.T) {
 	}
 }
 
-func TestFastForwardOnly_clean(t *testing.T) {
+func TestFastForwardOnly(t *testing.T) {
 	t.Parallel()
 
-	c, dir := newDiskRepo(t)
+	t.Run("advances the target branch when fast-forward is possible", func(t *testing.T) {
+		t.Parallel()
 
-	run := func(args ...string) {
-		t.Helper()
+		c, dir := newDiskRepo(t)
 
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
+		run := func(args ...string) {
+			t.Helper()
+
+			cmd := exec.CommandContext(t.Context(), "git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
 		}
-	}
 
-	run("checkout", "-b", "feature")
+		run("checkout", "-b", "feature")
 
-	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write feat.go: %v", err)
-	}
-
-	run("add", "feat.go")
-	run("commit", "-m", "feat: f1")
-
-	featTip, err := c.ResolveRef("refs/heads/feature")
-	if err != nil {
-		t.Fatalf("resolve feature: %v", err)
-	}
-
-	if err := c.FastForwardOnly(t.Context(), "feature", "main"); err != nil {
-		t.Fatalf("FastForwardOnly: %v", err)
-	}
-
-	mainTip, err := c.ResolveRef("refs/heads/main")
-	if err != nil {
-		t.Fatalf("resolve main: %v", err)
-	}
-
-	if mainTip != featTip {
-		t.Errorf("main = %s, want %s (FF should equalize)", mainTip, featTip)
-	}
-}
-
-func TestFastForwardOnly_diverged(t *testing.T) {
-	t.Parallel()
-
-	c, dir := newDiskRepo(t)
-
-	run := func(args ...string) {
-		t.Helper()
-
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
+		if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("write feat.go: %v", err)
 		}
-	}
 
-	run("checkout", "-b", "feature")
+		run("add", "feat.go")
+		run("commit", "-m", "feat: f1")
 
-	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write feat.go: %v", err)
-	}
+		featTip, err := c.ResolveRef("refs/heads/feature")
+		if err != nil {
+			t.Fatalf("resolve feature: %v", err)
+		}
 
-	run("add", "feat.go")
-	run("commit", "-m", "feat: f1")
-	run("checkout", "main")
+		if err := c.FastForwardOnly(t.Context(), "feature", "main"); err != nil {
+			t.Fatalf("FastForwardOnly: %v", err)
+		}
 
-	if err := os.WriteFile(filepath.Join(dir, "main2.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write main2.go: %v", err)
-	}
+		mainTip, err := c.ResolveRef("refs/heads/main")
+		if err != nil {
+			t.Fatalf("resolve main: %v", err)
+		}
 
-	run("add", "main2.go")
-	run("commit", "-m", "chore: m2")
+		if mainTip != featTip {
+			t.Errorf("main = %s, want %s (FF should equalize)", mainTip, featTip)
+		}
+	})
 
-	err := c.FastForwardOnly(t.Context(), "feature", "main")
-	if err == nil {
-		t.Fatal("expected FF on diverged branches to fail, got nil")
-	}
+	t.Run("returns error when branches have diverged", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newDiskRepo(t)
+
+		run := func(args ...string) {
+			t.Helper()
+
+			cmd := exec.CommandContext(t.Context(), "git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+
+		run("checkout", "-b", "feature")
+
+		if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("write feat.go: %v", err)
+		}
+
+		run("add", "feat.go")
+		run("commit", "-m", "feat: f1")
+		run("checkout", "main")
+
+		if err := os.WriteFile(filepath.Join(dir, "main2.go"), []byte("package main\n"), 0o644); err != nil {
+			t.Fatalf("write main2.go: %v", err)
+		}
+
+		run("add", "main2.go")
+		run("commit", "-m", "chore: m2")
+
+		err := c.FastForwardOnly(t.Context(), "feature", "main")
+		if err == nil {
+			t.Fatal("expected FF on diverged branches to fail, got nil")
+		}
+	})
 }
 
 func TestMergeRebase_clean(t *testing.T) {

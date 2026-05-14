@@ -2,23 +2,25 @@ package tui
 
 import "testing"
 
-func TestConfigSectionPicker_returnsGroup(t *testing.T) {
+func TestConfigSectionPicker(t *testing.T) {
 	t.Parallel()
 
-	keys := []string{"commit-types", "commit-message", "branch", "issue-tracker"}
-	var selected []string
-	group := ConfigSectionPicker(keys, &selected)
-	if group == nil {
-		t.Fatal("ConfigSectionPicker returned nil group")
-	}
-}
+	t.Run("returns non-nil group for standard keys", func(t *testing.T) {
+		t.Parallel()
 
-func TestConfigSectionPicker_emptyKeys(t *testing.T) {
-	t.Parallel()
+		keys := []string{"commit-types", "commit-message", "branch", "issue-tracker"}
+		var selected []string
+		if ConfigSectionPicker(keys, &selected) == nil {
+			t.Fatal("ConfigSectionPicker returned nil group")
+		}
+	})
 
-	var selected []string
-	group := ConfigSectionPicker([]string{}, &selected)
-	if group == nil {
-		t.Fatal("ConfigSectionPicker with empty keys returned nil group")
-	}
+	t.Run("returns non-nil group for empty key list", func(t *testing.T) {
+		t.Parallel()
+
+		var selected []string
+		if ConfigSectionPicker([]string{}, &selected) == nil {
+			t.Fatal("ConfigSectionPicker with empty keys returned nil group")
+		}
+	})
 }

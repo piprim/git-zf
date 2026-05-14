@@ -6,63 +6,66 @@ import (
 	"testing"
 )
 
-func TestResolveGitFile_relativeTarget(t *testing.T) {
+func TestResolveGitFile(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	gitFile := filepath.Join(root, ".git")
-	target := "../../.git/modules/todo"
+	t.Run("resolves relative target against repo root", func(t *testing.T) {
+		t.Parallel()
 
-	if err := os.WriteFile(gitFile, []byte("gitdir: "+target+"\n"), 0o600); err != nil {
-		t.Fatalf("write gitfile: %v", err)
-	}
+		root := t.TempDir()
+		gitFile := filepath.Join(root, ".git")
+		target := "../../.git/modules/todo"
 
-	got := resolveGitFile(gitFile, root)
-	want := filepath.Clean(filepath.Join(root, target))
+		if err := os.WriteFile(gitFile, []byte("gitdir: "+target+"\n"), 0o600); err != nil {
+			t.Fatalf("write gitfile: %v", err)
+		}
 
-	if got != want {
-		t.Errorf("resolveGitFile = %q, want %q", got, want)
-	}
-}
+		got := resolveGitFile(gitFile, root)
+		want := filepath.Clean(filepath.Join(root, target))
 
-func TestResolveGitFile_absoluteTarget(t *testing.T) {
-	t.Parallel()
+		if got != want {
+			t.Errorf("resolveGitFile = %q, want %q", got, want)
+		}
+	})
 
-	root := t.TempDir()
-	gitFile := filepath.Join(root, ".git")
-	abs := "/some/parent/.git/modules/todo"
+	t.Run("preserves an absolute target path unchanged", func(t *testing.T) {
+		t.Parallel()
 
-	if err := os.WriteFile(gitFile, []byte("gitdir: "+abs+"\n"), 0o600); err != nil {
-		t.Fatalf("write gitfile: %v", err)
-	}
+		root := t.TempDir()
+		gitFile := filepath.Join(root, ".git")
+		abs := "/some/parent/.git/modules/todo"
 
-	got := resolveGitFile(gitFile, root)
+		if err := os.WriteFile(gitFile, []byte("gitdir: "+abs+"\n"), 0o600); err != nil {
+			t.Fatalf("write gitfile: %v", err)
+		}
 
-	if got != abs {
-		t.Errorf("resolveGitFile = %q, want %q", got, abs)
-	}
-}
+		got := resolveGitFile(gitFile, root)
+		if got != abs {
+			t.Errorf("resolveGitFile = %q, want %q", got, abs)
+		}
+	})
 
-func TestResolveGitFile_invalidContent(t *testing.T) {
-	t.Parallel()
+	t.Run("returns empty string when content lacks the gitdir prefix", func(t *testing.T) {
+		t.Parallel()
 
-	root := t.TempDir()
-	gitFile := filepath.Join(root, ".git")
+		root := t.TempDir()
+		gitFile := filepath.Join(root, ".git")
 
-	if err := os.WriteFile(gitFile, []byte("not a gitfile\n"), 0o600); err != nil {
-		t.Fatalf("write gitfile: %v", err)
-	}
+		if err := os.WriteFile(gitFile, []byte("not a gitfile\n"), 0o600); err != nil {
+			t.Fatalf("write gitfile: %v", err)
+		}
 
-	if got := resolveGitFile(gitFile, root); got != "" {
-		t.Errorf("resolveGitFile = %q, want empty string", got)
-	}
-}
+		if got := resolveGitFile(gitFile, root); got != "" {
+			t.Errorf("resolveGitFile = %q, want empty string", got)
+		}
+	})
 
-func TestResolveGitFile_missingFile(t *testing.T) {
-	t.Parallel()
+	t.Run("returns empty string when the file does not exist", func(t *testing.T) {
+		t.Parallel()
 
-	root := t.TempDir()
-	if got := resolveGitFile(filepath.Join(root, ".git"), root); got != "" {
-		t.Errorf("resolveGitFile = %q, want empty string", got)
-	}
+		root := t.TempDir()
+		if got := resolveGitFile(filepath.Join(root, ".git"), root); got != "" {
+			t.Errorf("resolveGitFile = %q, want empty string", got)
+		}
+	})
 }

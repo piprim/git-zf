@@ -11,110 +11,118 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestBuildPickerOpts_homeOnlyNoExist(t *testing.T) {
-	opts := buildPickerOpts("/home/user/.git-zf.toml", "", false, false)
+func TestBuildPickerOpts(t *testing.T) {
+	t.Parallel()
 
-	if len(opts) != 1 {
-		t.Fatalf("expected 1 option, got %d", len(opts))
-	}
+	t.Run("home only without existing file yields one option", func(t *testing.T) {
+		t.Parallel()
+
+		opts := buildPickerOpts("/home/user/.git-zf.toml", "", false, false)
+		if len(opts) != 1 {
+			t.Fatalf("expected 1 option, got %d", len(opts))
+		}
+	})
+
+	t.Run("existing home and new repo: home labelled overwrite, repo labelled takes precedence", func(t *testing.T) {
+		t.Parallel()
+
+		opts := buildPickerOpts("/home/user/.git-zf.toml", "/repo/.git-zf.toml", true, false)
+		if len(opts) != 2 {
+			t.Fatalf("expected 2 options, got %d", len(opts))
+		}
+		if !strings.Contains(opts[0].Key, "[overwrite]") {
+			t.Errorf("home option label %q missing [overwrite]", opts[0].Key)
+		}
+		if !strings.Contains(opts[1].Key, "takes precedence") {
+			t.Errorf("repo option label %q missing precedence note", opts[1].Key)
+		}
+	})
+
+	t.Run("both existing files are labelled overwrite", func(t *testing.T) {
+		t.Parallel()
+
+		opts := buildPickerOpts("/home/user/.git-zf.toml", "/repo/.git-zf.toml", true, true)
+		if len(opts) != 2 {
+			t.Fatalf("expected 2 options, got %d", len(opts))
+		}
+		if !strings.Contains(opts[0].Key, "[overwrite]") {
+			t.Errorf("home option label %q missing [overwrite]", opts[0].Key)
+		}
+		if !strings.Contains(opts[1].Key, "[overwrite]") {
+			t.Errorf("repo option label %q missing [overwrite]", opts[1].Key)
+		}
+	})
 }
 
-func TestBuildPickerOpts_homeExistsWithRepo(t *testing.T) {
-	// homeExists=true, repoExists=false → home has [overwrite], repo has precedence note.
-	opts := buildPickerOpts("/home/user/.git-zf.toml", "/repo/.git-zf.toml", true, false)
+func TestWriteHomeDest(t *testing.T) {
+	t.Parallel()
 
-	if len(opts) != 2 {
-		t.Fatalf("expected 2 options, got %d", len(opts))
-	}
+	t.Run("writes default TOML bytes and prints destination path", func(t *testing.T) {
+		t.Parallel()
 
-	if !strings.Contains(opts[0].Key, "[overwrite]") {
-		t.Errorf("home option label %q missing [overwrite]", opts[0].Key)
-	}
+		dir := t.TempDir()
+		dest := filepath.Join(dir, ".git-zf.toml")
 
-	if !strings.Contains(opts[1].Key, "takes precedence") {
-		t.Errorf("repo option label %q missing precedence note", opts[1].Key)
-	}
+		var buf bytes.Buffer
+		cmd := &cobra.Command{}
+		cmd.SetOut(&buf)
+
+		if err := writeHomeDest(cmd, dest); err != nil {
+			t.Fatalf("writeHomeDest: %v", err)
+		}
+
+		content, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("read written file: %v", err)
+		}
+		if !bytes.Equal(content, appconfig.DefaultTOML()) {
+			t.Errorf("file content does not match DefaultTOML")
+		}
+		if !strings.Contains(buf.String(), dest) {
+			t.Errorf("expected path %q in output, got: %s", dest, buf.String())
+		}
+	})
 }
 
-func TestBuildPickerOpts_bothExist(t *testing.T) {
-	// homeExists=true, repoExists=true → both have [overwrite].
-	opts := buildPickerOpts("/home/user/.git-zf.toml", "/repo/.git-zf.toml", true, true)
+func TestPickDest(t *testing.T) {
+	t.Parallel()
 
-	if len(opts) != 2 {
-		t.Fatalf("expected 2 options, got %d", len(opts))
-	}
+	t.Run("auto-selects home when outside a repo and home file does not exist", func(t *testing.T) {
+		t.Parallel()
 
-	if !strings.Contains(opts[0].Key, "[overwrite]") {
-		t.Errorf("home option label %q missing [overwrite]", opts[0].Key)
-	}
-
-	if !strings.Contains(opts[1].Key, "[overwrite]") {
-		t.Errorf("repo option label %q missing [overwrite]", opts[1].Key)
-	}
-}
-
-func TestWriteHomeDest_writesDefaultTOML(t *testing.T) {
-	dir := t.TempDir()
-	dest := filepath.Join(dir, ".git-zf.toml")
-
-	var buf bytes.Buffer
-	cmd := &cobra.Command{}
-	cmd.SetOut(&buf)
-
-	if err := writeHomeDest(cmd, dest); err != nil {
-		t.Fatalf("writeHomeDest: %v", err)
-	}
-
-	content, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatalf("read written file: %v", err)
-	}
-
-	if !bytes.Equal(content, appconfig.DefaultTOML()) {
-		t.Errorf("file content does not match DefaultTOML")
-	}
-
-	if !strings.Contains(buf.String(), dest) {
-		t.Errorf("expected path %q in output, got: %s", dest, buf.String())
-	}
-}
-
-func TestPickDest_autoSelectsHomeWhenOutsideRepoNoFile(t *testing.T) {
-	homePath := filepath.Join(t.TempDir(), ".git-zf.toml")
-	// repoPath="" simulates being outside a git repo; homePath does not exist.
-	dest, err := pickDest(homePath, "")
-	if err != nil {
-		t.Fatalf("pickDest: %v", err)
-	}
-
-	if dest != homePath {
-		t.Errorf("dest = %q, want %q", dest, homePath)
-	}
-}
-
-func TestConfirmOverwrite_returnsFalseOnAbort(t *testing.T) {
-	// confirmOverwrite requires a real TTY to run interactively.
-	// This test verifies it compiles and that fileExists guards correctly by
-	// testing the guard path in isolation: when dest does not exist, no confirm is needed.
-	dir := t.TempDir()
-	dest := filepath.Join(dir, "nonexistent.toml")
-
-	if fileExists(dest) {
-		t.Error("fileExists should return false for nonexistent file — overwrite confirm must not trigger")
-	}
+		homePath := filepath.Join(t.TempDir(), ".git-zf.toml")
+		// repoPath="" simulates being outside a git repo; homePath does not exist.
+		dest, err := pickDest(homePath, "")
+		if err != nil {
+			t.Fatalf("pickDest: %v", err)
+		}
+		if dest != homePath {
+			t.Errorf("dest = %q, want %q", dest, homePath)
+		}
+	})
 }
 
 func TestFileExists(t *testing.T) {
-	dir := t.TempDir()
-	existing := filepath.Join(dir, "exists.toml")
-	if err := os.WriteFile(existing, []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
 
-	if !fileExists(existing) {
-		t.Error("fileExists returned false for existing file")
-	}
-	if fileExists(filepath.Join(dir, "missing.toml")) {
-		t.Error("fileExists returned true for missing file")
-	}
+	t.Run("returns true for an existing file", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "exists.toml")
+		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !fileExists(path) {
+			t.Error("fileExists returned false for existing file")
+		}
+	})
+
+	t.Run("returns false for a missing file", func(t *testing.T) {
+		t.Parallel()
+
+		if fileExists(filepath.Join(t.TempDir(), "missing.toml")) {
+			t.Error("fileExists returned true for missing file")
+		}
+	})
 }

@@ -4,21 +4,24 @@ import "testing"
 
 func TestCommitOption_anyOptionSet(t *testing.T) {
 	cases := []struct {
+		name string
 		opts CommitOption
 		want bool
 	}{
-		{CommitOption{}, false},
-		{CommitOption{Authors: []string{"Alice"}}, false},
-		{CommitOption{All: true}, true},
-		{CommitOption{Amend: true}, true},
-		{CommitOption{NoVerify: true}, true},
-		{CommitOption{Signoff: true}, true},
-		{CommitOption{AllowEmpty: true}, true},
-		{CommitOption{Author: "Alice <a@b.com>"}, true},
+		{"zero value", CommitOption{}, false},
+		{"authors slice alone is not a git flag", CommitOption{Authors: []string{"Alice"}}, false},
+		{"All", CommitOption{All: true}, true},
+		{"Amend", CommitOption{Amend: true}, true},
+		{"NoVerify", CommitOption{NoVerify: true}, true},
+		{"Signoff", CommitOption{Signoff: true}, true},
+		{"AllowEmpty", CommitOption{AllowEmpty: true}, true},
+		{"Author string", CommitOption{Author: "Alice <a@b.com>"}, true},
 	}
 	for _, tc := range cases {
-		if got := tc.opts.AnyOptionSet(); got != tc.want {
-			t.Errorf("%+v: anyOptionSet()=%v, want %v", tc.opts, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.opts.AnyOptionSet(); got != tc.want {
+				t.Errorf("%+v: AnyOptionSet() = %v, want %v", tc.opts, got, tc.want)
+			}
+		})
 	}
 }
