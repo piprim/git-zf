@@ -87,7 +87,7 @@ func TestCommit(t *testing.T) {
 		}
 		run("add", "file.txt")
 
-		if _, err := client.Commit(t.Context(), []byte("feat: basic commit"), CommitOptions{}); err != nil {
+		if err := client.Commit(t.Context(), []byte("feat: basic commit"), CommitOptions{}); err != nil {
 			t.Fatalf("Commit error: %v", err)
 		}
 
@@ -118,7 +118,7 @@ func TestCommit(t *testing.T) {
 			t.Fatalf("write untracked.txt: %v", err)
 		}
 
-		if _, err := client.Commit(t.Context(), []byte("chore: all flag"), CommitOptions{All: true}); err != nil {
+		if err := client.Commit(t.Context(), []byte("chore: all flag"), CommitOptions{All: true}); err != nil {
 			t.Fatalf("Commit error: %v", err)
 		}
 
@@ -153,7 +153,7 @@ func TestCommit(t *testing.T) {
 			t.Fatalf("git add: %v\n%s", err, out)
 		}
 
-		_, err := client.Commit(t.Context(), []byte("docs: readme"), CommitOptions{
+		err := client.Commit(t.Context(), []byte("docs: readme"), CommitOptions{
 			Signoff: true,
 			Author:  "Alice Dev <alice@example.com>",
 		})
@@ -190,7 +190,7 @@ func TestCommit(t *testing.T) {
 			t.Fatalf("git add: %v\n%s", err, out)
 		}
 
-		_, err := client.Commit(t.Context(), []byte("fix: author override"), CommitOptions{
+		err := client.Commit(t.Context(), []byte("fix: author override"), CommitOptions{
 			Author: "Bob Builder <bob@example.com>",
 		})
 		if err != nil {
@@ -230,7 +230,7 @@ func TestCommit(t *testing.T) {
 		}
 		run("add", "file.txt")
 
-		if _, err := client.Commit(t.Context(), []byte("feat: to be amended"), CommitOptions{}); err != nil {
+		if err := client.Commit(t.Context(), []byte("feat: to be amended"), CommitOptions{}); err != nil {
 			t.Fatalf("initial Commit: %v", err)
 		}
 
@@ -241,7 +241,7 @@ func TestCommit(t *testing.T) {
 		_ = countCmd.Run()
 		countBefore := strings.TrimSpace(countBuf.String())
 
-		if _, err := client.Commit(t.Context(), []byte("feat: amended message"), CommitOptions{Amend: true}); err != nil {
+		if err := client.Commit(t.Context(), []byte("feat: amended message"), CommitOptions{Amend: true}); err != nil {
 			t.Fatalf("amend error: %v", err)
 		}
 
@@ -264,94 +264,6 @@ func TestCommit(t *testing.T) {
 
 		if strings.TrimSpace(msgBuf.String()) != "feat: amended message" {
 			t.Errorf("tip message after amend: got %q", strings.TrimSpace(msgBuf.String()))
-		}
-	})
-
-	t.Run("returns a correct commit summary", func(t *testing.T) {
-		t.Parallel()
-
-		client, dir := newDiskRepo(t)
-		client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
-
-		if err := os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n\nfunc New() {}\n"), 0o644); err != nil {
-			t.Fatalf("write feature.go: %v", err)
-		}
-
-		addCmd := exec.Command("git", "add", "feature.go")
-		addCmd.Dir = dir
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			t.Fatalf("git add: %v\n%s", err, out)
-		}
-
-		summary, err := client.Commit(t.Context(), []byte("feat: add feature\n\nsome body"), CommitOptions{})
-		if err != nil {
-			t.Fatalf("Commit error: %v", err)
-		}
-
-		if len(summary.ShortHash) != 7 {
-			t.Errorf("ShortHash len = %d, want 7", len(summary.ShortHash))
-		}
-		if summary.Branch != "main" {
-			t.Errorf("Branch = %q, want %q", summary.Branch, "main")
-		}
-		if summary.IsRoot {
-			t.Error("IsRoot = true, want false")
-		}
-		if summary.Subject != "feat: add feature" {
-			t.Errorf("Subject = %q, want %q", summary.Subject, "feat: add feature")
-		}
-		if summary.Files != 1 {
-			t.Errorf("Files = %d, want 1", summary.Files)
-		}
-		if summary.Additions == 0 {
-			t.Error("Additions = 0, want > 0")
-		}
-	})
-
-	t.Run("marks root commit in the summary", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-
-		run := func(args ...string) {
-			t.Helper()
-
-			cmd := exec.Command("git", args...)
-			cmd.Dir = dir
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("git %v: %v\n%s", args, err, out)
-			}
-		}
-
-		run("init", "--initial-branch=main")
-		run("config", "user.name", "Test User")
-		run("config", "user.email", "test@test.com")
-		run("config", "commit.gpgsign", "false")
-
-		if err := os.WriteFile(filepath.Join(dir, "init.txt"), []byte("hello"), 0o644); err != nil {
-			t.Fatalf("write init.txt: %v", err)
-		}
-		run("add", "init.txt")
-
-		client, err := NewClientAt(nil, dir)
-		if err != nil {
-			t.Fatalf("NewClientAt: %v", err)
-		}
-		client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
-
-		summary, err := client.Commit(t.Context(), []byte("chore: initial commit"), CommitOptions{})
-		if err != nil {
-			t.Fatalf("Commit error: %v", err)
-		}
-
-		if !summary.IsRoot {
-			t.Error("IsRoot = false, want true")
-		}
-		if summary.Files != 1 {
-			t.Errorf("Files = %d, want 1", summary.Files)
-		}
-		if summary.Additions == 0 {
-			t.Error("Additions = 0, want > 0 for root commit")
 		}
 	})
 }

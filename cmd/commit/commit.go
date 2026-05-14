@@ -96,65 +96,18 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
 
-	summary, err := client.Commit(cmd.Context(), msg, git.CommitOptions{
+	if err := client.Commit(cmd.Context(), msg, git.CommitOptions{
 		All:        opts.All,
 		Amend:      opts.Amend,
 		NoVerify:   opts.NoVerify,
 		Signoff:    opts.Signoff,
 		AllowEmpty: opts.AllowEmpty,
 		Author:     opts.Author,
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 
-	printCommitSummary(&summary)
-
 	return nil
-}
-
-func printCommitSummary(s *git.CommitSummary) {
-	if s == nil {
-		return
-	}
-
-	ref := s.Branch
-	if s.IsRoot {
-		ref += " (root-commit)"
-	}
-
-	fmt.Printf("[%s %s] %s\n", ref, s.ShortHash, s.Subject)
-
-	if s.Files == 0 {
-		return
-	}
-
-	fileWord := "files"
-	if s.Files == 1 {
-		fileWord = "file"
-	}
-
-	line := fmt.Sprintf(" %d %s changed", s.Files, fileWord)
-
-	if s.Additions > 0 {
-		word := "insertions"
-		if s.Additions == 1 {
-			word = "insertion"
-		}
-
-		line += fmt.Sprintf(", %d %s(+)", s.Additions, word)
-	}
-
-	if s.Deletions > 0 {
-		word := "deletions"
-		if s.Deletions == 1 {
-			word = "deletion"
-		}
-
-		line += fmt.Sprintf(", %d %s(-)", s.Deletions, word)
-	}
-
-	fmt.Println(line)
 }
 
 // issueHintFromClient detects whether the current branch is an issue branch

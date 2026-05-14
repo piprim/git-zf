@@ -260,7 +260,7 @@ func doSquashCommit(ctx context.Context, mc mergeContext) error {
 		return fmt.Errorf("fill commit form: %w", err)
 	}
 
-	if _, err := mc.client.Commit(ctx, msg, git.CommitOptions{
+	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
 		All:        opts.All,
 		Amend:      opts.Amend,
 		NoVerify:   opts.NoVerify,
@@ -442,7 +442,7 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 		return fmt.Errorf("fill commit form: %w", err)
 	}
 
-	if _, err := mc.client.Commit(ctx, msg, git.CommitOptions{
+	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
 		All:        opts.All,
 		Amend:      opts.Amend,
 		NoVerify:   opts.NoVerify,

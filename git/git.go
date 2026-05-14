@@ -15,17 +15,6 @@ import (
 	"github.com/piprim/git-zf/internal/pkg"
 )
 
-// CommitSummary holds display information about a newly created commit.
-type CommitSummary struct {
-	ShortHash string
-	Branch    string
-	IsRoot    bool
-	Subject   string
-	Files     int
-	Additions int
-	Deletions int
-}
-
 // CommitOptions configures Client.Commit.
 type CommitOptions struct {
 	All        bool
@@ -259,26 +248,25 @@ func (c *Client) Authors() ([]string, error) {
 
 // Commit records a commit with msg and the given options using the system git
 // binary so that all configured hooks (pre-commit, commit-msg, post-commit) run.
-// It returns a CommitSummary suitable for printing to the user.
-func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) (CommitSummary, error) {
+func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) error {
 	root, err := c.WorkingTreeRoot()
 	if err != nil {
-		return CommitSummary{}, fmt.Errorf("working tree root: %w", err)
+		return fmt.Errorf("working tree root: %w", err)
 	}
 
 	f, err := os.CreateTemp("", "git-zf-msg-*")
 	if err != nil {
-		return CommitSummary{}, fmt.Errorf("create temp msg file: %w", err)
+		return fmt.Errorf("create temp msg file: %w", err)
 	}
 	defer os.Remove(f.Name())
 
 	if _, err := f.Write(msg); err != nil {
 		_ = f.Close()
 
-		return CommitSummary{}, fmt.Errorf("write commit msg: %w", err)
+		return fmt.Errorf("write commit msg: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		return CommitSummary{}, fmt.Errorf("close temp msg file: %w", err)
+		return fmt.Errorf("close temp msg file: %w", err)
 	}
 
 	args := []string{"commit", "-F", f.Name()}
@@ -302,51 +290,10 @@ func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) (Co
 	}
 
 	if err := c.runInteractive(ctx, root, args...); err != nil {
-		return CommitSummary{}, fmt.Errorf("commit: %w", err)
+		return fmt.Errorf("commit: %w", err)
 	}
 
-	head, err := c.repo.Head()
-	if err != nil {
-		return CommitSummary{}, fmt.Errorf("read HEAD after commit: %w", err)
-	}
-
-	return c.buildSummary(head.Hash(), string(msg))
-}
-
-func (c *Client) buildSummary(hash plumbing.Hash, msg string) (CommitSummary, error) {
-	commit, err := c.repo.CommitObject(hash)
-	if err != nil {
-		return CommitSummary{}, fmt.Errorf("read commit: %w", err)
-	}
-
-	stats, err := commit.Stats()
-	if err != nil {
-		return CommitSummary{}, fmt.Errorf("commit stats: %w", err)
-	}
-
-	head, err := c.repo.Head()
-	if err != nil {
-		return CommitSummary{}, fmt.Errorf("read HEAD: %w", err)
-	}
-
-	subject := strings.TrimSpace(strings.SplitN(msg, "\n", 2)[0])
-
-	var files, add, del int
-	for _, f := range stats {
-		files++
-		add += f.Addition
-		del += f.Deletion
-	}
-
-	return CommitSummary{
-		ShortHash: hash.String()[:7],
-		Branch:    head.Name().Short(),
-		IsRoot:    len(commit.ParentHashes) == 0,
-		Subject:   subject,
-		Files:     files,
-		Additions: add,
-		Deletions: del,
-	}, nil
+	return nil
 }
 
 // DefaultBaseBranch resolves the default base branch in priority order:
