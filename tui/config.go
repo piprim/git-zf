@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/charmbracelet/huh"
+import (
+	"errors"
+
+	"github.com/charmbracelet/huh"
+)
 
 // ConfigDestPicker presents a select form for choosing where to write the config file.
 // opts is built by the caller based on which paths already exist.
@@ -25,7 +29,15 @@ func ConfigSectionPicker(keys []string, selected *[]string) *huh.Group {
 
 	multiselect := huh.NewMultiSelect[string]().
 		Title("Which sections do you want to include in the repo config?").
+		Description("Use space/x to toggle, enter to confirm.").
 		Options(opts...).
+		Validate(func(v []string) error {
+			if len(v) == 0 {
+				return errors.New("select at least one section (space/x to toggle)")
+			}
+
+			return nil
+		}).
 		Value(selected)
 
 	return huh.NewGroup(multiselect)
