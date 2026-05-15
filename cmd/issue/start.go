@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mitchellh/go-homedir"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/issue"
@@ -71,6 +74,19 @@ func (i Issue) RunIssueStart(cmd *cobra.Command, flags issue.IssueStartFlags) er
 		}
 	}
 
+	useWorktree := false
+	if i.appConfig.Branch.UseWorktree == nil {
+		if err := huh.NewForm(tui.WorktreeToggle(&useWorktree)).Run(); err != nil {
+			return fmt.Errorf("worktree toggle: %w", err)
+		}
+	} else {
+		useWorktree = *i.appConfig.Branch.UseWorktree
+	}
+
+	if useWorktree {
+		return i.createWorktree(cmd, t, pickedIssue, client)
+	}
+
 	return i.createBranch(cmd, t, pickedIssue, client)
 }
 
@@ -99,23 +115,36 @@ func (i Issue) getFromTracker(
 	return pickedIssue, nil
 }
 
+// prepareBranch assembles the branch name and resolves the base branch.
+func (i Issue) prepareBranch(
+	pickedIssue *issue.Issue,
+	client *git.Client,
+) (branchName, base string, err error) {
+	b, err := branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
+	if err != nil {
+		return "", "", fmt.Errorf("assemble branch name: %w", err)
+	}
+
+	base = i.appConfig.Branch.Base
+	if base == "" {
+		base, err = client.DefaultBaseBranch()
+		if err != nil {
+			return "", "", fmt.Errorf("detect base branch: %w", err)
+		}
+	}
+
+	return b.Name(), base, nil
+}
+
 func (i Issue) createBranch(
 	cmd *cobra.Command,
 	t tracker.Tracker,
 	pickedIssue *issue.Issue,
-	client *git.Client) error {
-	b, err := branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
+	client *git.Client,
+) error {
+	branchName, base, err := i.prepareBranch(pickedIssue, client)
 	if err != nil {
-		return fmt.Errorf("assemble branch name: %w", err)
-	}
-
-	branchName := b.Name()
-	base := i.appConfig.Branch.Base
-	if base == "" {
-		base, err = client.DefaultBaseBranch()
-		if err != nil {
-			return fmt.Errorf("detect base branch: %w", err)
-		}
+		return err
 	}
 
 	var confirmed bool
@@ -135,6 +164,11 @@ func (i Issue) createBranch(
 		return fmt.Errorf("create branch: %w", err)
 	}
 
+	b, err := branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
+	if err != nil {
+		return fmt.Errorf("assemble branch for persist: %w", err)
+	}
+
 	var tt *string
 	if pickedIssue.TrackerType != "" {
 		tt = &i.appConfig.IssueTracker.Type
@@ -145,6 +179,71 @@ func (i Issue) createBranch(
 	}
 
 	fmt.Printf("Switched to new branch %q (based on %q)\n", branchName, base)
+
+	if pickedIssue.TrackerType != "" {
+		i.updateTrackerIssueStatus(cmd, t, pickedIssue.ID)
+	}
+
+	return nil
+}
+
+func (i Issue) createWorktree(
+	cmd *cobra.Command,
+	t tracker.Tracker,
+	pickedIssue *issue.Issue,
+	client *git.Client,
+) error {
+	branchName, base, err := i.prepareBranch(pickedIssue, client)
+	if err != nil {
+		return err
+	}
+
+	repoRoot, err := client.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	repoName, err := client.RepoName()
+	if err != nil {
+		return fmt.Errorf("resolve repo name: %w", err)
+	}
+
+	path := worktreePath(repoRoot, i.appConfig.Branch.WorktreeDir, repoName, branchName)
+
+	var confirmed bool
+	if err := huh.NewForm(tui.IssueConfirm(
+		fmt.Sprintf("Create worktree %q at %q based on %q?", branchName, path, base), &confirmed,
+	)).Run(); err != nil {
+		return fmt.Errorf("confirm form: %w", err)
+	}
+
+	if !confirmed {
+		fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
+
+		return nil
+	}
+
+	if err := client.CreateWorktree(cmd.Context(), branchName, base, path); err != nil {
+		return fmt.Errorf("create worktree: %w", err)
+	}
+
+	b, err := branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
+	if err != nil {
+		return fmt.Errorf("assemble branch for persist: %w", err)
+	}
+
+	var tt *string
+	if pickedIssue.TrackerType != "" {
+		tt = &i.appConfig.IssueTracker.Type
+	}
+
+	if err := persist(cmd.Context(), b, pickedIssue.Subject, tt); err != nil {
+		fmt.Fprintf(cmd.OutOrStderr(), "warning: worktree created but store record failed: %v\n", err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Created worktree %q at %q (based on %q)\n", branchName, path, base)
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700"))
+	fmt.Fprintln(cmd.OutOrStdout(), hintStyle.Render("Run 'cd "+path+"' to begin working."))
 
 	if pickedIssue.TrackerType != "" {
 		i.updateTrackerIssueStatus(cmd, t, pickedIssue.ID)
@@ -194,4 +293,17 @@ func persist(ctx context.Context, b *branch.Branch, rawTitle string, trackerType
 	}
 
 	return nil
+}
+
+// worktreePath computes the absolute path for a new worktree.
+// baseDir overrides the default (sibling of repoRoot) when non-empty; ~ is expanded.
+func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
+	base := baseDir
+	if base == "" {
+		base = filepath.Dir(repoRoot)
+	} else if expanded, err := homedir.Expand(base); err == nil {
+		base = expanded
+	}
+
+	return filepath.Join(base, repoName+"--"+branchName)
 }

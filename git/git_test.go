@@ -946,3 +946,110 @@ func TestCheckout(t *testing.T) {
 		}
 	})
 }
+
+func TestRepoName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns last segment of HTTPS remote URL without .git suffix", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newDiskRepo(t)
+		run := func(args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		run("remote", "add", "origin", "https://github.com/piprim/git-zf.git")
+
+		name, err := c.RepoName()
+		if err != nil {
+			t.Fatalf("RepoName: %v", err)
+		}
+		if name != "git-zf" {
+			t.Errorf("got %q, want %q", name, "git-zf")
+		}
+	})
+
+	t.Run("returns last segment of SSH remote URL without .git suffix", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newDiskRepo(t)
+		run := func(args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		run("remote", "add", "origin", "git@github.com:piprim/git-zf.git")
+
+		name, err := c.RepoName()
+		if err != nil {
+			t.Fatalf("RepoName: %v", err)
+		}
+		if name != "git-zf" {
+			t.Errorf("got %q, want %q", name, "git-zf")
+		}
+	})
+
+	t.Run("falls back to directory name when no remote", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newDiskRepo(t)
+
+		name, err := c.RepoName()
+		if err != nil {
+			t.Fatalf("RepoName: %v", err)
+		}
+		if name != filepath.Base(dir) {
+			t.Errorf("got %q, want %q", name, filepath.Base(dir))
+		}
+	})
+}
+
+func TestCreateWorktree(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates a linked worktree at the given path", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newDiskRepo(t)
+		worktreePath := filepath.Join(t.TempDir(), "myrepo--feat-123-thing")
+
+		if err := c.CreateWorktree(t.Context(), "feat/123-thing", "main", worktreePath); err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
+		}
+
+		// The worktree directory must exist.
+		if _, err := os.Stat(worktreePath); err != nil {
+			t.Fatalf("worktree dir not created: %v", err)
+		}
+
+		// The branch must exist in the main repo.
+		var buf bytes.Buffer
+		cmd := exec.Command("git", "branch", "--list", "feat/123-thing")
+		cmd.Dir = dir
+		cmd.Stdout = &buf
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git branch --list: %v", err)
+		}
+		if !strings.Contains(buf.String(), "feat/123-thing") {
+			t.Errorf("branch feat/123-thing not found in main repo")
+		}
+	})
+
+	t.Run("returns error when branch already exists", func(t *testing.T) {
+		t.Parallel()
+
+		c, _ := newDiskRepo(t)
+		// "main" already exists.
+		err := c.CreateWorktree(t.Context(), "main", "main", filepath.Join(t.TempDir(), "conflict"))
+		if err == nil {
+			t.Fatal("expected error for duplicate branch, got nil")
+		}
+	})
+}

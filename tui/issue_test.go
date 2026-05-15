@@ -203,3 +203,17 @@ func TestProjectPickerOptions(t *testing.T) {
 		}
 	})
 }
+
+func TestWorktreeToggle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("pre-selects false (plain branch) by default", func(t *testing.T) {
+		t.Parallel()
+
+		var useWorktree bool
+		WorktreeToggle(&useWorktree)
+		if useWorktree {
+			t.Error("default should be false (plain branch), got true")
+		}
+	})
+}

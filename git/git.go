@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -345,6 +346,46 @@ func (c *Client) LocalBranchNames() ([]string, error) {
 	return names, nil
 }
 
+// RepoName returns a short identifier for this repository.
+// Resolution order:
+//
+//	1. Last path segment of the configured remote URL, with ".git" stripped.
+//	2. Base name of the working tree root directory (local-only fallback).
+func (c *Client) RepoName() (string, error) {
+	remote, err := c.Remote()
+	if err != nil {
+		return "", fmt.Errorf("resolve remote: %w", err)
+	}
+
+	if remote != "" {
+		remotes, err := c.repo.Remotes()
+		if err != nil {
+			return "", fmt.Errorf("list remotes: %w", err)
+		}
+
+		for _, r := range remotes {
+			if r.Config().Name == remote && len(r.Config().URLs) > 0 {
+				u := r.Config().URLs[0]
+				// Strip trailing slashes then take last segment.
+				u = strings.TrimRight(u, "/")
+				seg := u[strings.LastIndexAny(u, "/:")+1:]
+				seg = strings.TrimSuffix(seg, ".git")
+
+				if seg != "" {
+					return seg, nil
+				}
+			}
+		}
+	}
+
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return "", fmt.Errorf("working tree root: %w", err)
+	}
+
+	return filepath.Base(root), nil
+}
+
 // IsMergedInto reports whether branchName's tip commit is reachable from baseBranch,
 // i.e. whether the branch has been merged into base (mirrors git merge-base --is-ancestor).
 func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
@@ -410,6 +451,21 @@ func (c *Client) CreateBranch(name, baseBranch string) error {
 		Keep:   true,
 	}); err != nil {
 		return fmt.Errorf("create branch %q: %w", name, err)
+	}
+
+	return nil
+}
+
+// CreateWorktree creates a new branch from baseBranch and checks it out
+// in a linked worktree at path. Wraps `git worktree add -b <branch> <path> <base>`.
+func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, path string) error {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	if err := c.runInteractive(ctx, root, "worktree", "add", "-b", branchName, path, baseBranch); err != nil {
+		return fmt.Errorf("create worktree %q: %w", path, err)
 	}
 
 	return nil

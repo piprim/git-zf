@@ -75,7 +75,16 @@ $ git zf issue list
 $ git zf issue close
 ```
 
-**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out automatically. Branch state is tracked in `.git/git-zf.db`.
+**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out, **or a git worktree is created** so the main working tree stays untouched. Branch/worktree state is tracked in `.git/git-zf.db`.
+
+After the issue is selected, a prompt asks whether to create a plain branch or a worktree. When a worktree is created the command prints the path and a `cd` hint since the shell cannot change directory automatically:
+
+```
+Created worktree "feat/ABC-42-add-login" at "/home/user/code/myapp--feat-ABC-42-add-login" (based on "main")
+Run 'cd /home/user/code/myapp--feat-ABC-42-add-login' to begin working.
+```
+
+The choice can be pinned via `branch.use-worktree` in the config (see [Branch naming](#branch-naming)).
 
 If a tracker is configured, `issue start` pre-selects fetching from the tracker; after picking an issue you can update its status to "In Progress" in one step.
 
@@ -333,13 +342,25 @@ Branch names follow the format `{issue-id}@{type}@{slugified-title}@{short-uuid}
 ABC-42@feat@add-oauth-login@550e8400
 ```
 
-To override the base branch or the remote name:
+To override the base branch, remote name, or worktree behaviour:
 
 ```toml
 [branch]
-base   = "develop"   # default: auto-detected from <remote>/HEAD, then "main", then "master"
-remote = "upstream"  # default: auto-detected (see below)
+base         = "develop"     # default: auto-detected from <remote>/HEAD, then "main", then "master"
+remote       = "upstream"    # default: auto-detected (see below)
+use-worktree = true          # omit = ask at runtime; true = always worktree; false = always branch
+worktree-dir = "~/worktrees" # omit = sibling of repo root
 ```
+
+`use-worktree` is a three-state setting:
+
+| Value | Behaviour |
+|-------|-----------|
+| omitted | A TUI prompt asks at runtime (default) |
+| `true` | Always create a worktree, skip the prompt |
+| `false` | Always create a plain branch, skip the prompt |
+
+When `worktree-dir` is omitted the worktree is placed as a sibling of the repository root, named `<repo>--<branch>` (e.g. `~/code/myapp--feat-123-login`). The repo name is resolved from the remote URL when possible, so the path is correct even inside Docker containers where the working directory name may differ from the actual repository name.
 
 **Remote auto-detection** — when `branch.remote` is not set, git-zf resolves the remote as follows:
 

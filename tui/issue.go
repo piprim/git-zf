@@ -49,7 +49,7 @@ func IssueActionSelect(action *string) *huh.Group {
 			Title("Issue action:").
 			Options(
 				huh.NewOption("Start\n"+descStyle.Render(
-					"Start working on an issue (create branch)"), IssueActionNameStart),
+					"Start working on an issue (branch or worktree)"), IssueActionNameStart),
 				huh.NewOption("List\n"+descStyle.Render("List open issues"), IssueActionNameList),
 				huh.NewOption("Close\n"+descStyle.Render("Close an issue"), IssueActionNameClose),
 			).
@@ -116,6 +116,18 @@ func IssueTrackerToggle(useTracker *bool, trackerFirst bool, trackerType string)
 		huh.NewConfirm().
 			Title(fmt.Sprintf("Fetch issues from %s?", trackerType)).
 			Value(useTracker),
+	)
+}
+
+// WorktreeToggle asks whether to create a git worktree or a plain branch.
+// Pre-selected default is false (plain branch).
+func WorktreeToggle(useWorktree *bool) *huh.Group {
+	*useWorktree = false
+
+	return huh.NewGroup(
+		huh.NewConfirm().
+			Title("Create a git worktree instead of a plain branch?").
+			Value(useWorktree),
 	)
 }
 

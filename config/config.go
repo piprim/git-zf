@@ -57,8 +57,10 @@ type CommitMessageConfig struct {
 // Base is the branch new branches are cut from; empty means auto-detect.
 // Remote is the git remote name to use; empty means auto-detect.
 type BranchConfig struct {
-	Base   string `json:"base"   toml:"base"   mapstructure:"base"`
-	Remote string `json:"remote" toml:"remote" mapstructure:"remote"`
+	Base        string `json:"base"          toml:"base"          mapstructure:"base"`
+	Remote      string `json:"remote"        toml:"remote"        mapstructure:"remote"`
+	UseWorktree *bool  `json:"use-worktree"  toml:"use-worktree"  mapstructure:"use-worktree"`
+	WorktreeDir string `json:"worktree-dir"  toml:"worktree-dir"  mapstructure:"worktree-dir"`
 }
 
 // IssueTrackerConfig holds connection parameters for one tracker instance.
@@ -115,6 +117,15 @@ func Load() (*AppConfig, error) {
 
 	if viper.IsSet("branch.remote") {
 		cfg.Branch.Remote = viper.GetString("branch.remote")
+	}
+
+	if viper.IsSet("branch.use-worktree") {
+		v := viper.GetBool("branch.use-worktree")
+		cfg.Branch.UseWorktree = &v
+	}
+
+	if viper.IsSet("branch.worktree-dir") {
+		cfg.Branch.WorktreeDir = viper.GetString("branch.worktree-dir")
 	}
 
 	// issue-tracker is decoded without zeroSlice: Projects defaults to nil, so
