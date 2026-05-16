@@ -24,6 +24,7 @@ func New(appConfig *config.AppConfig) Commit {
 
 func (c Commit) GetRootCmd() *cobra.Command {
 	var (
+		assumYes   bool
 		all        bool
 		amend      bool
 		noVerify   bool
@@ -41,6 +42,7 @@ func (c Commit) GetRootCmd() *cobra.Command {
 	}
 
 	f := cmd.Flags()
+	f.BoolVarP(&assumYes, "yes", "y", false, "skip the commit options form and assume defaults")
 	f.BoolVarP(&all, "all", "a", false, "stage all tracked modified/deleted files before committing")
 	f.BoolVar(&amend, "amend", false, "replace the tip of the current branch")
 	f.BoolVarP(&noVerify, "no-verify", "n", false, "bypass pre-commit and commit-msg hooks")
@@ -50,6 +52,7 @@ func (c Commit) GetRootCmd() *cobra.Command {
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		return c.runE(cmd, tui.CommitOption{
+			AssumeYes:  assumYes,
 			All:        all,
 			Amend:      amend,
 			NoVerify:   noVerify,

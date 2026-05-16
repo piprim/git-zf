@@ -18,6 +18,7 @@ import (
 type CommitOption struct {
 	Authors    []string
 	Author     string
+	AssumeYes  bool
 	All        bool
 	Amend      bool
 	NoVerify   bool
@@ -28,7 +29,7 @@ type CommitOption struct {
 // AnyOptionSet reports true if any commit-option flag was passed.
 // When true, the CommitOptionsGroup of the TUI should be skipped.
 func (o CommitOption) AnyOptionSet() bool {
-	return o.All || o.Amend || o.NoVerify || o.Signoff || o.AllowEmpty || o.Author != ""
+	return o.All || o.Amend || o.NoVerify || o.Signoff || o.AllowEmpty || o.Author != "" || o.AssumeYes
 }
 
 var (

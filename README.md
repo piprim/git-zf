@@ -63,6 +63,7 @@ Flags:
   -h, --help            help for commit
   -n, --no-verify       bypass pre-commit and commit-msg hooks
   -s, --signoff         add Signed-off-by trailer to the commit message
+  -y, --yes             skip the commit options form and assume defaults
 ```
 
 If any commit flag is passed, the options page of the TUI form is skipped and the flags are used directly.
