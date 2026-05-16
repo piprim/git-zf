@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	gogit "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/piprim/git-zf/internal/pkg"
@@ -232,7 +233,7 @@ func (c *Client) Authors() ([]string, error) {
 
 	slices.Sort(list)
 
-	cfg, err := c.repo.Config()
+	cfg, err := c.repo.ConfigScoped(config.SystemScope)
 	if err == nil && cfg.User.Name != "" {
 		current := cfg.User.Name + " <" + cfg.User.Email + ">"
 		filtered := make([]string, 0, len(list))
