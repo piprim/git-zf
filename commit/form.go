@@ -275,7 +275,7 @@ type IssueHint struct {
 // BranchType is emitted as "type" when non-empty; loadForm validates it
 // against cfg.CommitTypes and silently ignores an unconfigured value.
 func (h IssueHint) Prefill(items []config.CommitItem) map[string]any {
-	out := map[string]any{}
+	out := make(map[string]any)
 
 	if h.IssueID != "" {
 		switch {
@@ -358,7 +358,7 @@ func loadForm(
 	groups := []*huh.Group{tui.CommitMessageGroup(cfg.CommitTypes, items, &selectedType)}
 
 	opts := defaults
-	if !defaults.AnyOptionSet() {
+	if !defaults.Skip {
 		groups = append(groups, tui.CommitOptionsGroup(&opts))
 	}
 

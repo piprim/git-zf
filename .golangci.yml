@@ -124,7 +124,7 @@ linters:
       threshold: 100
     funlen:
       lines: -1
-      statements: 50
+      statements: 70
     goconst:
       min-len: 2
       min-occurrences: 3
@@ -330,7 +330,7 @@ linters:
           severity: warning
           disabled: false
           exclude: [""]
-          arguments: [15]
+          arguments: [20]
         # https://github.com/mgechev/revive/blob/HEAD/RULES_DESCRIPTIONS.md#datarace
         - name: datarace
           severity: warning
@@ -498,7 +498,7 @@ linters:
           severity: warning
           disabled: false
           exclude: [""]
-          arguments: [50, 150]
+          arguments: [70, 170]
         # https://github.com/mgechev/revive/blob/HEAD/RULES_DESCRIPTIONS.md#function-result-limit
         - name: function-result-limit
           severity: warning

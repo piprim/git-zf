@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/go-git/go-git/v6/plumbing"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -116,7 +117,7 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	// Best-effort: warn on stderr but do not abort — the merge already succeeded.
+	// warn on stderr but do not abort — the merge already succeeded.
 	i.updateStatus(cmd, s, picked)
 
 	if err := doDeleteBranch(cmd, client, picked, strategy); err != nil {
@@ -174,7 +175,11 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 
 	var picked string
 	strategyForm := tui.IssueMergeStrategy(&picked, []tui.StrategyOption{
-		{Value: string(StrategyRebase), Label: "Rebase", Hint: "Single clean commit on local base, submodule-safe (recommended)"},
+		{
+			Value: string(StrategyRebase),
+			Label: "Rebase",
+			Hint:  "Single clean commit on local base, submodule-safe (recommended)",
+		},
 		{Value: string(StrategySquash), Label: "Squash", Hint: "git merge --squash — fast, but not submodule-safe"},
 		{Value: string(StrategyClassic), Label: "Classic", Hint: "git merge --no-ff — preserves full history"},
 	})
@@ -330,62 +335,9 @@ func (i Issue) closeTrackerIssue(cmd *cobra.Command, issueSlug string) {
 // The post-commit FF failure is signalled with errFastForwardDeferred so the
 // caller can skip post-merge bookkeeping without rolling back the new commit.
 func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
-	dirty, err := mc.client.IsDirty(ctx)
+	plan, err := rebasePreflight(ctx, mc)
 	if err != nil {
-		return fmt.Errorf("dirty check: %w", err)
-	}
-
-	if dirty {
-		return errors.New("working tree has uncommitted modifications — commit or stash before closing")
-	}
-
-	if err := mc.client.Checkout(ctx, mc.pickedBranch.BranchName); err != nil {
-		return fmt.Errorf("checkout %s: %w", mc.pickedBranch.BranchName, err)
-	}
-
-	featureOrigSHA, err := mc.client.ResolveRef("HEAD")
-	if err != nil {
-		return fmt.Errorf("resolve HEAD: %w", err)
-	}
-
-	remoteName, err := mc.client.Remote()
-	if err != nil {
-		return fmt.Errorf("resolve remote: %w", err)
-	}
-
-	if err := mc.client.Fetch(ctx); err != nil {
-		return fmt.Errorf("fetch: %w", err)
-	}
-
-	var remoteBase string
-	if remoteName != "" {
-		remoteBase = remoteName + "/" + mc.baseBranch
-	} else {
-		remoteBase = mc.baseBranch
-	}
-
-	integrated, err := mc.client.IsAncestor(ctx, mc.pickedBranch.BranchName, remoteBase)
-	if err != nil {
-		return fmt.Errorf("ancestor check: %w", err)
-	}
-
-	if integrated {
-		return fmt.Errorf("%q has no commits ahead of %s — already integrated?",
-			mc.pickedBranch.BranchName, remoteBase)
-	}
-
-	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, remoteBase)
-	if err != nil {
-		return fmt.Errorf("merge dry-run: %w", err)
-	}
-
-	if len(conflicts) > 0 {
-		fmt.Fprintln(mc.client.IO().Out, "Conflicts detected:")
-		for _, f := range conflicts {
-			fmt.Fprintln(mc.client.IO().Out, "  "+f)
-		}
-
-		return fmt.Errorf("merge conflicts vs %s in %q", remoteBase, mc.pickedBranch.BranchName)
+		return err
 	}
 
 	if err := mc.client.MergeRebase(ctx, mc.pickedBranch.BranchName, mc.baseBranch); err != nil {
@@ -397,7 +349,7 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 			return
 		}
 
-		if rbErr := mc.client.ResetHard(ctx, featureOrigSHA.String()); rbErr != nil {
+		if rbErr := mc.client.ResetHard(ctx, plan.featureOrigSHA.String()); rbErr != nil {
 			err = fmt.Errorf("rollback after %w failed: %v", err, rbErr)
 
 			return
@@ -405,11 +357,11 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 
 		fmt.Fprintf(mc.client.IO().Err,
 			"Rolled back: feature branch %q restored to %s\n",
-			mc.pickedBranch.BranchName, featureOrigSHA.String()[:shortSHALen])
+			mc.pickedBranch.BranchName, plan.featureOrigSHA.String()[:shortSHALen])
 	}()
 
-	baseRef := "refs/remotes/" + remoteBase
-	if remoteName == "" {
+	baseRef := "refs/remotes/" + plan.remoteBase
+	if plan.remoteName == "" {
 		baseRef = "refs/heads/" + mc.baseBranch
 	}
 	baseOriginSHA, err := mc.client.ResolveRef(baseRef)
@@ -423,7 +375,7 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 	}
 	prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
 	prefill["subject"] = fmt.Sprintf("Squashed close of %s into %s.",
-		featureOrigSHA.String()[:shortSHALen], baseOriginSHA.String()[:shortSHALen])
+		plan.featureOrigSHA.String()[:shortSHALen], baseOriginSHA.String()[:shortSHALen])
 
 	authors, authorsErr := mc.client.Authors()
 	if authorsErr != nil {
@@ -457,10 +409,97 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 		fmt.Fprintf(mc.client.IO().Err,
 			"Commit created on %q but local %s has diverged from %s.\n"+
 				"Run `git pull --ff-only` on %s, then `git merge --ff-only %s` to land it.\n",
-			mc.pickedBranch.BranchName, mc.baseBranch, remoteBase,
+			mc.pickedBranch.BranchName, mc.baseBranch, plan.remoteBase,
 			mc.baseBranch, mc.pickedBranch.BranchName)
 
 		return errFastForwardDeferred
+	}
+
+	return nil
+}
+
+// rebasePlan captures the state computed by rebasePreflight and consumed by
+// doRebaseClose. remoteBase is "<remote>/<base>" when a remote is configured,
+// otherwise "<base>"; remoteName is "" in the no-remote case so callers can
+// pick the correct ref namespace.
+type rebasePlan struct {
+	featureOrigSHA plumbing.Hash
+	remoteName     string
+	remoteBase     string
+}
+
+// rebasePreflight runs the read-only checks that precede MergeRebase: dirty
+// tree, checkout, resolve HEAD + remote, fetch, compute the merge endpoint,
+// ancestor check, and merge dry-run.
+func rebasePreflight(ctx context.Context, mc mergeContext) (rebasePlan, error) {
+	dirty, err := mc.client.IsDirty(ctx)
+	if err != nil {
+		return rebasePlan{}, fmt.Errorf("dirty check: %w", err)
+	}
+
+	if dirty {
+		return rebasePlan{},
+			errors.New("working tree has uncommitted modifications — commit or stash before closing")
+	}
+
+	if err := mc.client.Checkout(ctx, mc.pickedBranch.BranchName); err != nil {
+		return rebasePlan{}, fmt.Errorf("checkout %s: %w", mc.pickedBranch.BranchName, err)
+	}
+
+	featureOrigSHA, err := mc.client.ResolveRef("HEAD")
+	if err != nil {
+		return rebasePlan{}, fmt.Errorf("resolve HEAD: %w", err)
+	}
+
+	remoteName, err := mc.client.Remote()
+	if err != nil {
+		return rebasePlan{}, fmt.Errorf("resolve remote: %w", err)
+	}
+
+	if err := mc.client.Fetch(ctx); err != nil {
+		return rebasePlan{}, fmt.Errorf("fetch: %w", err)
+	}
+
+	remoteBase := mc.baseBranch
+	if remoteName != "" {
+		remoteBase = remoteName + "/" + mc.baseBranch
+	}
+
+	integrated, err := mc.client.IsAncestor(ctx, mc.pickedBranch.BranchName, remoteBase)
+	if err != nil {
+		return rebasePlan{}, fmt.Errorf("ancestor check: %w", err)
+	}
+
+	if integrated {
+		//nolint:revive // Question mark
+		return rebasePlan{}, fmt.Errorf("%q has no commits ahead of %s — already integrated?",
+			mc.pickedBranch.BranchName, remoteBase)
+	}
+
+	if err := mergeDryRun(ctx, mc, remoteBase); err != nil {
+		return rebasePlan{}, err
+	}
+
+	return rebasePlan{
+		featureOrigSHA: featureOrigSHA,
+		remoteName:     remoteName,
+		remoteBase:     remoteBase,
+	}, nil
+}
+
+func mergeDryRun(ctx context.Context, mc mergeContext, remoteBase string) error {
+	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, remoteBase)
+	if err != nil {
+		return fmt.Errorf("merge dry-run: %w", err)
+	}
+
+	if len(conflicts) > 0 {
+		fmt.Fprintln(mc.client.IO().Out, "Conflicts detected:")
+		for _, f := range conflicts {
+			fmt.Fprintln(mc.client.IO().Out, "  "+f)
+		}
+
+		return fmt.Errorf("merge conflicts vs %s in %q", remoteBase, mc.pickedBranch.BranchName)
 	}
 
 	return nil

@@ -16,20 +16,14 @@ import (
 // CommitOption holds commit option values for the commit options group of the TUI.
 // Used both as flag-derived defaults (input) and as user selections (output).
 type CommitOption struct {
+	Skip       bool
 	Authors    []string
 	Author     string
-	AssumeYes  bool
 	All        bool
 	Amend      bool
 	NoVerify   bool
 	Signoff    bool
 	AllowEmpty bool
-}
-
-// AnyOptionSet reports true if any commit-option flag was passed.
-// When true, the CommitOptionsGroup of the TUI should be skipped.
-func (o CommitOption) AnyOptionSet() bool {
-	return o.All || o.Amend || o.NoVerify || o.Signoff || o.AllowEmpty || o.Author != "" || o.AssumeYes
 }
 
 var (
