@@ -110,7 +110,7 @@ In the interactive TUI:
 
 The close flow:
 1. A conflict dry-run is performed via `git merge-tree` — if conflicts are detected the command aborts without touching anything.
-2. Choose merge strategy: **Rebase** (default, recommended — single clean commit, submodule-safe), **Squash** (`git merge --squash`, fast but not submodule-safe), or **Classic** (`--no-ff`, preserves full history). For Rebase and Squash, the final commit is composed through the commitizen TUI form, pre-filled from the branch's issue ID and type.
+2. Choose merge strategy: **Rebase** (default, recommended — single clean commit, submodule-safe), **Squash** (`git merge --squash`, fast but not submodule-safe), or **Classic** (`--no-ff`, preserves full history). For all three strategies the final commit is composed through the commitizen TUI form, pre-filled from the branch's issue ID and type.
 3. Confirm the merge. After a successful merge the branch is marked as `merged` in the local store and the issue is marked as `closed`.
 4. If a tracker is configured, a status picker lets you update the remote issue status (or skip).
 5. Optionally delete the local branch. Safe delete (`-d`) is used for classic merges; force delete (`-D`) for Squash and Rebase (neither preserves ancestry, so git requires `-D`).
@@ -121,7 +121,7 @@ The close flow:
 |---|---|---|---|
 | **Rebase** *(default)* | Real `git merge <remote>/<base>` + `git reset --soft <remote>/<base>` | one clean commit | ✅ yes |
 | **Squash** | `git merge --squash` | one commit, no merge parent | ⚠️ no — `--squash` is known to mishandle submodule gitlinks |
-| **Classic** | `git merge --no-ff` | merge commit + full feature history | ✅ yes |
+| **Classic** | `git merge --no-ff --no-commit` + commitizen form (FF-syncs local base against `origin/<base>` first) | merge commit + full feature history | ✅ yes |
 
 #### Rebase strategy — detailed flow
 
@@ -190,11 +190,40 @@ Run `git pull --ff-only` on <base>, then `git merge --ff-only <feature>` to land
 
 The store and tracker are not updated, the delete-branch prompt is skipped, and the close exits cleanly. You reconcile local base manually and FF the feature commit yourself.
 
+#### Classic strategy — detailed flow
+
+1. **Pre-flight** (shared with Rebase):
+   - Refuses if the working tree has tracked modifications or staged changes.
+   - Checks out the feature branch, captures its tip SHA.
+   - Detects the configured remote and runs `git fetch <remote>` (no-op when no remote is configured).
+   - Computes `remoteBase` as `<remote>/<base>` (or `<base>` when local-only).
+   - Aborts if the feature branch has no commits ahead of `remoteBase` (already integrated).
+   - Runs a `merge-tree` dry-run of feature vs `remoteBase`; aborts with the conflict file list if any conflict is predicted.
+
+2. **Sync local base** (skipped when no remote):
+   - Checks out the local base branch.
+   - Runs `git merge --ff-only <remoteBase>` to bring local base up to `origin/<base>`.
+   - Refuses with a remediation message if local base has diverged from `origin/<base>` — the operator runs `git pull --ff-only` and retries.
+
+3. **Resolve integration target**: looks up `refs/heads/<base>` for the prefill subject SHA.
+
+4. **Stage the merge**: runs `git merge --no-ff --no-commit <feature>`. `MERGE_HEAD` / `MERGE_MSG` are left in place; nothing is committed yet.
+
+5. **TUI form** (pre-filled):
+   - subject: `Merge <feature-tip-short> into <base-tip-short>.`
+   - type / scope / authors default from the branch metadata, identical to Rebase / Squash.
+
+6. **Commit**: `git commit -F <msgfile>` plus options from the form. Because `MERGE_HEAD` is present, Git produces a two-parent merge commit on base with the form-supplied message.
+
+7. **Bookkeeping**: updates the local store and (optionally) the tracker, then offers the delete-branch prompt — unchanged from the other strategies. Classic uses safe delete (`-d`) since feature is now an ancestor of base.
+
+If any step between 4 and a successful commit fails — TUI abort, pre-commit hook rejection, signing failure — `git merge --abort` is run automatically to clear `MERGE_HEAD` / `MERGE_MSG` and restore the working tree. The operator is left on base in a clean state.
+
 ##### When to choose each strategy
 
 - **Rebase** — your repo has submodules, or you want a clean linear history with one commit per issue. Recommended default.
 - **Squash** — no submodules involved, you want the existing `git merge --squash` semantics (fast, fewer git operations).
-- **Classic** — you want to preserve the feature's full commit history on the base branch via a merge commit. Use when intermediate commits have value (large features, bisect surface, audit trail).
+- **Classic** — you want to preserve the feature's full commit history on the base branch via a merge commit. The merge commit's message is composed through the commitizen TUI form (same UX as Rebase/Squash). Local base is FF-synced against `origin/<base>` before the merge; Classic refuses to merge into a base that has diverged from origin (operator runs `git pull --ff-only` and retries). Use when intermediate commits have value (large features, bisect surface, audit trail).
 
 ### Branch
 ```

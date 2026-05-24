@@ -181,7 +181,7 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 			Hint:  "Single clean commit on local base, submodule-safe (recommended)",
 		},
 		{Value: string(StrategySquash), Label: "Squash", Hint: "git merge --squash — fast, but not submodule-safe"},
-		{Value: string(StrategyClassic), Label: "Classic", Hint: "git merge --no-ff — preserves full history"},
+		{Value: string(StrategyClassic), Label: "Classic", Hint: "git merge --no-ff with commitizen message — preserves full history"},
 	})
 	if err := huh.NewForm(strategyForm).Run(); err != nil {
 		return "", false, fmt.Errorf("strategy picker: %w", err)
@@ -201,8 +201,8 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 
 	switch strategy {
 	case StrategyClassic:
-		if err := mc.client.MergeNoFF(ctx, mc.pickedBranch.BranchName, mc.baseBranch); err != nil {
-			return strategy, false, fmt.Errorf("merge no-ff: %w", err)
+		if err := doClassicClose(ctx, mc); err != nil {
+			return strategy, false, err
 		}
 	case StrategySquash:
 		if err := doSquashCommit(ctx, mc); err != nil {
@@ -415,6 +415,106 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 		return errFastForwardDeferred
 	}
 
+	return nil
+}
+
+// doClassicClose drives the Classic strategy: shared rebasePreflight,
+// FF-sync of local base against origin/<base> (or direct checkout when no
+// remote), real --no-ff --no-commit merge on base, commitizen form,
+// commit. Rollback on any failure between MergeNoFFNoCommit and a
+// successful Commit runs `git merge --abort` to clear MERGE_HEAD /
+// MERGE_MSG and restore the working tree. The defer uses a named return
+// + closure so it observes the actual err at function exit.
+func doClassicClose(ctx context.Context, mc mergeContext) (err error) {
+	// rebasePreflight is reused verbatim: dirty check, feature checkout +
+	// SHA, remote detection, fetch, remoteBase computation, ancestor check,
+	// dry-run — all needed by Classic too. The rebasePlan's featureOrigSHA
+	// is used here only for the prefill subject (no rollback role since
+	// Classic uses AbortMerge instead of ResetHard).
+	plan, err := rebasePreflight(ctx, mc)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: sync local base with origin/<base> (no-op when no remote).
+	if plan.remoteName != "" {
+		if err := mc.client.FastForwardOnly(ctx, plan.remoteBase, mc.baseBranch); err != nil {
+			return fmt.Errorf("local %s diverged from %s — `git pull --ff-only` first: %w",
+				mc.baseBranch, plan.remoteBase, err)
+		}
+	} else {
+		if err := mc.client.Checkout(ctx, mc.baseBranch); err != nil {
+			return fmt.Errorf("checkout %s: %w", mc.baseBranch, err)
+		}
+	}
+
+	// Step 3: resolve integration target SHA for the prefill subject.
+	baseSHA, err := mc.client.ResolveRef("refs/heads/" + mc.baseBranch)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", mc.baseBranch, err)
+	}
+
+	// Step 4: stage the merge without committing.
+	if err := mc.client.MergeNoFFNoCommit(ctx, mc.pickedBranch.BranchName, mc.baseBranch); err != nil {
+		return fmt.Errorf("merge --no-ff --no-commit: %w", err)
+	}
+
+	defer func() {
+		if err == nil {
+			return
+		}
+
+		if abErr := mc.client.AbortMerge(ctx); abErr != nil {
+			err = fmt.Errorf("merge --abort after %w failed: %v", err, abErr)
+
+			return
+		}
+
+		fmt.Fprintf(mc.client.IO().Err,
+			"Rolled back: working tree on %q restored to pre-merge state\n",
+			mc.baseBranch)
+	}()
+
+	// Steps 5 + 6: TUI form (pre-filled) → commit.
+	hint := commitpkg.IssueHint{
+		IssueID:    mc.pickedBranch.IssueSlug,
+		BranchType: mc.pickedBranch.Type,
+	}
+	prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
+	prefill["subject"] = fmt.Sprintf("Merge %s into %s.",
+		plan.featureOrigSHA.String()[:shortSHALen], baseSHA.String()[:shortSHALen])
+
+	authors, authorsErr := mc.client.Authors()
+	if authorsErr != nil {
+		slog.Warn("could not load author list", "error", authorsErr)
+
+		authors = []string{}
+	}
+
+	defaults := tui.CommitOption{Authors: authors}
+	if len(authors) > 0 {
+		defaults.Author = authors[0]
+	}
+
+	msg, opts, err := commitpkg.FillOutForm(ctx, mc.cfg, defaults, mc.store, prefill)
+	if err != nil {
+		return fmt.Errorf("fill commit form: %w", err)
+	}
+
+	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
+		All:        opts.All,
+		Amend:      opts.Amend,
+		NoVerify:   opts.NoVerify,
+		Signoff:    opts.Signoff,
+		AllowEmpty: opts.AllowEmpty,
+		Author:     opts.Author,
+	}); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	// No post-commit fast-forward: unlike Rebase, the merge commit lands
+	// directly on base (MergeNoFFNoCommit checked out base before merging),
+	// so base is already at the new HEAD. No errFastForwardDeferred path.
 	return nil
 }
 

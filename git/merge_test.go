@@ -259,52 +259,6 @@ func TestMergeSquash(t *testing.T) {
 	}
 }
 
-func TestMergeNoFF(t *testing.T) {
-	t.Parallel()
-
-	client, dir := newDiskRepo(t)
-
-	run := func(args ...string) {
-		t.Helper()
-
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	run("checkout", "-b", "feature")
-
-	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write feat.go: %v", err)
-	}
-
-	run("add", "feat.go")
-	run("commit", "-m", "feat: add feat.go")
-	run("checkout", "main")
-
-	if err := client.MergeNoFF(t.Context(), "feature", "main"); err != nil {
-		t.Fatalf("MergeNoFF: %v", err)
-	}
-
-	// Verify feat.go exists on main.
-	if _, err := os.Stat(filepath.Join(dir, "feat.go")); err != nil {
-		t.Error("feat.go not found on main after no-ff merge")
-	}
-
-	// Verify the tip commit has two parents (it is a merge commit).
-	var noffBuf bytes.Buffer
-	logCmd := exec.Command("git", "log", "--pretty=%P", "-1")
-	logCmd.Dir = dir
-	logCmd.Stdout = &noffBuf
-	_ = logCmd.Run()
-
-	parents := strings.Fields(strings.TrimSpace(noffBuf.String()))
-	if len(parents) != 2 {
-		t.Errorf("expected merge commit with 2 parents, got %d: %s", len(parents), noffBuf.String())
-	}
-}
 
 func TestDeleteLocalBranch(t *testing.T) {
 	t.Parallel()
@@ -334,10 +288,8 @@ func TestDeleteLocalBranch(t *testing.T) {
 		run("commit", "-m", "feat: add feat.go")
 		run("checkout", "main")
 
-		// Classic merge so safe -d works.
-		if err := client.MergeNoFF(t.Context(), "feature", "main"); err != nil {
-			t.Fatalf("MergeNoFF: %v", err)
-		}
+		// Classic --no-ff merge so safe -d works.
+		run("merge", "--no-ff", "--no-edit", "feature")
 
 		if err := client.DeleteLocalBranch(t.Context(), "feature", false); err != nil {
 			t.Fatalf("DeleteLocalBranch: %v", err)
@@ -973,5 +925,231 @@ func TestMergeRebase_noRemote(t *testing.T) {
 
 	if branch != "feature" {
 		t.Errorf("CurrentBranch = %q, want %q", branch, "feature")
+	}
+}
+
+func TestMergeNoFFNoCommit_clean(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write feat.go: %v", err)
+	}
+	run("add", "feat.go")
+	run("commit", "-m", "feat: add feat.go")
+
+	// Base advances independently while feature is alive.
+	run("checkout", "main")
+	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package main\n// base advance\n"), 0o644); err != nil {
+		t.Fatalf("write base.go: %v", err)
+	}
+	run("add", "base.go")
+	run("commit", "-m", "chore: base advances")
+
+	// Pre-state: switch back to feature so the helper has to checkout base itself.
+	run("checkout", "feature")
+
+	if err := client.MergeNoFFNoCommit(t.Context(), "feature", "main"); err != nil {
+		t.Fatalf("MergeNoFFNoCommit: %v", err)
+	}
+
+	// HEAD must be on main (helper checked out base).
+	var headBuf bytes.Buffer
+	headCmd := exec.CommandContext(t.Context(), "git", "rev-parse", "--abbrev-ref", "HEAD")
+	headCmd.Dir = dir
+	headCmd.Stdout = &headBuf
+	if err := headCmd.Run(); err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(headBuf.String()); got != "main" {
+		t.Errorf("HEAD after MergeNoFFNoCommit = %q, want %q", got, "main")
+	}
+
+	// MERGE_HEAD must exist (commit pending).
+	if _, err := os.Stat(filepath.Join(dir, ".git", "MERGE_HEAD")); err != nil {
+		t.Errorf("MERGE_HEAD missing after MergeNoFFNoCommit: %v", err)
+	}
+
+	// feat.go must be staged on main.
+	var statusBuf bytes.Buffer
+	statusCmd := exec.CommandContext(t.Context(), "git", "status", "--porcelain")
+	statusCmd.Dir = dir
+	statusCmd.Stdout = &statusBuf
+	if err := statusCmd.Run(); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(statusBuf.String(), "feat.go") {
+		t.Errorf("status missing feat.go: %q", statusBuf.String())
+	}
+
+	// No new commit on main yet.
+	var logBuf bytes.Buffer
+	logCmd := exec.CommandContext(t.Context(), "git", "log", "--oneline", "main")
+	logCmd.Dir = dir
+	logCmd.Stdout = &logBuf
+	if err := logCmd.Run(); err != nil {
+		t.Fatalf("log: %v", err)
+	}
+	if strings.Contains(logBuf.String(), "Merge") {
+		t.Errorf("unexpected merge commit on main: %q", logBuf.String())
+	}
+}
+
+func TestMergeNoFFNoCommit_conflict(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "conflict.go"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run("add", "conflict.go")
+	run("commit", "-m", "feat: feature side")
+
+	run("checkout", "main")
+	if err := os.WriteFile(filepath.Join(dir, "conflict.go"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run("add", "conflict.go")
+	run("commit", "-m", "feat: base side")
+
+	if err := client.MergeNoFFNoCommit(t.Context(), "feature", "main"); err == nil {
+		t.Fatal("MergeNoFFNoCommit: expected conflict error, got nil")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".git", "MERGE_HEAD")); err != nil {
+		t.Errorf("MERGE_HEAD missing after conflicting MergeNoFFNoCommit: %v", err)
+	}
+
+	contents, readErr := os.ReadFile(filepath.Join(dir, "conflict.go"))
+	if readErr != nil {
+		t.Fatalf("read conflict.go: %v", readErr)
+	}
+	if !strings.Contains(string(contents), "<<<<<<<") {
+		t.Errorf("conflict.go missing conflict markers: %q", string(contents))
+	}
+}
+
+func TestMergeNoFFNoCommit_ffOnly(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "ahead.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run("add", "ahead.go")
+	run("commit", "-m", "feat: only on feature")
+
+	// main is now an ancestor of feature — no divergence.
+	if err := client.MergeNoFFNoCommit(t.Context(), "feature", "main"); err != nil {
+		t.Fatalf("MergeNoFFNoCommit: %v", err)
+	}
+
+	// --no-ff must force MERGE_HEAD even in a fast-forwardable situation.
+	if _, err := os.Stat(filepath.Join(dir, ".git", "MERGE_HEAD")); err != nil {
+		t.Errorf("MERGE_HEAD missing in FF-able scenario: %v", err)
+	}
+}
+
+func TestAbortMerge_active(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	run("checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "feat.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run("add", "feat.go")
+	run("commit", "-m", "feat: add feat.go")
+
+	run("checkout", "main")
+	if err := os.WriteFile(filepath.Join(dir, "base.go"), []byte("package main\n// base advance\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run("add", "base.go")
+	run("commit", "-m", "chore: base advances")
+
+	if err := client.MergeNoFFNoCommit(t.Context(), "feature", "main"); err != nil {
+		t.Fatalf("MergeNoFFNoCommit: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "MERGE_HEAD")); err != nil {
+		t.Fatalf("MERGE_HEAD missing before abort: %v", err)
+	}
+
+	if err := client.AbortMerge(t.Context()); err != nil {
+		t.Fatalf("AbortMerge: %v", err)
+	}
+
+	// MERGE_HEAD must be gone.
+	if _, err := os.Stat(filepath.Join(dir, ".git", "MERGE_HEAD")); !os.IsNotExist(err) {
+		t.Errorf("MERGE_HEAD still present after AbortMerge: %v", err)
+	}
+
+	// Working tree must be clean.
+	var statusBuf bytes.Buffer
+	statusCmd := exec.CommandContext(t.Context(), "git", "status", "--porcelain")
+	statusCmd.Dir = dir
+	statusCmd.Stdout = &statusBuf
+	if err := statusCmd.Run(); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if strings.TrimSpace(statusBuf.String()) != "" {
+		t.Errorf("dirty status after AbortMerge: %q", statusBuf.String())
+	}
+}
+
+func TestAbortMerge_noActiveMerge(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newDiskRepo(t)
+
+	if err := client.AbortMerge(t.Context()); err == nil {
+		t.Error("AbortMerge with no active merge: expected error, got nil")
 	}
 }

@@ -124,9 +124,12 @@ func (c *Client) MergeRebase(ctx context.Context, featureBranch, baseBranch stri
 	return nil
 }
 
-// MergeNoFF runs a classic --no-ff merge of branchName into baseBranch.
-// After the merge the working directory is on baseBranch.
-func (c *Client) MergeNoFF(ctx context.Context, branchName, baseBranch string) error {
+// MergeNoFFNoCommit checks out baseBranch and runs `git merge --no-ff
+// --no-commit <featureBranch>`. Leaves MERGE_HEAD + MERGE_MSG in place
+// so the caller can drive the commit step itself (typically via the
+// commitizen TUI form). Caller is responsible for `git merge --abort`
+// on TUI abort or commit failure.
+func (c *Client) MergeNoFFNoCommit(ctx context.Context, featureBranch, baseBranch string) error {
 	root, err := c.WorkingTreeRoot()
 	if err != nil {
 		return fmt.Errorf("working tree root: %w", err)
@@ -136,8 +139,27 @@ func (c *Client) MergeNoFF(ctx context.Context, branchName, baseBranch string) e
 		return fmt.Errorf("checkout %s: %w", baseBranch, err)
 	}
 
-	if err := c.runInteractive(ctx, root, "merge", "--no-ff", branchName); err != nil {
-		return fmt.Errorf("merge --no-ff %s: %w", branchName, err)
+	if err := c.runInteractive(ctx, root, "merge", "--no-ff", "--no-commit", featureBranch); err != nil {
+		return fmt.Errorf("merge --no-ff --no-commit %s: %w", featureBranch, err)
+	}
+
+	return nil
+}
+
+// AbortMerge runs `git merge --abort`. Used after a TUI abort or
+// commit failure in the Classic close flow to clear MERGE_HEAD /
+// MERGE_MSG and restore the working tree. Returns a wrapped error
+// so callers can decide whether to treat a no-active-merge failure
+// as fatal (e.g. by ignoring it when the orchestrator isn't sure
+// whether MergeNoFFNoCommit actually started a merge).
+func (c *Client) AbortMerge(ctx context.Context) error {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	if err := c.runInteractive(ctx, root, "merge", "--abort"); err != nil {
+		return fmt.Errorf("merge --abort: %w", err)
 	}
 
 	return nil
