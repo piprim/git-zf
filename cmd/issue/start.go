@@ -115,25 +115,29 @@ func (i Issue) getFromTracker(
 	return pickedIssue, nil
 }
 
-// prepareBranch assembles the branch name and resolves the base branch.
+// prepareBranch assembles the branch and resolves the base branch.
+// Returns the *branch.Branch so callers can reuse the same random id
+// for both the on-disk branch and the persisted store record (calling
+// branch.New twice would generate two different random ids and the
+// stored branch name would not match the actual ref).
 func (i Issue) prepareBranch(
 	pickedIssue *issue.Issue,
 	client *git.Client,
-) (branchName, base string, err error) {
-	b, err := branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
+) (b *branch.Branch, base string, err error) {
+	b, err = branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
 	if err != nil {
-		return "", "", fmt.Errorf("assemble branch name: %w", err)
+		return nil, "", fmt.Errorf("assemble branch name: %w", err)
 	}
 
 	base = i.appConfig.Branch.Base
 	if base == "" {
 		base, err = client.DefaultBaseBranch()
 		if err != nil {
-			return "", "", fmt.Errorf("detect base branch: %w", err)
+			return nil, "", fmt.Errorf("detect base branch: %w", err)
 		}
 	}
 
-	return b.Name(), base, nil
+	return b, base, nil
 }
 
 func (i Issue) createBranch(
@@ -142,10 +146,12 @@ func (i Issue) createBranch(
 	pickedIssue *issue.Issue,
 	client *git.Client,
 ) error {
-	branchName, base, err := i.prepareBranch(pickedIssue, client)
+	b, base, err := i.prepareBranch(pickedIssue, client)
 	if err != nil {
 		return err
 	}
+
+	branchName := b.Name()
 
 	var confirmed bool
 	if err := huh.NewForm(tui.IssueConfirm(
@@ -162,11 +168,6 @@ func (i Issue) createBranch(
 
 	if err := client.CreateBranch(branchName, base); err != nil {
 		return fmt.Errorf("create branch: %w", err)
-	}
-
-	b, err := branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
-	if err != nil {
-		return fmt.Errorf("assemble branch for persist: %w", err)
 	}
 
 	var tt *string
@@ -193,10 +194,12 @@ func (i Issue) createWorktree(
 	pickedIssue *issue.Issue,
 	client *git.Client,
 ) error {
-	branchName, base, err := i.prepareBranch(pickedIssue, client)
+	b, base, err := i.prepareBranch(pickedIssue, client)
 	if err != nil {
 		return err
 	}
+
+	branchName := b.Name()
 
 	repoRoot, err := client.WorkingTreeRoot()
 	if err != nil {
@@ -225,11 +228,6 @@ func (i Issue) createWorktree(
 
 	if err := client.CreateWorktree(cmd.Context(), branchName, base, path); err != nil {
 		return fmt.Errorf("create worktree: %w", err)
-	}
-
-	b, err := branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
-	if err != nil {
-		return fmt.Errorf("assemble branch for persist: %w", err)
 	}
 
 	var tt *string
