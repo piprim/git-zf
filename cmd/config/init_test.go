@@ -92,7 +92,7 @@ func TestPickDest(t *testing.T) {
 
 		homePath := filepath.Join(t.TempDir(), ".git-zf.toml")
 		// repoPath="" simulates being outside a git repo; homePath does not exist.
-		dest, err := pickDest(homePath, "")
+		dest, err := pickDest(t.Context(), homePath, "")
 		if err != nil {
 			t.Fatalf("pickDest: %v", err)
 		}

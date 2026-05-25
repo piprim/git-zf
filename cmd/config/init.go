@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -30,7 +31,7 @@ func (c Config) initRunE(cmd *cobra.Command, _ []string) error {
 
 	repoPath := appconfig.RepoPath()
 
-	dest, err := pickDest(homePath, repoPath)
+	dest, err := pickDest(cmd.Context(), homePath, repoPath)
 	if err != nil {
 		return err
 	}
@@ -61,7 +62,7 @@ func (c Config) initRunE(cmd *cobra.Command, _ []string) error {
 	return writeRepoDest(cmd, dest, c.appConfig)
 }
 
-func pickDest(homePath, repoPath string) (string, error) {
+func pickDest(ctx context.Context, homePath, repoPath string) (string, error) {
 	homeExists := fileExists(homePath)
 	insideRepo := repoPath != ""
 
@@ -73,7 +74,7 @@ func pickDest(homePath, repoPath string) (string, error) {
 	opts := buildPickerOpts(homePath, repoPath, homeExists, repoExists)
 
 	var dest string
-	if err := huh.NewForm(tui.ConfigDestPicker(opts, &dest)).Run(); err != nil {
+	if err := huh.NewForm(tui.ConfigDestPicker(opts, &dest)).RunWithContext(ctx); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			return "", nil
 		}
@@ -147,7 +148,7 @@ func writeRepoDest(cmd *cobra.Command, dest string, cfg *appconfig.AppConfig) er
 	keys := slices.Sorted(maps.Keys(sections))
 
 	var selected []string
-	if err := huh.NewForm(tui.ConfigSectionPicker(keys, &selected)).Run(); err != nil {
+	if err := huh.NewForm(tui.ConfigSectionPicker(keys, &selected)).RunWithContext(cmd.Context()); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
 

@@ -49,7 +49,7 @@ func (b Branch) GetRootCmd() *cobra.Command {
 
 func (b Branch) runE(cmd *cobra.Command, args []string) error {
 	var action string
-	if err := huh.NewForm(tui.BranchActionSelect(&action)).Run(); err != nil {
+	if err := huh.NewForm(tui.BranchActionSelect(&action)).RunWithContext(cmd.Context()); err != nil {
 		return fmt.Errorf("action select: %w", err)
 	}
 
@@ -134,7 +134,7 @@ func runList(ctx context.Context, w io.Writer, s *store.Store, flags listFlags) 
 
 	// TUI path: status filter then interactive table.
 	statusStr := flags.status
-	if err := huh.NewForm(tui.BranchStatusFilter(&statusStr, statusStr)).Run(); err != nil {
+	if err := huh.NewForm(tui.BranchStatusFilter(&statusStr, statusStr)).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("status filter: %w", err)
 	}
 
@@ -327,7 +327,8 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, f
 	}
 
 	var confirmed bool
-	if err := huh.NewForm(tui.BranchPruneConfirm(len(result.toDelete), len(result.toMerge), &confirmed)).Run(); err != nil {
+	err = huh.NewForm(tui.BranchPruneConfirm(len(result.toDelete), len(result.toMerge), &confirmed)).RunWithContext(ctx)
+	if err != nil {
 		return fmt.Errorf("confirm: %w", err)
 	}
 

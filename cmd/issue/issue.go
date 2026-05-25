@@ -33,7 +33,7 @@ func (i Issue) GetRootCmd() *cobra.Command {
 
 func (i Issue) runE(cmd *cobra.Command, args []string) error {
 	var action string
-	if err := huh.NewForm(tui.IssueActionSelect(&action)).Run(); err != nil {
+	if err := huh.NewForm(tui.IssueActionSelect(&action)).RunWithContext(cmd.Context()); err != nil {
 		return fmt.Errorf("action select: %w", err)
 	}
 

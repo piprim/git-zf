@@ -81,7 +81,7 @@ func (i Issue) RunIssueStart(cmd *cobra.Command, flags issue.IssueStartFlags) er
 			return fmt.Errorf("failed to retreive issue from tracker: %w", err)
 		}
 	} else {
-		pickedIssue, err = issue.GetFromUser(allowedBranchTypes)
+		pickedIssue, err = issue.GetFromUser(ctx, allowedBranchTypes)
 		if err != nil {
 			return fmt.Errorf("failed to retreive issue from user: %w", err)
 		}
@@ -89,7 +89,7 @@ func (i Issue) RunIssueStart(cmd *cobra.Command, flags issue.IssueStartFlags) er
 
 	useWorktree := false
 	if i.appConfig.Branch.UseWorktree == nil {
-		if err := huh.NewForm(tui.WorktreeToggle(&useWorktree)).Run(); err != nil {
+		if err := huh.NewForm(tui.WorktreeToggle(&useWorktree)).RunWithContext(ctx); err != nil {
 			return fmt.Errorf("worktree toggle: %w", err)
 		}
 	} else {
@@ -114,7 +114,7 @@ func (i Issue) getFromTracker(
 	var err error
 
 	issueTrackerToggle := tui.IssueTrackerToggle(&useTracker, flags.TrackerFirst, i.appConfig.IssueTracker.Type)
-	if err = huh.NewForm(issueTrackerToggle).Run(); err != nil {
+	if err = huh.NewForm(issueTrackerToggle).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("tracker toggle error: %w", err)
 	}
 
@@ -165,7 +165,9 @@ func (i Issue) createBranch(
 		return err
 	}
 
-	b, err = resolveBranchConflict(cmd.Context(), client, b, pickedIssue)
+	ctx := cmd.Context()
+
+	b, err = resolveBranchConflict(ctx, client, b, pickedIssue)
 	if err != nil {
 		return err
 	}
@@ -179,7 +181,7 @@ func (i Issue) createBranch(
 	var confirmed bool
 	if err := huh.NewForm(tui.IssueConfirm(
 		fmt.Sprintf("Create branch %q based on %q?", branchName, base), &confirmed,
-	)).Run(); err != nil {
+	)).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("confirm form: %w", err)
 	}
 
@@ -249,7 +251,7 @@ func (i Issue) createWorktree(
 	var confirmed bool
 	if err := huh.NewForm(tui.IssueConfirm(
 		fmt.Sprintf("Create worktree %q at %q based on %q?", branchName, path, base), &confirmed,
-	)).Run(); err != nil {
+	)).RunWithContext(cmd.Context()); err != nil {
 		return fmt.Errorf("confirm form: %w", err)
 	}
 
@@ -291,10 +293,12 @@ func (i Issue) updateTrackerIssueStatus(cmd *cobra.Command, t tracker.Tracker, i
 		return
 	}
 
+	ctx := cmd.Context()
+
 	var selected string
 	if err := huh.NewForm(tui.IssueStatusPicker(
 		issueID, i.appConfig.IssueTracker.Type, statuses, &selected,
-	)).Run(); err != nil {
+	)).RunWithContext(ctx); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: status picker form: %v\n", err)
 
 		return
@@ -304,7 +308,7 @@ func (i Issue) updateTrackerIssueStatus(cmd *cobra.Command, t tracker.Tracker, i
 		return
 	}
 
-	if err := t.UpdateIssueStatus(cmd.Context(), issueID, selected); err != nil {
+	if err := t.UpdateIssueStatus(ctx, issueID, selected); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: could not update tracker status: %v\n", err)
 	}
 }

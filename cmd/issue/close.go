@@ -148,7 +148,7 @@ func getPickedBranch(ctx context.Context, s *store.Store, client *git.Client) (*
 	}
 
 	var picked store.BranchRow
-	if err := huh.NewForm(tui.IssueBranchPicker(branches, currentBranch, &picked)).Run(); err != nil {
+	if err := huh.NewForm(tui.IssueBranchPicker(branches, currentBranch, &picked)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}
 
@@ -180,10 +180,18 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 			Label: "Rebase",
 			Hint:  "Single clean commit on local base, submodule-safe (recommended)",
 		},
-		{Value: string(StrategySquash), Label: "Squash", Hint: "git merge --squash — fast, but not submodule-safe"},
-		{Value: string(StrategyClassic), Label: "Classic", Hint: "git merge --no-ff with commitizen message — preserves full history"},
+		{
+			Value: string(StrategySquash),
+			Label: "Squash",
+			Hint:  "git merge --squash — fast, but not submodule-safe",
+		},
+		{
+			Value: string(StrategyClassic),
+			Label: "Classic",
+			Hint:  "git merge --no-ff with commitizen message — preserves full history",
+		},
 	})
-	if err := huh.NewForm(strategyForm).Run(); err != nil {
+	if err := huh.NewForm(strategyForm).RunWithContext(ctx); err != nil {
 		return "", false, fmt.Errorf("strategy picker: %w", err)
 	}
 
@@ -191,7 +199,7 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 
 	var confirmed bool
 	confirmForm := tui.IssueMergeConfirm(mc.pickedBranch.BranchName, mc.baseBranch, string(strategy), &confirmed)
-	if err := huh.NewForm(confirmForm).Run(); err != nil {
+	if err := huh.NewForm(confirmForm).RunWithContext(ctx); err != nil {
 		return "", false, fmt.Errorf("confirm form: %w", err)
 	}
 
@@ -299,7 +307,8 @@ func (i Issue) updateStatus(cmd *cobra.Command, s *store.Store, pickedBranch *st
 
 func doDeleteBranch(cmd *cobra.Command, c *git.Client, pickedBranch *store.BranchRow, strategy MergeStrategy) error {
 	var shouldDelete bool
-	if err := huh.NewForm(tui.IssueDeleteBranch(pickedBranch.BranchName, &shouldDelete)).Run(); err != nil {
+	ctx := cmd.Context()
+	if err := huh.NewForm(tui.IssueDeleteBranch(pickedBranch.BranchName, &shouldDelete)).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("delete branch form: %w", err)
 	}
 

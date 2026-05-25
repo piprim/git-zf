@@ -20,10 +20,12 @@ type Issue struct {
 	tracker.Issue
 }
 
-func GetFromUser(allowedTypes []string) (*Issue, error) {
+func GetFromUser(ctx context.Context, allowedTypes []string) (*Issue, error) {
 	var issue = Issue{}
 
-	if err := huh.NewForm(tui.IssueInput(&issue.ID, &issue.Subject, &issue.Type, allowedTypes)).Run(); err != nil {
+	if err := huh.NewForm(
+		tui.IssueInput(&issue.ID, &issue.Subject, &issue.Type, allowedTypes),
+	).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("issue form: %w", err)
 	}
 
@@ -44,15 +46,15 @@ func GetFromTracker(ctx context.Context, t tracker.Tracker, allowedTypes []strin
 	}
 
 	if errMsg != "" {
-		if err := huh.NewForm(tui.IssueTrackerError(errMsg)).Run(); err != nil {
+		if err := huh.NewForm(tui.IssueTrackerError(errMsg)).RunWithContext(ctx); err != nil {
 			return nil, fmt.Errorf("error note: %w", err)
 		}
 
-		return GetFromUser(allowedTypes)
+		return GetFromUser(ctx, allowedTypes)
 	}
 
 	issueTrackerPicker := tui.IssueTrackerPicker(issues, &pickedIssue, allowedTypes, &issue.Type)
-	if err := huh.NewForm(issueTrackerPicker).Run(); err != nil {
+	if err := huh.NewForm(issueTrackerPicker).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("tracker picker: %w", err)
 	}
 

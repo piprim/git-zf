@@ -17,8 +17,8 @@ import (
 //
 //   - Checkout existing: switches to the colliding branch and returns (nil, nil).
 //   - Create a variant:  prompts for a label, rebuilds the Branch with it, and
-//                        loops back to the existence check (the variant itself
-//                        could collide).
+//     loops back to the existence check (the variant itself
+//     could collide).
 //   - Abort:              prints "Aborted." and returns (nil, nil).
 //
 // On a clean no-collision path, returns (b, nil). The caller must treat a
@@ -40,7 +40,7 @@ func resolveBranchConflict(
 		}
 
 		var action string
-		if err := huh.NewForm(tui.BranchConflictPicker(b.Name(), &action)).Run(); err != nil {
+		if err := huh.NewForm(tui.BranchConflictPicker(b.Name(), &action)).RunWithContext(ctx); err != nil {
 			return nil, fmt.Errorf("conflict picker: %w", err)
 		}
 

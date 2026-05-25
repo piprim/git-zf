@@ -372,7 +372,7 @@ Branch names follow the format `{issue-id}@{type}@{slugified-title}`, e.g.:
 ABC-42@feat@add-oauth-login
 ```
 
-The slugged title is capped at 50 characters (with any dangling trailing hyphen
+The slugified-title is capped at 50 characters (with any dangling trailing hyphen
 stripped) so the full ref stays comfortably under 100 characters in the worst case.
 
 #### Parallel branches per issue
