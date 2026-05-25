@@ -123,8 +123,8 @@ func TestNextStatus(t *testing.T) {
 
 func TestIssueBranchPicker(t *testing.T) {
 	rows := []store.BranchRow{
-		{UUID: "a", IssueSlug: "A-1", Title: "First", BranchName: "feature-a"},
-		{UUID: "b", IssueSlug: "B-1", Title: "Second", BranchName: "feature-b"},
+		{IssueSlug: "A-1", Title: "First", BranchName: "feature-a"},
+		{IssueSlug: "B-1", Title: "Second", BranchName: "feature-b"},
 	}
 
 	t.Run("pre-selects the row matching the current branch name", func(t *testing.T) {

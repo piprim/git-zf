@@ -430,6 +430,22 @@ func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
 	return merged, nil
 }
 
+// BranchExists returns true if refs/heads/<name> resolves locally. It does
+// not consult remotes — see resolveBranchConflict for the rationale (no
+// fetch on the happy path of `issue start`).
+func (c *Client) BranchExists(name string) (bool, error) {
+	_, err := c.repo.Reference(plumbing.NewBranchReferenceName(name), false)
+	if err == nil {
+		return true, nil
+	}
+
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("lookup branch %q: %w", name, err)
+}
+
 // CreateBranch creates a new branch from baseBranch and checks it out.
 func (c *Client) CreateBranch(name, baseBranch string) error {
 	baseRef, err := c.repo.Reference(plumbing.ReferenceName("refs/heads/"+baseBranch), true)

@@ -33,9 +33,9 @@ type Issue struct {
 	TrackerType *string // nil = manual entry; non-nil = tracker type (e.g. "redmine")
 }
 
-// Branch represents a tracked branch record.
+// Branch represents a tracked branch record. The branch's full git ref
+// name is its primary key.
 type Branch struct {
-	UUID      string
 	Name      string
 	IssueID   int64
 	Type      string
@@ -62,7 +62,6 @@ const (
 
 // BranchRow is the joined result of one branch with its parent issue and status.
 type BranchRow struct {
-	UUID       string       `json:"uuid"`
 	IssueID    int64        `json:"issue_id"`
 	IssueSlug  string       `json:"issue_slug"`
 	Title      string       `json:"title"`
@@ -149,8 +148,8 @@ func (s *Store) InsertIssueWithBranch(ctx context.Context, issue *Issue, branch 
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO branches (uuid, name, issue_id, type, status_id) VALUES (?, ?, ?, ?, ?)`,
-		branch.UUID, branch.Name, issueID, branch.Type, branch.StatusID,
+		`INSERT INTO branches (name, issue_id, type, status_id) VALUES (?, ?, ?, ?)`,
+		branch.Name, issueID, branch.Type, branch.StatusID,
 	)
 	if err != nil {
 		return fmt.Errorf("insert branch: %w", err)
@@ -163,11 +162,12 @@ func (s *Store) InsertIssueWithBranch(ctx context.Context, issue *Issue, branch 
 	return nil
 }
 
-// UpdateBranchStatus updates a branch's status. mergedAt must be non-nil when statusID == 2 (merged).
-func (s *Store) UpdateBranchStatus(ctx context.Context, uuid string, statusID int64, mergedAt *time.Time) error {
+// UpdateBranchStatus updates a branch's status. mergedAt must be non-nil
+// when statusID == 2 (merged); the enforce_merged_at trigger rejects nil.
+func (s *Store) UpdateBranchStatus(ctx context.Context, name string, statusID int64, mergedAt *time.Time) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE branches SET status_id = ?, merged_at = ? WHERE uuid = ?`,
-		statusID, mergedAt, uuid,
+		`UPDATE branches SET status_id = ?, merged_at = ? WHERE name = ?`,
+		statusID, mergedAt, name,
 	)
 	if err != nil {
 		return fmt.Errorf("update branch status: %w", err)
@@ -179,7 +179,7 @@ func (s *Store) UpdateBranchStatus(ctx context.Context, uuid string, statusID in
 	}
 
 	if n == 0 {
-		return fmt.Errorf("update branch status: no branch with uuid %q", uuid)
+		return fmt.Errorf("update branch status: no branch with name %q", name)
 	}
 
 	return nil
@@ -211,7 +211,7 @@ func (s *Store) UpdateIssueStatus(ctx context.Context, issueID, statusID int64) 
 // ordered by created_at DESC. BranchStatusAll returns every row.
 func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]BranchRow, error) {
 	q := `
-		SELECT b.uuid, i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
+		SELECT i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
 		FROM branches b
 		JOIN issues i ON b.issue_id = i.id
 		JOIN statuses st ON b.status_id = st.id`
@@ -237,7 +237,7 @@ func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]Branch
 		var createdAtStr string
 
 		if err := rows.Scan(
-			&r.UUID, &r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
+			&r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("scan branch row: %w", err)
 		}
@@ -270,7 +270,7 @@ func (s *Store) ListBranchesByIssueSlugs(ctx context.Context, slugs []string) (m
 	}
 
 	q := `
-SELECT b.uuid, i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
+SELECT i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
 FROM branches b
 JOIN issues i ON b.issue_id = i.id
 JOIN statuses st ON b.status_id = st.id
@@ -295,7 +295,7 @@ ORDER BY b.created_at DESC`
 		var createdAtStr string
 
 		if err := rows.Scan(
-			&r.UUID, &r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
+			&r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("scan branch row: %w", err)
 		}
@@ -318,9 +318,9 @@ ORDER BY b.created_at DESC`
 	return result, nil
 }
 
-// DeleteBranch removes the branch record identified by uuid.
-func (s *Store) DeleteBranch(ctx context.Context, uuid string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM branches WHERE uuid = ?`, uuid)
+// DeleteBranch removes the branch record identified by name.
+func (s *Store) DeleteBranch(ctx context.Context, name string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM branches WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("delete branch: %w", err)
 	}
@@ -331,7 +331,7 @@ func (s *Store) DeleteBranch(ctx context.Context, uuid string) error {
 	}
 
 	if n == 0 {
-		return fmt.Errorf("delete branch: no branch with uuid %q", uuid)
+		return fmt.Errorf("delete branch: no branch with name %q", name)
 	}
 
 	return nil

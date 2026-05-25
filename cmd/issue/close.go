@@ -284,7 +284,7 @@ func doSquashCommit(ctx context.Context, mc mergeContext) error {
 // already been committed, so we warn rather than fail.
 func (i Issue) updateStatus(cmd *cobra.Command, s *store.Store, pickedBranch *store.BranchRow) {
 	now := time.Now()
-	if err := s.UpdateBranchStatus(cmd.Context(), pickedBranch.UUID, store.StatusIDMerged, &now); err != nil {
+	if err := s.UpdateBranchStatus(cmd.Context(), pickedBranch.BranchName, store.StatusIDMerged, &now); err != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "warning: update branch status: %v\n", err)
 	}
 

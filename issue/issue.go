@@ -11,6 +11,7 @@ import (
 
 type IssueStartFlags struct {
 	TrackerFirst bool
+	Variant      string
 }
 
 // Issue is the representation of a work item.

@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 
 	btable "github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -136,4 +138,37 @@ func (m *branchTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *branchTableModel) View() string {
 	return m.table.View() + "\n\nPress q to quit."
+}
+
+// BranchConflictPicker shows a 3-option picker when a deterministic branch
+// name already exists locally. The selected value is stored in *action and
+// is one of: "checkout", "variant", "abort".
+func BranchConflictPicker(branchName string, action *string) *huh.Group {
+	return huh.NewGroup(
+		huh.NewSelect[string]().
+			Title(fmt.Sprintf("Branch %q already exists.", branchName)).
+			Options(
+				huh.NewOption("Checkout the existing branch", "checkout"),
+				huh.NewOption("Create a variant (you'll be asked for a label)", "variant"),
+				huh.NewOption("Abort", "abort"),
+			).
+			Value(action),
+	)
+}
+
+// VariantLabelInput prompts for a variant label and validates inline that
+// the input slugs to a non-empty value.
+func VariantLabelInput(label *string) *huh.Group {
+	return huh.NewGroup(
+		huh.NewInput().
+			Title("Variant label (e.g. spike, approach-b):").
+			Validate(func(s string) error {
+				if branch.Slug(s) == "" {
+					return errors.New("label is empty after slugging — use letters, digits, or hyphens")
+				}
+
+				return nil
+			}).
+			Value(label),
+	)
 }

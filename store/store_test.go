@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -62,7 +64,6 @@ func TestInsertIssueWithBranch(t *testing.T) {
 
 		issue := Issue{IDSlug: "ABC-42", Title: "Add OAuth Login", StatusID: 1}
 		branch := Branch{
-			UUID:     "550e8400",
 			Name:     "ABC-42@feat@add-oauth-login@550e8400",
 			Type:     "feat",
 			StatusID: 1,
@@ -74,7 +75,7 @@ func TestInsertIssueWithBranch(t *testing.T) {
 
 		// Verify the branch row exists.
 		var name string
-		row := s.db.QueryRow("SELECT name FROM branches WHERE uuid = ?", "550e8400")
+		row := s.db.QueryRow("SELECT name FROM branches WHERE name = ?", "ABC-42@feat@add-oauth-login@550e8400")
 		if err := row.Scan(&name); err != nil {
 			t.Fatalf("branch not found: %v", err)
 		}
@@ -84,7 +85,7 @@ func TestInsertIssueWithBranch(t *testing.T) {
 
 		// Verify the issue row exists.
 		var idSlug string
-		row = s.db.QueryRow("SELECT id_slug FROM issues WHERE id = (SELECT issue_id FROM branches WHERE uuid = ?)", "550e8400")
+		row = s.db.QueryRow("SELECT id_slug FROM issues WHERE id = (SELECT issue_id FROM branches WHERE name = ?)", "ABC-42@feat@add-oauth-login@550e8400")
 		if err := row.Scan(&idSlug); err != nil {
 			t.Fatalf("issue not found: %v", err)
 		}
@@ -100,7 +101,7 @@ func TestInsertIssueWithBranch(t *testing.T) {
 
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "TRK-1", Title: "Pre-tracker issue", StatusID: 1},
-			&Branch{UUID: "trk-uuid-1", Name: "TRK-1@feat@pre-tracker@trk-uuid-1", Type: "feat", StatusID: 1},
+			&Branch{Name: "TRK-1@feat@pre-tracker@trk-uuid-1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -123,7 +124,7 @@ func TestInsertIssueWithBranch(t *testing.T) {
 		tt := "redmine"
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "TRK-2", Title: "Tracker issue", StatusID: 1, TrackerType: &tt},
-			&Branch{UUID: "trk-uuid-2", Name: "TRK-2@feat@tracker-issue@trk-uuid-2", Type: "feat", StatusID: 1},
+			&Branch{Name: "TRK-2@feat@tracker-issue@trk-uuid-2", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -152,13 +153,13 @@ func TestListBranches(t *testing.T) {
 
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "A-1", Title: "First", StatusID: 1},
-			&Branch{UUID: "uuid-1", Name: "A-1@feat@first@uuid-1", Type: "feat", StatusID: 1},
+			&Branch{Name: "A-1@feat@first@uuid-1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "A-2", Title: "Second", StatusID: 1},
-			&Branch{UUID: "uuid-2", Name: "A-2@fix@second@uuid-2", Type: "fix", StatusID: 1},
+			&Branch{Name: "A-2@fix@second@uuid-2", Type: "fix", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -179,7 +180,7 @@ func TestListBranches(t *testing.T) {
 
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "B-1", Title: "In progress issue", StatusID: 1},
-			&Branch{UUID: "uuid-ip", Name: "B-1@feat@in-progress@uuid-ip", Type: "feat", StatusID: 1},
+			&Branch{Name: "B-1@feat@in-progress@uuid-ip", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert in_progress: %v", err)
 		}
@@ -203,13 +204,13 @@ func TestListBranches(t *testing.T) {
 
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "C-1", Title: "Merged issue", StatusID: 1},
-			&Branch{UUID: "uuid-mg", Name: "C-1@feat@merged@uuid-mg", Type: "feat", StatusID: 1},
+			&Branch{Name: "C-1@feat@merged@uuid-mg", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 
 		now := time.Now()
-		if err := s.UpdateBranchStatus(t.Context(), "uuid-mg", 2, &now); err != nil {
+		if err := s.UpdateBranchStatus(t.Context(), "C-1@feat@merged@uuid-mg", 2, &now); err != nil {
 			t.Fatalf("UpdateBranchStatus: %v", err)
 		}
 
@@ -246,10 +247,10 @@ func TestListBranches(t *testing.T) {
 
 		// Insert two branches with explicit created_at values to test DESC ordering.
 		for _, row := range []struct {
-			uuid, slug, name, tp, dt string
+			slug, name, tp, dt string
 		}{
-			{"uuid-old", "D-1", "D-1@feat@old@uuid-old", "feat", "2025-01-01 00:00:00"},
-			{"uuid-new", "D-2", "D-2@feat@new@uuid-new", "feat", "2025-06-01 00:00:00"},
+			{"D-1", "D-1@feat@old@uuid-old", "feat", "2025-01-01 00:00:00"},
+			{"D-2", "D-2@feat@new@uuid-new", "feat", "2025-06-01 00:00:00"},
 		} {
 			if _, err := s.db.ExecContext(t.Context(),
 				`INSERT INTO issues (id_slug, title, status_id) VALUES (?, 'T', 1)`, row.slug,
@@ -265,9 +266,9 @@ func TestListBranches(t *testing.T) {
 			}
 
 			if _, err := s.db.ExecContext(t.Context(),
-				`INSERT INTO branches (uuid, name, issue_id, type, status_id, created_at)
-				 VALUES (?, ?, ?, ?, 1, ?)`,
-				row.uuid, row.name, issueID, row.tp, row.dt,
+				`INSERT INTO branches (name, issue_id, type, status_id, created_at)
+				 VALUES (?, ?, ?, 1, ?)`,
+				row.name, issueID, row.tp, row.dt,
 			); err != nil {
 				t.Fatalf("insert branch: %v", err)
 			}
@@ -288,13 +289,13 @@ func TestListBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("populates UUID field from the branches table", func(t *testing.T) {
+	t.Run("populates BranchName field", func(t *testing.T) {
 		t.Parallel()
 
 		s := openTestStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "U-1", Title: "uuid test", StatusID: 1},
-			&Branch{UUID: "deadbeef", Name: "U-1@feat@uuid-test@deadbeef", Type: "feat", StatusID: 1},
+			&Issue{IDSlug: "U-1", Title: "branch name test", StatusID: 1},
+			&Branch{Name: "U-1@feat@branch-name-test@deadbeef", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -306,8 +307,8 @@ func TestListBranches(t *testing.T) {
 		if len(rows) != 1 {
 			t.Fatalf("got %d rows, want 1", len(rows))
 		}
-		if rows[0].UUID != "deadbeef" {
-			t.Errorf("UUID = %q, want %q", rows[0].UUID, "deadbeef")
+		if rows[0].BranchName != "U-1@feat@branch-name-test@deadbeef" {
+			t.Errorf("BranchName = %q, want %q", rows[0].BranchName, "U-1@feat@branch-name-test@deadbeef")
 		}
 	})
 
@@ -318,7 +319,7 @@ func TestListBranches(t *testing.T) {
 
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "X-1", Title: "IssueID test", StatusID: 1},
-			&Branch{UUID: "uuid-x1", Name: "X-1@feat@issueid@uuid-x1", Type: "feat", StatusID: 1},
+			&Branch{Name: "X-1@feat@issueid@uuid-x1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("InsertIssueWithBranch: %v", err)
 		}
@@ -344,24 +345,24 @@ func TestUpdateBranchStatus_merged(t *testing.T) {
 	s := openTestStore(t)
 
 	issue := Issue{IDSlug: "ABC-1", Title: "Some issue", StatusID: 1}
-	branch := Branch{UUID: "aabbccdd", Name: "ABC-1@fix@some-issue@aabbccdd", Type: "fix", StatusID: 1}
+	branch := Branch{Name: "ABC-1@fix@some-issue@aabbccdd", Type: "fix", StatusID: 1}
 	if err := s.InsertIssueWithBranch(t.Context(), &issue, &branch); err != nil {
 		t.Fatalf("InsertIssueWithBranch: %v", err)
 	}
 
 	// Updating to merged without merged_at must fail (trigger).
-	if err := s.UpdateBranchStatus(t.Context(), "aabbccdd", 2, nil); err == nil {
+	if err := s.UpdateBranchStatus(t.Context(), "ABC-1@fix@some-issue@aabbccdd", 2, nil); err == nil {
 		t.Error("expected error when merged_at is nil for merged status, got nil")
 	}
 
 	// Updating to merged with merged_at must succeed.
 	now := time.Now()
-	if err := s.UpdateBranchStatus(t.Context(), "aabbccdd", 2, &now); err != nil {
+	if err := s.UpdateBranchStatus(t.Context(), "ABC-1@fix@some-issue@aabbccdd", 2, &now); err != nil {
 		t.Errorf("UpdateBranchStatus merged: %v", err)
 	}
 
 	var statusID int64
-	row := s.db.QueryRow("SELECT status_id FROM branches WHERE uuid = ?", "aabbccdd")
+	row := s.db.QueryRow("SELECT status_id FROM branches WHERE name = ?", "ABC-1@fix@some-issue@aabbccdd")
 	if err := row.Scan(&statusID); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -380,13 +381,13 @@ func TestListBranchesByIssueSlugs(t *testing.T) {
 
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "ABC-1", Title: "First", StatusID: 1},
-			&Branch{UUID: "uuid-s1", Name: "ABC-1@feat@first@uuid-s1", Type: "feat", StatusID: 1},
+			&Branch{Name: "ABC-1@feat@first@uuid-s1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "ABC-2", Title: "Second", StatusID: 1},
-			&Branch{UUID: "uuid-s2", Name: "ABC-2@fix@second@uuid-s2", Type: "fix", StatusID: 1},
+			&Branch{Name: "ABC-2@fix@second@uuid-s2", Type: "fix", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -435,12 +436,12 @@ func TestDeleteBranch(t *testing.T) {
 		s := openTestStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&Issue{IDSlug: "DEL-1", Title: "to delete", StatusID: 1},
-			&Branch{UUID: "cafebabe", Name: "DEL-1@fix@to-delete@cafebabe", Type: "fix", StatusID: 1},
+			&Branch{Name: "DEL-1@fix@to-delete@cafebabe", Type: "fix", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 
-		if err := s.DeleteBranch(t.Context(), "cafebabe"); err != nil {
+		if err := s.DeleteBranch(t.Context(), "DEL-1@fix@to-delete@cafebabe"); err != nil {
 			t.Fatalf("DeleteBranch: %v", err)
 		}
 
@@ -453,13 +454,13 @@ func TestDeleteBranch(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error for a non-existent UUID", func(t *testing.T) {
+	t.Run("returns error for a non-existent name", func(t *testing.T) {
 		t.Parallel()
 
 		s := openTestStore(t)
 
-		if err := s.DeleteBranch(t.Context(), "nonexistent"); err == nil {
-			t.Error("expected error for missing uuid, got nil")
+		if err := s.DeleteBranch(t.Context(), "no-such-branch@feat@missing@0000"); err == nil {
+			t.Error("expected error for missing branch name, got nil")
 		}
 	})
 }
@@ -590,4 +591,85 @@ func TestListCommandHistory(t *testing.T) {
 			t.Errorf("got %d rows, want 0", len(rows))
 		}
 	})
+}
+
+func TestMigration0004BranchesNamePK(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	// PRAGMA user_version must have advanced to 4.
+	var version int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != 4 {
+		t.Errorf("user_version = %d, want 4", version)
+	}
+
+	// The branches table must NOT have a uuid column and MUST have name as PK.
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(branches)`)
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var hasUUID, namePK bool
+	for rows.Next() {
+		var (
+			cid     int
+			cname   string
+			ctype   string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &cname, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if cname == "uuid" {
+			hasUUID = true
+		}
+		if cname == "name" && pk == 1 {
+			namePK = true
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err: %v", err)
+	}
+
+	if hasUUID {
+		t.Error("uuid column is still present after migration 0004")
+	}
+	if !namePK {
+		t.Error("name should be PRIMARY KEY after migration 0004")
+	}
+
+	// enforce_merged_at trigger must still be in place.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO issues (id_slug, title, status_id) VALUES (?, ?, ?)`,
+		"ABC-1", "t", StatusIDInProgress,
+	); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO branches (name, issue_id, type, status_id) VALUES (?, (SELECT id FROM issues WHERE id_slug = ?), ?, ?)`,
+		"ABC-1@feat@x", "ABC-1", "feat", StatusIDInProgress,
+	); err != nil {
+		t.Fatalf("insert branch: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE branches SET status_id = ? WHERE name = ?`,
+		StatusIDMerged, "ABC-1@feat@x",
+	); err == nil {
+		t.Error("expected enforce_merged_at to reject UPDATE without merged_at")
+	}
 }

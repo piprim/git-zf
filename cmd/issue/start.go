@@ -19,17 +19,30 @@ import (
 )
 
 func (i Issue) getStartCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start work on an issue (create branch)",
 		Long: `Enter issue details, then a properly named branch is created and
 checked out from the default base branch. Branch state is saved to .git/git-zf.db.`,
 		RunE: i.startRunE,
 	}
+
+	cmd.Flags().String("variant", "",
+		"create a parallel branch for the same issue (e.g. --variant=spike)")
+
+	return cmd
 }
 
 func (i Issue) startRunE(cmd *cobra.Command, _ []string) error {
-	return i.RunIssueStart(cmd, issue.IssueStartFlags{TrackerFirst: true})
+	variant, err := cmd.Flags().GetString("variant")
+	if err != nil {
+		return fmt.Errorf("read --variant flag: %w", err)
+	}
+
+	return i.RunIssueStart(cmd, issue.IssueStartFlags{
+		TrackerFirst: true,
+		Variant:      variant,
+	})
 }
 
 // RunIssueStart contains the full issue-start flow. trackerFirst=true for
@@ -84,10 +97,10 @@ func (i Issue) RunIssueStart(cmd *cobra.Command, flags issue.IssueStartFlags) er
 	}
 
 	if useWorktree {
-		return i.createWorktree(cmd, t, pickedIssue, client)
+		return i.createWorktree(cmd, t, pickedIssue, client, flags)
 	}
 
-	return i.createBranch(cmd, t, pickedIssue, client)
+	return i.createBranch(cmd, t, pickedIssue, client, flags)
 }
 
 func (i Issue) getFromTracker(
@@ -116,15 +129,15 @@ func (i Issue) getFromTracker(
 }
 
 // prepareBranch assembles the branch and resolves the base branch.
-// Returns the *branch.Branch so callers can reuse the same random id
-// for both the on-disk branch and the persisted store record (calling
-// branch.New twice would generate two different random ids and the
-// stored branch name would not match the actual ref).
+// Both createBranch and createWorktree share this helper so that the
+// base-branch detection logic (config override or DefaultBaseBranch
+// fallback) is not duplicated at each call site.
 func (i Issue) prepareBranch(
 	pickedIssue *issue.Issue,
 	client *git.Client,
+	flags issue.IssueStartFlags,
 ) (b *branch.Branch, base string, err error) {
-	b, err = branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject)
+	b, err = branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject, flags.Variant)
 	if err != nil {
 		return nil, "", fmt.Errorf("assemble branch name: %w", err)
 	}
@@ -145,10 +158,20 @@ func (i Issue) createBranch(
 	t tracker.Tracker,
 	pickedIssue *issue.Issue,
 	client *git.Client,
+	flags issue.IssueStartFlags,
 ) error {
-	b, base, err := i.prepareBranch(pickedIssue, client)
+	b, base, err := i.prepareBranch(pickedIssue, client, flags)
 	if err != nil {
 		return err
+	}
+
+	b, err = resolveBranchConflict(cmd.Context(), client, b, pickedIssue)
+	if err != nil {
+		return err
+	}
+
+	if b == nil {
+		return nil
 	}
 
 	branchName := b.Name()
@@ -193,10 +216,20 @@ func (i Issue) createWorktree(
 	t tracker.Tracker,
 	pickedIssue *issue.Issue,
 	client *git.Client,
+	flags issue.IssueStartFlags,
 ) error {
-	b, base, err := i.prepareBranch(pickedIssue, client)
+	b, base, err := i.prepareBranch(pickedIssue, client, flags)
 	if err != nil {
 		return err
+	}
+
+	b, err = resolveBranchConflict(cmd.Context(), client, b, pickedIssue)
+	if err != nil {
+		return err
+	}
+
+	if b == nil {
+		return nil
 	}
 
 	branchName := b.Name()
@@ -285,7 +318,7 @@ func persist(ctx context.Context, b *branch.Branch, rawTitle string, trackerType
 
 	if err := s.InsertIssueWithBranch(ctx,
 		&store.Issue{IDSlug: b.IssueID(), Title: rawTitle, StatusID: store.StatusIDInProgress, TrackerType: trackerType},
-		&store.Branch{UUID: b.ID(), Name: b.Name(), Type: b.Type(), StatusID: store.StatusIDInProgress},
+		&store.Branch{Name: b.Name(), Type: b.Type(), StatusID: store.StatusIDInProgress},
 	); err != nil {
 		return fmt.Errorf("insert issue with branch: %w", err)
 	}

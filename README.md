@@ -76,7 +76,7 @@ $ git zf issue list
 $ git zf issue close
 ```
 
-**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out, **or a git worktree is created** so the main working tree stays untouched. Branch/worktree state is tracked in `.git/git-zf.db`.
+**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out, **or a git worktree is created** so the main working tree stays untouched. Branch/worktree state is tracked in `.git/git-zf.db`. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
 After the issue is selected, a prompt asks whether to create a plain branch or a worktree. When a worktree is created the command prints the path and a `cd` hint since the shell cannot change directory automatically:
 
@@ -233,7 +233,7 @@ $ git zf branch merge     # merge a branch via TUI
 $ git zf branch prune     # clean up stale DB records
 ```
 
-`branch new` is the same flow as `issue start` but pre-selects manual input.
+`branch new` is the same flow as `issue start` but pre-selects manual input. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
 `branch list` flags:
 ```
@@ -366,11 +366,36 @@ Override the form fields and/or the message template:
 
 ### Branch naming
 
-Branch names follow the format `{issue-id}@{type}@{slugified-title}@{short-uuid}`, e.g.:
+Branch names follow the format `{issue-id}@{type}@{slugified-title}`, e.g.:
 
 ```
-ABC-42@feat@add-oauth-login@550e8400
+ABC-42@feat@add-oauth-login
 ```
+
+The slugged title is capped at 50 characters (with any dangling trailing hyphen
+stripped) so the full ref stays comfortably under 100 characters in the worst case.
+
+#### Parallel branches per issue
+
+The default branch name is unique per issue. When you genuinely need two branches
+on the same issue (a throwaway spike, parallel approach exploration, etc.), pass
+`--variant=<label>`:
+
+```bash
+git zf issue start --variant=spike
+# → ABC-42@feat@add-oauth-login@spike
+
+git zf branch new --variant=approach-b
+# → ABC-42@feat@add-oauth-login@approach-b
+```
+
+The label is lowercased and slugged (letters, digits, and hyphens only); it must
+be non-empty after slugging.
+
+When a default name collides with an existing branch, an interactive prompt
+offers three choices: **Checkout** the existing branch, **Create a variant**
+(asks for a label), or **Abort**. Legacy branches with random-hex suffixes (from
+git-zf versions before this change) keep parsing without any conversion needed.
 
 To override the base branch, remote name, or worktree behaviour:
 
@@ -466,4 +491,4 @@ When a tracker is configured:
 
 ### Commit auto-fill from issue branch
 
-When you run `git zf commit` on an issue branch (e.g. `ABC-42@feat@add-oauth@550e8400`), the issue ID is automatically pre-filled into the commit form — into `scope` if that field exists, otherwise `footer`, otherwise `subject` as a fallback. The pre-fill is a hint only; you can edit or clear it before confirming.
+When you run `git zf commit` on an issue branch (e.g. `ABC-42@feat@add-oauth`), the issue ID is automatically pre-filled into the commit form — into `scope` if that field exists, otherwise `footer`, otherwise `subject` as a fallback. The pre-fill is a hint only; you can edit or clear it before confirming.

@@ -1053,3 +1053,38 @@ func TestCreateWorktree(t *testing.T) {
 		}
 	})
 }
+
+func TestBranchExists(t *testing.T) {
+	t.Parallel()
+
+	repo := newTestRepo(t)
+	client := &Client{repo: repo}
+
+	if err := client.CreateBranch("feat-x", "master"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+
+	t.Run("existing branch returns true", func(t *testing.T) {
+		t.Parallel()
+
+		ok, err := client.BranchExists("feat-x")
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if !ok {
+			t.Error("BranchExists(feat-x) = false, want true")
+		}
+	})
+
+	t.Run("missing branch returns false", func(t *testing.T) {
+		t.Parallel()
+
+		ok, err := client.BranchExists("does-not-exist")
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if ok {
+			t.Error("BranchExists(does-not-exist) = true, want false")
+		}
+	})
+}

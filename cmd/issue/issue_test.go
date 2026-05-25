@@ -49,13 +49,13 @@ func TestBuildIssueRows(t *testing.T) {
 		// Seed 2 of the 3 tracker issues in the local store.
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "T-1", Title: "First", StatusID: 1},
-			&store.Branch{UUID: "uuid-t1", Name: "T-1@feat@first@uuid-t1", Type: "feat", StatusID: 1},
+			&store.Branch{Name: "T-1@feat@first@uuid-t1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "T-2", Title: "Second", StatusID: 1},
-			&store.Branch{UUID: "uuid-t2", Name: "T-2@fix@second@uuid-t2", Type: "fix", StatusID: 1},
+			&store.Branch{Name: "T-2@fix@second@uuid-t2", Type: "fix", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -103,7 +103,7 @@ func TestBuildIssueRows(t *testing.T) {
 		s := openTestIssueStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "L-1", Title: "Local only", StatusID: 1},
-			&store.Branch{UUID: "uuid-l1", Name: "L-1@feat@local-only@uuid-l1", Type: "feat", StatusID: 1},
+			&store.Branch{Name: "L-1@feat@local-only@uuid-l1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -131,7 +131,7 @@ func TestBuildIssueRows(t *testing.T) {
 		s := openTestIssueStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "F-1", Title: "Fallback", StatusID: 1},
-			&store.Branch{UUID: "uuid-f1", Name: "F-1@feat@fallback@uuid-f1", Type: "feat", StatusID: 1},
+			&store.Branch{Name: "F-1@feat@fallback@uuid-f1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -190,7 +190,7 @@ func TestRunIssueList(t *testing.T) {
 		s := openTestIssueStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "J-1", Title: "JSON issue", StatusID: 1},
-			&store.Branch{UUID: "uuid-j1", Name: "J-1@feat@json-issue@uuid-j1", Type: "feat", StatusID: 1},
+			&store.Branch{Name: "J-1@feat@json-issue@uuid-j1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -215,7 +215,7 @@ func TestRunIssueList(t *testing.T) {
 		s := openTestIssueStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "S-1", Title: "Stdout issue", StatusID: 1},
-			&store.Branch{UUID: "uuid-s1b", Name: "S-1@feat@stdout@uuid-s1b", Type: "feat", StatusID: 1},
+			&store.Branch{Name: "S-1@feat@stdout@uuid-s1b", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}

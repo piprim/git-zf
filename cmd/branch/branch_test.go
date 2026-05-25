@@ -41,7 +41,7 @@ func TestBranchList(t *testing.T) {
 		s := openTestBranchStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "ABC-42", Title: "Add OAuth login", StatusID: 1},
-			&store.Branch{UUID: "550e8400", Name: "ABC-42@feat@add-oauth-login@550e8400", Type: "feat", StatusID: 1},
+			&store.Branch{Name: "ABC-42@feat@add-oauth-login@550e8400", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -93,7 +93,7 @@ func TestBranchList(t *testing.T) {
 		s := openTestBranchStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
 			&store.Issue{IDSlug: "XY-1", Title: "Some feature", StatusID: 1},
-			&store.Branch{UUID: "aabbccdd", Name: "XY-1@feat@some-feature@aabbccdd", Type: "feat", StatusID: 1},
+			&store.Branch{Name: "XY-1@feat@some-feature@aabbccdd", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -126,11 +126,11 @@ func TestBranchList(t *testing.T) {
 	})
 }
 
-func insertTestBranch(t *testing.T, s *store.Store, uuid, slug, name, btype string) {
+func insertTestBranch(t *testing.T, s *store.Store, slug, name, btype string) {
 	t.Helper()
 	if err := s.InsertIssueWithBranch(t.Context(),
 		&store.Issue{IDSlug: slug, Title: slug, StatusID: 1},
-		&store.Branch{UUID: uuid, Name: name, Type: btype, StatusID: 1},
+		&store.Branch{Name: name, Type: btype, StatusID: 1},
 	); err != nil {
 		t.Fatalf("insert %s: %v", name, err)
 	}
@@ -143,7 +143,7 @@ func TestRunBranchPrune(t *testing.T) {
 		t.Parallel()
 
 		s := openTestBranchStore(t)
-		insertTestBranch(t, s, "uuid-1", "ABC-1", "ABC-1@feat@gone@uuid-1", "feat")
+		insertTestBranch(t, s, "ABC-1", "ABC-1@feat@gone@uuid-1", "feat")
 
 		pruner := &fakePruner{base: "master", localNames: []string{"master"}}
 
@@ -166,7 +166,7 @@ func TestRunBranchPrune(t *testing.T) {
 		t.Parallel()
 
 		s := openTestBranchStore(t)
-		insertTestBranch(t, s, "uuid-2", "XY-1", "XY-1@fix@bug@uuid-2", "fix")
+		insertTestBranch(t, s, "XY-1", "XY-1@fix@bug@uuid-2", "fix")
 
 		pruner := &fakePruner{
 			base:       "master",
@@ -187,7 +187,7 @@ func TestRunBranchPrune(t *testing.T) {
 		t.Parallel()
 
 		s := openTestBranchStore(t)
-		insertTestBranch(t, s, "uuid-3", "Z-1", "Z-1@feat@active@uuid-3", "feat")
+		insertTestBranch(t, s, "Z-1", "Z-1@feat@active@uuid-3", "feat")
 
 		pruner := &fakePruner{
 			base:       "master",
@@ -208,9 +208,9 @@ func TestRunBranchPrune(t *testing.T) {
 		t.Parallel()
 
 		s := openTestBranchStore(t)
-		insertTestBranch(t, s, "del-1", "DEL-1", "DEL-1@feat@gone@del-1", "feat")
-		insertTestBranch(t, s, "mrg-1", "MRG-1", "MRG-1@fix@done@mrg-1", "fix")
-		insertTestBranch(t, s, "act-1", "ACT-1", "ACT-1@feat@active@act-1", "feat")
+		insertTestBranch(t, s, "DEL-1", "DEL-1@feat@gone@del-1", "feat")
+		insertTestBranch(t, s, "MRG-1", "MRG-1@fix@done@mrg-1", "fix")
+		insertTestBranch(t, s, "ACT-1", "ACT-1@feat@active@act-1", "feat")
 
 		pruner := &fakePruner{
 			base:       "master",

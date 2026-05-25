@@ -174,18 +174,28 @@ func toStoreStatus(s string) store.BranchStatus {
 }
 
 func (b Branch) newCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "new",
 		Short: "Create a new branch (manual input)",
 		Long:  "Enter issue details manually, then a named branch is created and checked out.",
 		RunE:  b.newRunE,
 	}
+
+	cmd.Flags().String("variant", "",
+		"create a parallel branch for the same issue (e.g. --variant=spike)")
+
+	return cmd
 }
 
 // newRunE delegates to runIssueStart with manual-first (tracker toggle defaults to NO).
 func (b Branch) newRunE(cmd *cobra.Command, _ []string) error {
+	variant, err := cmd.Flags().GetString("variant")
+	if err != nil {
+		return fmt.Errorf("read --variant flag: %w", err)
+	}
+
 	ir := issuecmd.New(b.appConfig)
-	if err := ir.RunIssueStart(cmd, issue.IssueStartFlags{TrackerFirst: false}); err != nil {
+	if err := ir.RunIssueStart(cmd, issue.IssueStartFlags{TrackerFirst: false, Variant: variant}); err != nil {
 		return fmt.Errorf("failed to run issueStart: %w", err)
 	}
 
@@ -352,13 +362,13 @@ func executePrune(ctx context.Context, s *store.Store, result pruneResult) error
 	now := time.Now()
 
 	for i := range result.toDelete {
-		if err := s.DeleteBranch(ctx, result.toDelete[i].UUID); err != nil {
+		if err := s.DeleteBranch(ctx, result.toDelete[i].BranchName); err != nil {
 			return fmt.Errorf("delete %q: %w", result.toDelete[i].BranchName, err)
 		}
 	}
 
 	for i := range result.toMerge {
-		if err := s.UpdateBranchStatus(ctx, result.toMerge[i].UUID, 2, &now); err != nil {
+		if err := s.UpdateBranchStatus(ctx, result.toMerge[i].BranchName, 2, &now); err != nil {
 			return fmt.Errorf("mark merged %q: %w", result.toMerge[i].BranchName, err)
 		}
 	}
