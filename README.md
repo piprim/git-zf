@@ -225,6 +225,21 @@ If any step between 4 and a successful commit fails — TUI abort, pre-commit ho
 - **Squash** — no submodules involved, you want the existing `git merge --squash` semantics (fast, fewer git operations).
 - **Classic** — you want to preserve the feature's full commit history on the base branch via a merge commit. The merge commit's message is composed through the commitizen TUI form (same UX as Rebase/Squash). Local base is FF-synced against `origin/<base>` before the merge; Classic refuses to merge into a base that has diverged from origin (operator runs `git pull --ff-only` and retries). Use when intermediate commits have value (large features, bisect surface, audit trail).
 
+#### Testing the close flow
+
+The close flow is end-to-end tested in `cmd/issue/close_e2e_test.go`. Tests
+construct a real on-disk repo, a seeded SQLite store, and the in-process
+tracker fake at `tracker/fake/`, then drive the flow with a `scriptedPrompter`
+that returns canned answers instead of opening huh forms.
+
+To exercise just the close-flow tests:
+
+    mise exec -- go test ./cmd/issue/... -run "^TestClose_" -v
+
+When adding a new merge strategy or changing the merge/store/tracker
+sequencing, add a corresponding E2E test alongside the existing happy-path
+and failure-mode tests.
+
 ### Branch
 ```
 $ git zf branch new       # create a branch with manual input

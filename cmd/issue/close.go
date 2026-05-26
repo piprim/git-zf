@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
-	"github.com/charmbracelet/huh"
 	"github.com/go-git/go-git/v6/plumbing"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
@@ -15,12 +13,60 @@ import (
 	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
-	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
 // shortSHALen is the number of hex characters used to abbreviate a commit SHA.
 const shortSHALen = 7
+
+// closeDeps bundles the long-lived dependencies the close flow needs.
+// Production code builds it via buildCloseDeps; tests inject directly.
+type closeDeps struct {
+	client  *git.Client
+	store   *store.Store
+	cfg     *config.AppConfig
+	tracker tracker.Tracker // nil ⇒ no tracker update will be attempted
+}
+
+// buildCloseDeps constructs the production closeDeps from a cobra command.
+// Returns an error if the repo cannot be opened or the store cannot be
+// initialised. When cfg.IssueTracker.Type == "" the returned deps.tracker is
+// nil (Close() treats that as "skip tracker update").
+func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConfig) (closeDeps, error) {
+	s, err := store.OpenRepo(ctx)
+	if err != nil {
+		return closeDeps{}, fmt.Errorf("failed to get store: %w", err)
+	}
+
+	client, err := git.NewClient(&pkg.IO{
+		In:  cmd.InOrStdin(),
+		Out: cmd.OutOrStdout(),
+		Err: cmd.ErrOrStderr(),
+	})
+	if err != nil {
+		_ = s.Close()
+
+		return closeDeps{}, fmt.Errorf("not a git repository: %w", err)
+	}
+
+	if cfg.Branch.Remote != "" {
+		client.SetRemote(cfg.Branch.Remote)
+	}
+
+	deps := closeDeps{client: client, store: s, cfg: cfg}
+
+	if cfg.IssueTracker.Type != "" {
+		t, err := tracker.New(cfg.IssueTracker)
+		if err != nil {
+			// Non-fatal: warn and continue with a nil tracker.
+			fmt.Fprintf(client.IO().Err, "warning: init tracker: %v\n", err)
+		} else {
+			deps.tracker = t
+		}
+	}
+
+	return deps, nil
+}
 
 type MergeStrategy string
 
@@ -58,26 +104,25 @@ update the local store, update the remote tracker, then optionally delete the lo
 func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
-	s, err := store.OpenRepo(ctx)
+	deps, err := buildCloseDeps(ctx, cmd, i.appConfig)
 	if err != nil {
-		return fmt.Errorf("failed to get store: %w", err)
+		return err
 	}
-	defer func() { _ = s.Close() }()
+	defer func() { _ = deps.store.Close() }()
 
-	client, err := git.NewClient(&pkg.IO{
-		In:  cmd.InOrStdin(),
-		Out: cmd.OutOrStdout(),
-		Err: cmd.ErrOrStderr(),
-	})
-	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
+	return Close(ctx, deps, newHuhPrompter(deps.client, deps.store, i.appConfig))
+}
 
-	if i.appConfig.Branch.Remote != "" {
-		client.SetRemote(i.appConfig.Branch.Remote)
-	}
-
-	picked, err := getPickedBranch(ctx, s, client)
+// Close runs the full merge → store → tracker → delete-branch pipeline
+// without opening any huh forms directly. All user-facing decisions are
+// resolved by prompter. Used by both closeRunE (production) and the E2E
+// tests (with a scripted prompter).
+//
+// Returns nil on the errFastForwardDeferred path — the commit landed and
+// the operator just needs to fast-forward the local base manually; Close
+// has already printed the recovery instructions.
+func Close(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
+	picked, err := getPickedBranch(ctx, deps.store, deps.client, prompter)
 	if err != nil {
 		return err
 	}
@@ -86,23 +131,23 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	base := i.appConfig.Branch.Base
+	base := deps.cfg.Branch.Base
 	if base == "" {
-		base, err = client.DefaultBaseBranch()
+		base, err = deps.client.DefaultBaseBranch()
 		if err != nil {
 			return fmt.Errorf("detect base branch: %w", err)
 		}
 	}
 
 	mc := mergeContext{
-		client:       client,
+		client:       deps.client,
 		pickedBranch: picked,
 		baseBranch:   base,
-		cfg:          i.appConfig,
-		store:        s,
+		cfg:          deps.cfg,
+		store:        deps.store,
 	}
 
-	strategy, aborted, err := doMerge(ctx, mc)
+	strategy, aborted, err := doMerge(ctx, mc, prompter)
 	if err != nil {
 		if errors.Is(err, errFastForwardDeferred) {
 			return nil
@@ -112,32 +157,34 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	}
 
 	if aborted {
-		fmt.Fprintln(mc.client.IO().Out, "Aborted.")
+		fmt.Fprintln(deps.client.IO().Out, "Aborted.")
 
 		return nil
 	}
 
-	// warn on stderr but do not abort — the merge already succeeded.
-	i.updateStatus(cmd, s, picked)
+	updateClosedStatus(ctx, deps, picked, prompter)
 
-	if err := doDeleteBranch(cmd, client, picked, strategy); err != nil {
+	if err := doDeleteBranch(ctx, deps.client, picked, strategy, prompter); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(mc.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
+	fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
 
 	return nil
 }
 
 // getPickedBranch returns (nil, nil) when there are no in-progress branches.
-func getPickedBranch(ctx context.Context, s *store.Store, client *git.Client) (*store.BranchRow, error) {
+func getPickedBranch(
+	ctx context.Context,
+	s *store.Store,
+	client *git.Client, prompter ClosePrompter) (*store.BranchRow, error) {
 	branches, err := s.ListBranches(ctx, store.BranchStatusInProgress)
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
 
 	if len(branches) == 0 {
-		fmt.Println("No in-progress branches.")
+		fmt.Fprintln(client.IO().Out, "No in-progress branches.")
 
 		return nil, nil
 	}
@@ -147,17 +194,21 @@ func getPickedBranch(ctx context.Context, s *store.Store, client *git.Client) (*
 		currentBranch = ""
 	}
 
-	var picked store.BranchRow
-	if err := huh.NewForm(tui.IssueBranchPicker(branches, currentBranch, &picked)).RunWithContext(ctx); err != nil {
-		return nil, fmt.Errorf("branch picker: %w", err)
+	picked, err := prompter.PickBranch(ctx, branches, currentBranch)
+	if err != nil {
+		//nolint:wrapcheck // already wraped
+		return nil, err
 	}
 
-	return &picked, nil
+	return picked, nil
 }
 
 // doMerge runs the full merge flow: dry-run, strategy picker, confirm, then
 // the actual merge. aborted is true when the user cancelled at the confirm prompt.
-func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, aborted bool, err error) {
+func doMerge(
+	ctx context.Context,
+	mc mergeContext,
+	prompter ClosePrompter) (strategy MergeStrategy, aborted bool, err error) {
 	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, mc.baseBranch)
 	if err != nil {
 		return "", false, fmt.Errorf("merge dry-run: %w", err)
@@ -173,34 +224,16 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 		return "", false, fmt.Errorf("merge conflicts in branch %q", mc.pickedBranch.BranchName)
 	}
 
-	var picked string
-	strategyForm := tui.IssueMergeStrategy(&picked, []tui.StrategyOption{
-		{
-			Value: string(StrategyRebase),
-			Label: "Rebase",
-			Hint:  "Single clean commit on local base, submodule-safe (recommended)",
-		},
-		{
-			Value: string(StrategySquash),
-			Label: "Squash",
-			Hint:  "git merge --squash — fast, but not submodule-safe",
-		},
-		{
-			Value: string(StrategyClassic),
-			Label: "Classic",
-			Hint:  "git merge --no-ff with commitizen message — preserves full history",
-		},
-	})
-	if err := huh.NewForm(strategyForm).RunWithContext(ctx); err != nil {
-		return "", false, fmt.Errorf("strategy picker: %w", err)
+	strategy, err = prompter.PickStrategy(ctx, mc.pickedBranch.BranchName, mc.baseBranch)
+	if err != nil {
+		//nolint:wrapcheck // already wraped
+		return "", false, err
 	}
 
-	strategy = MergeStrategy(picked)
-
-	var confirmed bool
-	confirmForm := tui.IssueMergeConfirm(mc.pickedBranch.BranchName, mc.baseBranch, string(strategy), &confirmed)
-	if err := huh.NewForm(confirmForm).RunWithContext(ctx); err != nil {
-		return "", false, fmt.Errorf("confirm form: %w", err)
+	confirmed, err := prompter.ConfirmMerge(ctx, mc.pickedBranch.BranchName, mc.baseBranch, strategy)
+	if err != nil {
+		//nolint:wrapcheck // already wraped
+		return "", false, err
 	}
 
 	if !confirmed {
@@ -209,15 +242,15 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 
 	switch strategy {
 	case StrategyClassic:
-		if err := doClassicClose(ctx, mc); err != nil {
+		if err := doClassicClose(ctx, mc, prompter); err != nil {
 			return strategy, false, err
 		}
 	case StrategySquash:
-		if err := doSquashCommit(ctx, mc); err != nil {
+		if err := doSquashCommit(ctx, mc, prompter); err != nil {
 			return strategy, false, err
 		}
 	case StrategyRebase:
-		if err := doRebaseClose(ctx, mc); err != nil {
+		if err := doRebaseClose(ctx, mc, prompter); err != nil {
 			return strategy, false, err
 		}
 	default:
@@ -233,7 +266,7 @@ func doMerge(ctx context.Context, mc mergeContext) (strategy MergeStrategy, abor
 // subject. The author dropdown defaults to the current git identity. Esc/Ctrl+C
 // in the form aborts the close; staged changes are left in place so the operator
 // can inspect or `git reset` them.
-func doSquashCommit(ctx context.Context, mc mergeContext) error {
+func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter) error {
 	branchHash, err := mc.client.ResolveRef("refs/heads/" + mc.pickedBranch.BranchName)
 	if err != nil {
 		return fmt.Errorf("resolve branch %q: %w", mc.pickedBranch.BranchName, err)
@@ -256,21 +289,9 @@ func doSquashCommit(ctx context.Context, mc mergeContext) error {
 	prefill["subject"] = fmt.Sprintf("Squashed merge of %s into %s.",
 		branchHash.String()[:shortSHALen], baseHash.String()[:shortSHALen])
 
-	authors, authorsErr := mc.client.Authors()
-	if authorsErr != nil {
-		slog.Warn("could not load author list", "error", authorsErr)
-
-		authors = []string{}
-	}
-
-	defaults := tui.CommitOption{Authors: authors}
-	if len(authors) > 0 {
-		defaults.Author = authors[0]
-	}
-
-	msg, opts, err := commitpkg.FillOutForm(ctx, mc.cfg, defaults, mc.store, prefill)
+	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
 	if err != nil {
-		return fmt.Errorf("fill commit form: %w", err)
+		return err //nolint:wrapcheck // prompter error already wrapped
 	}
 
 	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
@@ -287,50 +308,68 @@ func doSquashCommit(ctx context.Context, mc mergeContext) error {
 	return nil
 }
 
-// updateStatus marks the branch and issue as merged/closed in the store and
-// optionally updates the remote tracker. Errors are non-fatal — the merge has
-// already been committed, so we warn rather than fail.
-func (i Issue) updateStatus(cmd *cobra.Command, s *store.Store, pickedBranch *store.BranchRow) {
+// updateClosedStatus marks the branch and issue as merged in the store and,
+// when a tracker is configured, drives the status-picker form. Every error
+// here is non-fatal — the merge already committed, so the operator must be
+// able to clean up store/tracker drift manually.
+func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.BranchRow, prompter ClosePrompter) {
 	now := time.Now()
-	if err := s.UpdateBranchStatus(cmd.Context(), pickedBranch.BranchName, store.StatusIDMerged, &now); err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: update branch status: %v\n", err)
+	if err := deps.store.UpdateBranchStatus(ctx, picked.BranchName, store.StatusIDMerged, &now); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: update branch status: %v\n", err)
 	}
 
-	if err := s.UpdateIssueStatus(cmd.Context(), pickedBranch.IssueID, store.StatusIDMerged); err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: update issue status: %v\n", err)
+	if err := deps.store.UpdateIssueStatus(ctx, picked.IssueID, store.StatusIDMerged); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: update issue status: %v\n", err)
 	}
 
-	if i.appConfig.IssueTracker.Type != "" {
-		i.closeTrackerIssue(cmd, pickedBranch.IssueSlug)
-	}
-}
-
-func doDeleteBranch(cmd *cobra.Command, c *git.Client, pickedBranch *store.BranchRow, strategy MergeStrategy) error {
-	var shouldDelete bool
-	ctx := cmd.Context()
-	if err := huh.NewForm(tui.IssueDeleteBranch(pickedBranch.BranchName, &shouldDelete)).RunWithContext(ctx); err != nil {
-		return fmt.Errorf("delete branch form: %w", err)
+	if deps.tracker == nil {
+		return
 	}
 
-	if shouldDelete {
-		force := strategy == StrategySquash || strategy == StrategyRebase
-		if err := c.DeleteLocalBranch(cmd.Context(), pickedBranch.BranchName, force); err != nil {
-			fmt.Fprintf(cmd.OutOrStderr(), "warning: delete branch: %v\n", err)
-		}
-	}
-
-	return nil
-}
-
-func (i Issue) closeTrackerIssue(cmd *cobra.Command, issueSlug string) {
-	t, err := tracker.New(i.appConfig.IssueTracker)
+	statuses, err := deps.tracker.ListStatuses(ctx)
 	if err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: init tracker: %v\n", err)
+		fmt.Fprintf(deps.client.IO().Err, "warning: could not fetch tracker statuses: %v\n", err)
 
 		return
 	}
 
-	i.updateTrackerIssueStatus(cmd, t, issueSlug)
+	selected, err := prompter.PickTrackerStatus(ctx, picked.IssueSlug, deps.cfg.IssueTracker.Type, statuses)
+	if err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: status picker: %v\n", err)
+
+		return
+	}
+
+	if selected == "" {
+		return
+	}
+
+	if err := deps.tracker.UpdateIssueStatus(ctx, picked.IssueSlug, selected); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: update tracker status: %v\n", err)
+	}
+}
+
+func doDeleteBranch(
+	ctx context.Context,
+	c *git.Client,
+	picked *store.BranchRow,
+	strategy MergeStrategy, prompter ClosePrompter) error {
+	shouldDelete, err := prompter.ConfirmDeleteBranch(ctx, picked.BranchName)
+	if err != nil {
+		//nolint:wrapcheck // already wraped
+		return err
+	}
+
+	if !shouldDelete {
+		return nil
+	}
+
+	force := strategy == StrategySquash || strategy == StrategyRebase
+	if err := c.DeleteLocalBranch(ctx, picked.BranchName, force); err != nil {
+		fmt.Fprintf(c.IO().Err, "warning: delete branch: %v\n", err)
+	}
+
+	return nil
 }
 
 // doRebaseClose runs the Rebase strategy: pre-flights the working tree, fetches
@@ -343,7 +382,7 @@ func (i Issue) closeTrackerIssue(cmd *cobra.Command, issueSlug string) {
 // `git reset --hard <featureOrigSHA>` to atomically restore the feature ref.
 // The post-commit FF failure is signalled with errFastForwardDeferred so the
 // caller can skip post-merge bookkeeping without rolling back the new commit.
-func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
+func doRebaseClose(ctx context.Context, mc mergeContext, prompter ClosePrompter) (err error) {
 	plan, err := rebasePreflight(ctx, mc)
 	if err != nil {
 		return err
@@ -386,21 +425,9 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 	prefill["subject"] = fmt.Sprintf("Squashed close of %s into %s.",
 		plan.featureOrigSHA.String()[:shortSHALen], baseOriginSHA.String()[:shortSHALen])
 
-	authors, authorsErr := mc.client.Authors()
-	if authorsErr != nil {
-		slog.Warn("could not load author list", "error", authorsErr)
-
-		authors = []string{}
-	}
-
-	defaults := tui.CommitOption{Authors: authors}
-	if len(authors) > 0 {
-		defaults.Author = authors[0]
-	}
-
-	msg, opts, err := commitpkg.FillOutForm(ctx, mc.cfg, defaults, mc.store, prefill)
+	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
 	if err != nil {
-		return fmt.Errorf("fill commit form: %w", err)
+		return err //nolint:wrapcheck // prompter error already wrapped
 	}
 
 	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
@@ -434,7 +461,7 @@ func doRebaseClose(ctx context.Context, mc mergeContext) (err error) {
 // successful Commit runs `git merge --abort` to clear MERGE_HEAD /
 // MERGE_MSG and restore the working tree. The defer uses a named return
 // + closure so it observes the actual err at function exit.
-func doClassicClose(ctx context.Context, mc mergeContext) (err error) {
+func doClassicClose(ctx context.Context, mc mergeContext, prompter ClosePrompter) (err error) {
 	// rebasePreflight is reused verbatim: dirty check, feature checkout +
 	// SHA, remote detection, fetch, remoteBase computation, ancestor check,
 	// dry-run — all needed by Classic too. The rebasePlan's featureOrigSHA
@@ -493,21 +520,9 @@ func doClassicClose(ctx context.Context, mc mergeContext) (err error) {
 	prefill["subject"] = fmt.Sprintf("Merge %s into %s.",
 		plan.featureOrigSHA.String()[:shortSHALen], baseSHA.String()[:shortSHALen])
 
-	authors, authorsErr := mc.client.Authors()
-	if authorsErr != nil {
-		slog.Warn("could not load author list", "error", authorsErr)
-
-		authors = []string{}
-	}
-
-	defaults := tui.CommitOption{Authors: authors}
-	if len(authors) > 0 {
-		defaults.Author = authors[0]
-	}
-
-	msg, opts, err := commitpkg.FillOutForm(ctx, mc.cfg, defaults, mc.store, prefill)
+	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
 	if err != nil {
-		return fmt.Errorf("fill commit form: %w", err)
+		return err //nolint:wrapcheck // prompter error already wrapped
 	}
 
 	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
