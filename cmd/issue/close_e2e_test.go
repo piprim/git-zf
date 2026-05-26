@@ -3,7 +3,6 @@ package issue
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,9 +156,6 @@ func assertBranchAbsent(t *testing.T, c *git.Client, branch string) {
 	}
 }
 
-// silenceUnused keeps io.Discard reachable in case future tests need it.
-var _ = io.Discard
-
 func TestClose_RebaseHappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -174,8 +170,8 @@ func TestClose_RebaseHappyPath(t *testing.T) {
 		DeleteBranch:  true,
 	}
 
-	if err := Close(t.Context(), rig.deps(), prompter); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
 	}
 
 	t.Run("main HEAD carries the new commit subject", func(t *testing.T) {
@@ -223,8 +219,8 @@ func TestClose_SquashHappyPath(t *testing.T) {
 		DeleteBranch:  true,
 	}
 
-	if err := Close(t.Context(), rig.deps(), prompter); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
 	}
 
 	// Squash strategy: the merge commit lands on the CURRENT branch (the
@@ -268,8 +264,8 @@ func TestClose_ClassicHappyPath(t *testing.T) {
 		DeleteBranch:  false, // exercise the "don't delete" path
 	}
 
-	if err := Close(t.Context(), rig.deps(), prompter); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
 	}
 
 	t.Run("main HEAD carries the merge commit", func(t *testing.T) {
@@ -334,11 +330,11 @@ func TestClose_NoInProgressBranches(t *testing.T) {
 
 	deps := closeDeps{client: client, store: s, cfg: cfg}
 
-	// PickBranch should never be called — but if Close mis-routes, fail loudly.
+	// PickBranch should never be called — but if runClose mis-routes, fail loudly.
 	prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch should not be called when no branches exist")}
 
-	if err := Close(t.Context(), deps, prompter); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
 	}
 
 	t.Run("stdout shows the empty-list message", func(t *testing.T) {
@@ -359,8 +355,8 @@ func TestClose_UserAbortsAtConfirm(t *testing.T) {
 		Confirm:  false, // operator declines
 	}
 
-	if err := Close(t.Context(), rig.deps(), prompter); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
 	}
 
 	t.Run("stdout shows the Aborted message", func(t *testing.T) {
@@ -391,7 +387,7 @@ func TestClose_ConflictAborts(t *testing.T) {
 
 	rig := newCloseRig(t)
 
-	// Create a conflicting change on main before calling Close.
+	// Create a conflicting change on main before calling runClose.
 	runGit := func(args ...string) {
 		t.Helper()
 
@@ -415,11 +411,11 @@ func TestClose_ConflictAborts(t *testing.T) {
 		// Strategy/Message irrelevant — the dry-run fails before either is asked.
 	}
 
-	err := Close(t.Context(), rig.deps(), prompter)
+	err := runClose(t.Context(), rig.deps(), prompter)
 
-	t.Run("Close returns an error", func(t *testing.T) {
+	t.Run("runClose returns an error", func(t *testing.T) {
 		if err == nil {
-			t.Fatal("Close: expected an error from the dry-run conflict, got nil")
+			t.Fatal("runClose: expected an error from the dry-run conflict, got nil")
 		}
 	})
 

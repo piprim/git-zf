@@ -31,7 +31,7 @@ type closeDeps struct {
 // buildCloseDeps constructs the production closeDeps from a cobra command.
 // Returns an error if the repo cannot be opened or the store cannot be
 // initialised. When cfg.IssueTracker.Type == "" the returned deps.tracker is
-// nil (Close() treats that as "skip tracker update").
+// nil (runClose treats that as "skip tracker update").
 func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConfig) (closeDeps, error) {
 	s, err := store.OpenRepo(ctx)
 	if err != nil {
@@ -110,18 +110,20 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = deps.store.Close() }()
 
-	return Close(ctx, deps, newHuhPrompter(deps.client, deps.store, i.appConfig))
+	return runClose(ctx, deps, newHuhPrompter(deps.client, deps.store, i.appConfig))
 }
 
-// Close runs the full merge → store → tracker → delete-branch pipeline
+// runClose runs the full merge → store → tracker → delete-branch pipeline
 // without opening any huh forms directly. All user-facing decisions are
 // resolved by prompter. Used by both closeRunE (production) and the E2E
 // tests (with a scripted prompter).
 //
 // Returns nil on the errFastForwardDeferred path — the commit landed and
-// the operator just needs to fast-forward the local base manually; Close
+// the operator just needs to fast-forward the local base manually; runClose
 // has already printed the recovery instructions.
-func Close(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
+//
+// Unexported because closeDeps is unexported (no cross-package caller).
+func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
 	picked, err := getPickedBranch(ctx, deps.store, deps.client, prompter)
 	if err != nil {
 		return err
@@ -196,7 +198,7 @@ func getPickedBranch(
 
 	picked, err := prompter.PickBranch(ctx, branches, currentBranch)
 	if err != nil {
-		//nolint:wrapcheck // already wraped
+		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
 		return nil, err
 	}
 
@@ -224,15 +226,15 @@ func doMerge(
 		return "", false, fmt.Errorf("merge conflicts in branch %q", mc.pickedBranch.BranchName)
 	}
 
-	strategy, err = prompter.PickStrategy(ctx, mc.pickedBranch.BranchName, mc.baseBranch)
+	strategy, err = prompter.PickStrategy(ctx)
 	if err != nil {
-		//nolint:wrapcheck // already wraped
+		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
 		return "", false, err
 	}
 
 	confirmed, err := prompter.ConfirmMerge(ctx, mc.pickedBranch.BranchName, mc.baseBranch, strategy)
 	if err != nil {
-		//nolint:wrapcheck // already wraped
+		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
 		return "", false, err
 	}
 
@@ -356,7 +358,7 @@ func doDeleteBranch(
 	strategy MergeStrategy, prompter ClosePrompter) error {
 	shouldDelete, err := prompter.ConfirmDeleteBranch(ctx, picked.BranchName)
 	if err != nil {
-		//nolint:wrapcheck // already wraped
+		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
 		return err
 	}
 

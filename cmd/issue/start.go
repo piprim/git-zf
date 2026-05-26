@@ -6,17 +6,66 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mitchellh/go-homedir"
 	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
-	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
+
+// StartDeps bundles the long-lived dependencies the start flow needs.
+// Production code builds it via BuildStartDeps; tests inject directly.
+// Exported because cmd/branch/branch.go's newRunE constructs one too.
+type StartDeps struct {
+	Client  *git.Client
+	Cfg     *config.AppConfig
+	Tracker tracker.Tracker // nil when cfg.IssueTracker.Type == "" OR factory failed (warn)
+	Flags   issue.IssueStartFlags
+}
+
+// BuildStartDeps constructs the production StartDeps from a cobra command.
+// Returns an error if the repo cannot be opened. When cfg.IssueTracker.Type
+// == "" the returned deps.Tracker is nil (RunIssueStart treats that as "no
+// tracker available"). When the tracker factory fails, the error is
+// non-fatal — BuildStartDeps warns to client.IO().Err and returns deps with
+// a nil tracker.
+func BuildStartDeps(
+	_ context.Context,
+	cmd *cobra.Command,
+	cfg *config.AppConfig,
+	flags issue.IssueStartFlags,
+) (StartDeps, error) {
+	client, err := git.NewClient(&pkg.IO{
+		In:  cmd.InOrStdin(),
+		Out: cmd.OutOrStdout(),
+		Err: cmd.ErrOrStderr(),
+	})
+	if err != nil {
+		return StartDeps{}, fmt.Errorf("not a git repository: %w", err)
+	}
+
+	if cfg.Branch.Remote != "" {
+		client.SetRemote(cfg.Branch.Remote)
+	}
+
+	deps := StartDeps{Client: client, Cfg: cfg, Flags: flags}
+
+	if cfg.IssueTracker.Type != "" {
+		t, err := tracker.New(cfg.IssueTracker)
+		if err != nil {
+			fmt.Fprintf(client.IO().Err, "warning: init tracker: %v\n", err)
+		} else {
+			deps.Tracker = t
+		}
+	}
+
+	return deps, nil
+}
 
 func (i Issue) getStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -39,112 +88,241 @@ func (i Issue) startRunE(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("read --variant flag: %w", err)
 	}
 
-	return i.RunIssueStart(cmd, issue.IssueStartFlags{
-		TrackerFirst: true,
-		Variant:      variant,
-	})
+	flags := issue.IssueStartFlags{TrackerFirst: true, Variant: variant}
+
+	deps, err := BuildStartDeps(cmd.Context(), cmd, i.appConfig, flags)
+	if err != nil {
+		return err
+	}
+
+	return RunIssueStart(cmd.Context(), deps, NewHuhStartPrompter())
 }
 
-// RunIssueStart contains the full issue-start flow. trackerFirst=true for
-// `issue start` (tracker pre-selected); false for `branch new` (manual pre-selected).
-func (i Issue) RunIssueStart(cmd *cobra.Command, flags issue.IssueStartFlags) error {
-	ctx := cmd.Context()
-	client, err := git.NewClient(nil)
-	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
-
-	if i.appConfig.Branch.Remote != "" {
-		client.SetRemote(i.appConfig.Branch.Remote)
-	}
-
-	allowedBranchTypes := make([]string, 0, len(i.appConfig.CommitTypes))
-	for _, t := range i.appConfig.CommitTypes {
+// RunIssueStart is the prompter-driven core of the issue-start flow. Called
+// from startRunE (production, via a huhStartPrompter) and from cmd/branch's
+// newRunE (also production). Tests call it directly with a
+// scriptedStartPrompter. TrackerFirst is carried inside deps.Flags.
+//
+// Returns nil on the empty-list short-circuit from pickIssue (operator
+// declined the tracker toggle and no manual fallback was offered) and nil
+// on the (nil, nil) abort path from prompter.ResolveBranchConflict.
+func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) error {
+	allowedBranchTypes := make([]string, 0, len(deps.Cfg.CommitTypes))
+	for _, t := range deps.Cfg.CommitTypes {
 		allowedBranchTypes = append(allowedBranchTypes, t.Name)
 	}
+
 	if len(allowedBranchTypes) == 0 {
 		return errors.New("config: no commit types found")
 	}
 
-	trackerCfg := i.appConfig.IssueTracker
-	var pickedIssue *issue.Issue
-	var t tracker.Tracker
-
-	if trackerCfg.Type != "" {
-		t, err = tracker.New(trackerCfg)
-		if err != nil {
-			return fmt.Errorf("failed get tracker: %w", err)
-		}
-
-		pickedIssue, err = i.getFromTracker(ctx, t, flags, allowedBranchTypes)
-		if err != nil {
-			return fmt.Errorf("failed to retreive issue from tracker: %w", err)
-		}
-	} else {
-		pickedIssue, err = issue.GetFromUser(ctx, allowedBranchTypes)
-		if err != nil {
-			return fmt.Errorf("failed to retreive issue from user: %w", err)
-		}
+	pickedIssue, err := pickIssue(ctx, deps, prompter, allowedBranchTypes)
+	if err != nil {
+		return err
 	}
 
-	useWorktree := false
-	if i.appConfig.Branch.UseWorktree == nil {
-		if err := huh.NewForm(tui.WorktreeToggle(&useWorktree)).RunWithContext(ctx); err != nil {
-			return fmt.Errorf("worktree toggle: %w", err)
-		}
-	} else {
-		useWorktree = *i.appConfig.Branch.UseWorktree
+	if pickedIssue == nil {
+		return nil
+	}
+
+	useWorktree, err := resolveUseWorktree(ctx, deps, prompter)
+	if err != nil {
+		return err
 	}
 
 	if useWorktree {
-		return i.createWorktree(cmd, t, pickedIssue, client, flags)
+		return createWorktreeFlow(ctx, deps, prompter, pickedIssue)
 	}
 
-	return i.createBranch(cmd, t, pickedIssue, client, flags)
+	return createBranchFlow(ctx, deps, prompter, pickedIssue)
 }
 
-func (i Issue) getFromTracker(
+// pickIssue chooses between tracker-driven and user-driven issue input.
+// Returns (nil, nil) when the operator declined the tracker toggle AND
+// no manual fallback was offered (only reachable via tracker path with
+// useTracker=false — but in that branch we explicitly call GetFromUser,
+// so (nil, nil) is currently unreachable in practice; the caller still
+// guards against it).
+func pickIssue(
 	ctx context.Context,
-	t tracker.Tracker,
-	flags issue.IssueStartFlags,
+	deps StartDeps,
+	prompter StartPrompter,
 	allowedBranchTypes []string,
 ) (*issue.Issue, error) {
-	var useTracker bool
-	var pickedIssue *issue.Issue
-	var err error
-
-	issueTrackerToggle := tui.IssueTrackerToggle(&useTracker, flags.TrackerFirst, i.appConfig.IssueTracker.Type)
-	if err = huh.NewForm(issueTrackerToggle).RunWithContext(ctx); err != nil {
-		return nil, fmt.Errorf("tracker toggle error: %w", err)
-	}
-
-	if useTracker {
-		pickedIssue, err = issue.GetFromTracker(ctx, t, allowedBranchTypes)
+	if deps.Tracker == nil {
+		got, err := issue.GetFromUser(ctx, prompter, allowedBranchTypes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to retreive issue from tracker: %w", err)
+			return nil, fmt.Errorf("issue from user: %w", err)
 		}
+
+		return got, nil
 	}
 
-	return pickedIssue, nil
+	useTracker, err := prompter.PickUseTracker(ctx, deps.Cfg.IssueTracker.Type, deps.Flags.TrackerFirst)
+	if err != nil {
+		return nil, fmt.Errorf("pick use tracker: %w", err)
+	}
+
+	if !useTracker {
+		got, err := issue.GetFromUser(ctx, prompter, allowedBranchTypes)
+		if err != nil {
+			return nil, fmt.Errorf("issue from user: %w", err)
+		}
+
+		return got, nil
+	}
+
+	got, err := issue.GetFromTracker(ctx, prompter, deps.Tracker, allowedBranchTypes)
+	if err != nil {
+		return nil, fmt.Errorf("issue from tracker: %w", err)
+	}
+
+	return got, nil
 }
 
-// prepareBranch assembles the branch and resolves the base branch.
-// Both createBranch and createWorktree share this helper so that the
-// base-branch detection logic (config override or DefaultBaseBranch
-// fallback) is not duplicated at each call site.
-func (i Issue) prepareBranch(
-	pickedIssue *issue.Issue,
-	client *git.Client,
-	flags issue.IssueStartFlags,
-) (b *branch.Branch, base string, err error) {
-	b, err = branch.New(pickedIssue.ID, pickedIssue.Type, pickedIssue.Subject, flags.Variant)
+// resolveUseWorktree consults the config override; falls back to the prompter
+// only when the override is absent (nil).
+func resolveUseWorktree(ctx context.Context, deps StartDeps, prompter StartPrompter) (bool, error) {
+	if deps.Cfg.Branch.UseWorktree != nil {
+		return *deps.Cfg.Branch.UseWorktree, nil
+	}
+
+	use, err := prompter.PickUseWorktree(ctx)
+	if err != nil {
+		return false, fmt.Errorf("pick use worktree: %w", err)
+	}
+
+	return use, nil
+}
+
+func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
+	b, base, err := prepareBranch(deps, picked)
+	if err != nil {
+		return err
+	}
+
+	b, err = prompter.ResolveBranchConflict(ctx, deps.Client, b, picked)
+	if err != nil {
+		return fmt.Errorf("resolve branch conflict: %w", err)
+	}
+
+	if b == nil {
+		return nil
+	}
+
+	branchName := b.Name()
+
+	confirmed, err := prompter.ConfirmCreateBranch(ctx,
+		fmt.Sprintf("Create branch %q based on %q?", branchName, base))
+	if err != nil {
+		return fmt.Errorf("confirm create branch: %w", err)
+	}
+
+	if !confirmed {
+		fmt.Fprintln(deps.Client.IO().Out, "Aborted.")
+
+		return nil
+	}
+
+	if err := deps.Client.CreateBranch(branchName, base); err != nil {
+		return fmt.Errorf("create branch: %w", err)
+	}
+
+	var tt *string
+	if picked.TrackerType != "" {
+		tt = &deps.Cfg.IssueTracker.Type
+	}
+
+	if err := persist(ctx, b, picked.Subject, tt); err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: branch created but store record failed: %v\n", err)
+	}
+
+	fmt.Fprintf(deps.Client.IO().Out, "Switched to new branch %q (based on %q)\n", branchName, base)
+
+	if picked.TrackerType != "" {
+		updateTrackerStatus(ctx, deps, prompter, picked.ID)
+	}
+
+	return nil
+}
+
+func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
+	b, base, err := prepareBranch(deps, picked)
+	if err != nil {
+		return err
+	}
+
+	b, err = prompter.ResolveBranchConflict(ctx, deps.Client, b, picked)
+	if err != nil {
+		return fmt.Errorf("resolve branch conflict: %w", err)
+	}
+
+	if b == nil {
+		return nil
+	}
+
+	branchName := b.Name()
+
+	repoRoot, err := deps.Client.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	repoName, err := deps.Client.RepoName()
+	if err != nil {
+		return fmt.Errorf("resolve repo name: %w", err)
+	}
+
+	path := worktreePath(repoRoot, deps.Cfg.Branch.WorktreeDir, repoName, branchName)
+
+	confirmed, err := prompter.ConfirmCreateWorktree(ctx,
+		fmt.Sprintf("Create worktree %q at %q based on %q?", branchName, path, base))
+	if err != nil {
+		return fmt.Errorf("confirm create worktree: %w", err)
+	}
+
+	if !confirmed {
+		fmt.Fprintln(deps.Client.IO().Out, "Aborted.")
+
+		return nil
+	}
+
+	if err := deps.Client.CreateWorktree(ctx, branchName, base, path); err != nil {
+		return fmt.Errorf("create worktree: %w", err)
+	}
+
+	var tt *string
+	if picked.TrackerType != "" {
+		tt = &deps.Cfg.IssueTracker.Type
+	}
+
+	if err := persist(ctx, b, picked.Subject, tt); err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: worktree created but store record failed: %v\n", err)
+	}
+
+	fmt.Fprintf(deps.Client.IO().Out, "Created worktree %q at %q (based on %q)\n", branchName, path, base)
+
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700"))
+	fmt.Fprintln(deps.Client.IO().Out, hintStyle.Render("Run 'cd "+path+"' to begin working."))
+
+	if picked.TrackerType != "" {
+		updateTrackerStatus(ctx, deps, prompter, picked.ID)
+	}
+
+	return nil
+}
+
+// prepareBranch assembles the branch and resolves the base branch. Shared by
+// createBranchFlow and createWorktreeFlow.
+func prepareBranch(deps StartDeps, picked *issue.Issue) (b *branch.Branch, base string, err error) {
+	b, err = branch.New(picked.ID, picked.Type, picked.Subject, deps.Flags.Variant)
 	if err != nil {
 		return nil, "", fmt.Errorf("assemble branch name: %w", err)
 	}
 
-	base = i.appConfig.Branch.Base
+	base = deps.Cfg.Branch.Base
 	if base == "" {
-		base, err = client.DefaultBaseBranch()
+		base, err = deps.Client.DefaultBaseBranch()
 		if err != nil {
 			return nil, "", fmt.Errorf("detect base branch: %w", err)
 		}
@@ -153,153 +331,24 @@ func (i Issue) prepareBranch(
 	return b, base, nil
 }
 
-func (i Issue) createBranch(
-	cmd *cobra.Command,
-	t tracker.Tracker,
-	pickedIssue *issue.Issue,
-	client *git.Client,
-	flags issue.IssueStartFlags,
-) error {
-	b, base, err := i.prepareBranch(pickedIssue, client, flags)
+// updateTrackerStatus runs the tracker status-picker form and applies the
+// chosen status. All errors are non-fatal warnings (the branch was already
+// created — the operator must be able to clean up tracker drift manually).
+func updateTrackerStatus(ctx context.Context, deps StartDeps, prompter StartPrompter, issueID string) {
+	if deps.Tracker == nil {
+		return
+	}
+
+	statuses, err := deps.Tracker.ListStatuses(ctx)
 	if err != nil {
-		return err
-	}
-
-	ctx := cmd.Context()
-
-	b, err = resolveBranchConflict(ctx, client, b, pickedIssue)
-	if err != nil {
-		return err
-	}
-
-	if b == nil {
-		return nil
-	}
-
-	branchName := b.Name()
-
-	var confirmed bool
-	if err := huh.NewForm(tui.IssueConfirm(
-		fmt.Sprintf("Create branch %q based on %q?", branchName, base), &confirmed,
-	)).RunWithContext(ctx); err != nil {
-		return fmt.Errorf("confirm form: %w", err)
-	}
-
-	if !confirmed {
-		fmt.Println("Aborted.")
-
-		return nil
-	}
-
-	if err := client.CreateBranch(branchName, base); err != nil {
-		return fmt.Errorf("create branch: %w", err)
-	}
-
-	var tt *string
-	if pickedIssue.TrackerType != "" {
-		tt = &i.appConfig.IssueTracker.Type
-	}
-
-	if err := persist(cmd.Context(), b, pickedIssue.Subject, tt); err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: branch created but store record failed: %v\n", err)
-	}
-
-	fmt.Printf("Switched to new branch %q (based on %q)\n", branchName, base)
-
-	if pickedIssue.TrackerType != "" {
-		i.updateTrackerIssueStatus(cmd, t, pickedIssue.ID)
-	}
-
-	return nil
-}
-
-func (i Issue) createWorktree(
-	cmd *cobra.Command,
-	t tracker.Tracker,
-	pickedIssue *issue.Issue,
-	client *git.Client,
-	flags issue.IssueStartFlags,
-) error {
-	b, base, err := i.prepareBranch(pickedIssue, client, flags)
-	if err != nil {
-		return err
-	}
-
-	b, err = resolveBranchConflict(cmd.Context(), client, b, pickedIssue)
-	if err != nil {
-		return err
-	}
-
-	if b == nil {
-		return nil
-	}
-
-	branchName := b.Name()
-
-	repoRoot, err := client.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
-
-	repoName, err := client.RepoName()
-	if err != nil {
-		return fmt.Errorf("resolve repo name: %w", err)
-	}
-
-	path := worktreePath(repoRoot, i.appConfig.Branch.WorktreeDir, repoName, branchName)
-
-	var confirmed bool
-	if err := huh.NewForm(tui.IssueConfirm(
-		fmt.Sprintf("Create worktree %q at %q based on %q?", branchName, path, base), &confirmed,
-	)).RunWithContext(cmd.Context()); err != nil {
-		return fmt.Errorf("confirm form: %w", err)
-	}
-
-	if !confirmed {
-		fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
-
-		return nil
-	}
-
-	if err := client.CreateWorktree(cmd.Context(), branchName, base, path); err != nil {
-		return fmt.Errorf("create worktree: %w", err)
-	}
-
-	var tt *string
-	if pickedIssue.TrackerType != "" {
-		tt = &i.appConfig.IssueTracker.Type
-	}
-
-	if err := persist(cmd.Context(), b, pickedIssue.Subject, tt); err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: worktree created but store record failed: %v\n", err)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "Created worktree %q at %q (based on %q)\n", branchName, path, base)
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700"))
-	fmt.Fprintln(cmd.OutOrStdout(), hintStyle.Render("Run 'cd "+path+"' to begin working."))
-
-	if pickedIssue.TrackerType != "" {
-		i.updateTrackerIssueStatus(cmd, t, pickedIssue.ID)
-	}
-
-	return nil
-}
-
-func (i Issue) updateTrackerIssueStatus(cmd *cobra.Command, t tracker.Tracker, issueID string) {
-	statuses, err := t.ListStatuses(cmd.Context())
-	if err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: could not fetch tracker statuses: %v\n", err)
+		fmt.Fprintf(deps.Client.IO().Err, "warning: could not fetch tracker statuses: %v\n", err)
 
 		return
 	}
 
-	ctx := cmd.Context()
-
-	var selected string
-	if err := huh.NewForm(tui.IssueStatusPicker(
-		issueID, i.appConfig.IssueTracker.Type, statuses, &selected,
-	)).RunWithContext(ctx); err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: status picker form: %v\n", err)
+	selected, err := prompter.PickTrackerStatus(ctx, issueID, deps.Cfg.IssueTracker.Type, statuses)
+	if err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: status picker: %v\n", err)
 
 		return
 	}
@@ -308,8 +357,8 @@ func (i Issue) updateTrackerIssueStatus(cmd *cobra.Command, t tracker.Tracker, i
 		return
 	}
 
-	if err := t.UpdateIssueStatus(ctx, issueID, selected); err != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "warning: could not update tracker status: %v\n", err)
+	if err := deps.Tracker.UpdateIssueStatus(ctx, issueID, selected); err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: could not update tracker status: %v\n", err)
 	}
 }
 

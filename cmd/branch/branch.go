@@ -187,19 +187,20 @@ func (b Branch) newCmd() *cobra.Command {
 	return cmd
 }
 
-// newRunE delegates to runIssueStart with manual-first (tracker toggle defaults to NO).
+// newRunE delegates to RunIssueStart with manual-first (tracker toggle defaults to NO).
 func (b Branch) newRunE(cmd *cobra.Command, _ []string) error {
 	variant, err := cmd.Flags().GetString("variant")
 	if err != nil {
 		return fmt.Errorf("read --variant flag: %w", err)
 	}
 
-	ir := issuecmd.New(b.appConfig)
-	if err := ir.RunIssueStart(cmd, issue.IssueStartFlags{TrackerFirst: false, Variant: variant}); err != nil {
-		return fmt.Errorf("failed to run issueStart: %w", err)
+	flags := issue.IssueStartFlags{TrackerFirst: false, Variant: variant}
+	deps, err := issuecmd.BuildStartDeps(cmd.Context(), cmd, b.appConfig, flags)
+	if err != nil {
+		return err
 	}
 
-	return nil
+	return issuecmd.RunIssueStart(cmd.Context(), deps, issuecmd.NewHuhStartPrompter())
 }
 
 type pruneFlags struct {

@@ -43,7 +43,7 @@ func (s *scriptedPrompter) PickBranch(_ context.Context, _ []store.BranchRow, _ 
 	return s.Branch, nil
 }
 
-func (s *scriptedPrompter) PickStrategy(_ context.Context, _, _ string) (MergeStrategy, error) {
+func (s *scriptedPrompter) PickStrategy(_ context.Context) (MergeStrategy, error) {
 	if s.StrategyErr != nil {
 		return "", s.StrategyErr
 	}

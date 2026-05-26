@@ -240,6 +240,21 @@ When adding a new merge strategy or changing the merge/store/tracker
 sequencing, add a corresponding E2E test alongside the existing happy-path
 and failure-mode tests.
 
+#### Testing the start flow
+
+The issue-start flow (used by both `issue start` and `branch new`) is
+end-to-end tested in `cmd/issue/start_e2e_test.go`. The pattern mirrors the
+close-flow tests: a real on-disk repo, the fake tracker at `tracker/fake/`,
+and a `scriptedStartPrompter` that returns canned answers for every huh form.
+
+To exercise just the start-flow tests:
+
+    mise exec -- go test ./cmd/issue/... -run "^TestRunIssueStart_" -v
+
+When adding a new toggle, confirm, or picker form, extend `StartPrompter` and
+add a matching E2E test alongside the existing happy-path and failure-mode
+tests.
+
 ### Branch
 ```
 $ git zf branch new       # create a branch with manual input

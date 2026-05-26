@@ -18,17 +18,17 @@ import (
 // close_prompter_test.go returns canned values.
 //
 // Each method maps 1:1 to a huh.NewForm call in the pre-refactor close.go.
-// The order below mirrors the order calls happen in Close().
+// The order below mirrors the order calls happen in runClose.
 type ClosePrompter interface {
 	// PickBranch is called only when at least one in-progress branch exists.
 	// A non-nil error indicates cancellation or an internal failure.
 	PickBranch(ctx context.Context, branches []store.BranchRow, current string) (*store.BranchRow, error)
 
 	// PickStrategy is called only when MergeDryRun reports no conflicts.
-	PickStrategy(ctx context.Context, branch, base string) (MergeStrategy, error)
+	PickStrategy(ctx context.Context) (MergeStrategy, error)
 
 	// ConfirmMerge gates the actual merge. confirmed=false means the operator
-	// declined; Close() prints "Aborted." and returns nil.
+	// declined; runClose prints "Aborted." and returns nil.
 	ConfirmMerge(ctx context.Context, branch, base string, strategy MergeStrategy) (confirmed bool, err error)
 
 	// ComposeMessage runs inline AFTER the strategy has staged its changes
@@ -73,7 +73,7 @@ func (p *huhPrompter) PickBranch(ctx context.Context, branches []store.BranchRow
 	return &picked, nil
 }
 
-func (p *huhPrompter) PickStrategy(ctx context.Context, _, _ string) (MergeStrategy, error) {
+func (p *huhPrompter) PickStrategy(ctx context.Context) (MergeStrategy, error) {
 	var picked string
 	form := tui.IssueMergeStrategy(&picked, []tui.StrategyOption{
 		{
