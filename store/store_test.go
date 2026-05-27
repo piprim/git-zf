@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io/fs"
 	"testing"
 	"time"
 )
@@ -605,14 +606,22 @@ func TestMigration0004BranchesNamePK(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
-	// PRAGMA user_version must have advanced to 4.
+	// PRAGMA user_version must equal the number of migration files.
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if version != 4 {
-		t.Errorf("user_version = %d, want 4", version)
-	}
+	t.Run("user_version matches migration count", func(t *testing.T) {
+		entries, err := fs.ReadDir(migrationsFS, "migrations")
+		if err != nil {
+			t.Fatalf("read migrations dir: %v", err)
+		}
+
+		wantVersion := len(entries)
+		if version != wantVersion {
+			t.Errorf("user_version = %d, want %d", version, wantVersion)
+		}
+	})
 
 	// The branches table must NOT have a uuid column and MUST have name as PK.
 	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(branches)`)

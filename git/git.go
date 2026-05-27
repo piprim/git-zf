@@ -487,3 +487,20 @@ func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, pat
 
 	return nil
 }
+
+// ErrBranchNotMerged is returned (wrapped) by SafeDeleteBranch / DeleteLocalBranch
+// when git refuses to delete the branch because its tip commit is not fully merged
+// into HEAD or upstream. Detect with errors.Is.
+var ErrBranchNotMerged = errors.New("git: branch not fully merged")
+
+// SafeDeleteBranch invokes `git branch -d <name>` from the working tree root.
+// On git's "not fully merged" refusal the returned error wraps ErrBranchNotMerged.
+func (c *Client) SafeDeleteBranch(name string) error {
+	return c.DeleteLocalBranch(context.Background(), name, false)
+}
+
+// ForceDeleteBranch invokes `git branch -D <name>` from the working tree root.
+// Always destructive; safety check skipped.
+func (c *Client) ForceDeleteBranch(name string) error {
+	return c.DeleteLocalBranch(context.Background(), name, true)
+}

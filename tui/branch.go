@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	BranchActionNameList  = "branchList"
-	BranchActionNameNew   = "branchNew"
-	BranchActionNameMerge = "branchMerge"
-	BranchActionNamePrune = "branchPrune"
+	BranchActionNameList         = "branchList"
+	BranchActionNameNew          = "branchNew"
+	BranchActionNameMerge        = "branchMerge"
+	BranchActionNamePrune        = "branchPrune"
+	BranchActionNamePruneTracker = "branchPruneTracker"
 
 	branchTableColWidthIssueID = 10
 	branchTableColWidthTitle   = 28
@@ -38,6 +39,8 @@ func BranchActionSelect(action *string) *huh.Group {
 				huh.NewOption("New\n"+descStyle.Render("Create a new branch (manual input)"), BranchActionNameNew),
 				huh.NewOption("Prune\n"+
 					descStyle.Render("Remove DB records for deleted or merged branches"), BranchActionNamePrune),
+				huh.NewOption("Prune (tracker)\n"+
+					descStyle.Render("Reap branches whose tracker issue is closed"), BranchActionNamePruneTracker),
 				huh.NewOption("Merge\n"+descStyle.Render("Merge a branch"), BranchActionNameMerge),
 			).
 			Value(action),
@@ -60,7 +63,7 @@ func BranchPruneConfirm(nDeleted, nMerged int, confirmed *bool) *huh.Group {
 }
 
 // BranchStatusFilter presents a status filter for the branch list.
-// selected is the pre-selected value ("in_progress", "merged", or "all"); defaults to "in_progress" when empty.
+// selected is the pre-selected value ("in_progress", "merged", "closed", or "all"); defaults to "in_progress" when empty.
 func BranchStatusFilter(status *string, selected string) *huh.Group {
 	*status = selected
 	if *status == "" {
@@ -73,6 +76,7 @@ func BranchStatusFilter(status *string, selected string) *huh.Group {
 			Options(
 				huh.NewOption("In progress", "in_progress"),
 				huh.NewOption("Merged", "merged"),
+				huh.NewOption("Closed", "closed"),
 				huh.NewOption("All", "all"),
 			).
 			Value(status),

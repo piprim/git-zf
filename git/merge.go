@@ -200,6 +200,10 @@ func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool)
 
 	out, err := exec.CommandContext(ctx, "git", "-C", root, "branch", flag, name).CombinedOutput()
 	if err != nil {
+		if !force && strings.Contains(string(out), "not fully merged") {
+			return fmt.Errorf("delete branch %s: %w (%s)", name, ErrBranchNotMerged, strings.TrimSpace(string(out)))
+		}
+
 		return fmt.Errorf("delete branch %s: %w: %s", name, err, out)
 	}
 

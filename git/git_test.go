@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -1087,4 +1088,130 @@ func TestBranchExists(t *testing.T) {
 			t.Error("BranchExists(does-not-exist) = true, want false")
 		}
 	})
+}
+
+func TestSafeDeleteBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deletes a fully-merged branch", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newTestClient(t)
+		runGitInDir(t, dir, "branch", "feature-merged") // points at HEAD, fully merged into HEAD
+
+		if err := c.SafeDeleteBranch("feature-merged"); err != nil {
+			t.Fatalf("SafeDeleteBranch: %v", err)
+		}
+
+		names, err := c.LocalBranchNames()
+		if err != nil {
+			t.Fatalf("LocalBranchNames: %v", err)
+		}
+		for _, n := range names {
+			if n == "feature-merged" {
+				t.Fatalf("branch still present: %v", names)
+			}
+		}
+	})
+
+	t.Run("returns ErrBranchNotMerged when branch has unique commits", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newTestClient(t)
+		runGitInDir(t, dir, "checkout", "-b", "feature-divergent")
+		writeFile(t, dir, "f.txt", "x")
+		runGitInDir(t, dir, "add", "f.txt")
+		runGitInDir(t, dir, "commit", "-m", "divergent")
+		runGitInDir(t, dir, "checkout", "master")
+
+		err := c.SafeDeleteBranch("feature-divergent")
+		if !errors.Is(err, ErrBranchNotMerged) {
+			t.Fatalf("got %v, want ErrBranchNotMerged", err)
+		}
+	})
+}
+
+func TestForceDeleteBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deletes even when not merged", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newTestClient(t)
+		runGitInDir(t, dir, "checkout", "-b", "feature-abandoned")
+		writeFile(t, dir, "f.txt", "x")
+		runGitInDir(t, dir, "add", "f.txt")
+		runGitInDir(t, dir, "commit", "-m", "abandoned")
+		runGitInDir(t, dir, "checkout", "master")
+
+		if err := c.ForceDeleteBranch("feature-abandoned"); err != nil {
+			t.Fatalf("ForceDeleteBranch: %v", err)
+		}
+
+		names, err := c.LocalBranchNames()
+		if err != nil {
+			t.Fatalf("LocalBranchNames: %v", err)
+		}
+		for _, n := range names {
+			if n == "feature-abandoned" {
+				t.Fatalf("branch still present: %v", names)
+			}
+		}
+	})
+
+	t.Run("returns error when branch does not exist", func(t *testing.T) {
+		t.Parallel()
+
+		c, _ := newTestClient(t)
+		if err := c.ForceDeleteBranch("does-not-exist"); err == nil {
+			t.Fatal("want error, got nil")
+		}
+	})
+}
+
+// newTestClient initialises a real on-disk git repo in a temp dir with one
+// initial commit on "master" and returns a Client + the repo directory.
+// The repo uses "master" (not "main") so it matches the prune-tracker tests
+// which branch off master by convention.
+func newTestClient(t *testing.T) (*Client, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	runGitInDir(t, dir, "init", "-q", "-b", "master")
+	runGitInDir(t, dir, "config", "user.name", "Test User")
+	runGitInDir(t, dir, "config", "user.email", "test@test.com")
+	runGitInDir(t, dir, "config", "commit.gpgsign", "false")
+
+	writeFile(t, dir, "base.txt", "base\n")
+	runGitInDir(t, dir, "add", "base.txt")
+	runGitInDir(t, dir, "commit", "-m", "chore: init")
+
+	c, err := NewClientAt(nil, dir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	return c, dir
+}
+
+// runGitInDir runs git with the given args inside dir, failing the test on
+// non-zero exit.
+func runGitInDir(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// writeFile writes content to name inside dir, failing the test on error.
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("writeFile %s: %v", name, err)
+	}
 }

@@ -212,6 +212,48 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 	return nil
 }
 
+// IsIssueClosed asks Redmine for the issue and reads status.is_closed.
+// HTTP 404 → tracker.ErrIssueNotFound; other failures are wrapped.
+func (a *redmineAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
+	base := strings.TrimRight(a.cfg.URL, "/")
+	url := fmt.Sprintf("%s/issues/%s.json", base, issueID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return false, fmt.Errorf("redmine: build request: %w", err)
+	}
+
+	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("redmine: get issue %s: %w", issueID, err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return false, tracker.ErrIssueNotFound
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("redmine: get issue %s: unexpected status %d", issueID, resp.StatusCode)
+	}
+
+	var payload struct {
+		Issue struct {
+			Status struct {
+				IsClosed bool `json:"is_closed"`
+			} `json:"status"`
+		} `json:"issue"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return false, fmt.Errorf("redmine: decode issue %s: %w", issueID, err)
+	}
+
+	return payload.Issue.Status.IsClosed, nil
+}
+
 // toRedmineProjectsSet builds a lookup set from cfg.Projects. Returns nil when
 // the slice is empty so callers can short-circuit the filter.
 func toRedmineProjectsSet(list []string) map[string]struct{} {

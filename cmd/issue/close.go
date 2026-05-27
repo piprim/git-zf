@@ -597,8 +597,7 @@ func rebasePreflight(ctx context.Context, mc mergeContext) (rebasePlan, error) {
 	}
 
 	if integrated {
-		//nolint:revive // Question mark
-		return rebasePlan{}, fmt.Errorf("%q has no commits ahead of %s — already integrated?",
+		return rebasePlan{}, fmt.Errorf("%q has no commits ahead of %s",
 			mc.pickedBranch.BranchName, remoteBase)
 	}
 

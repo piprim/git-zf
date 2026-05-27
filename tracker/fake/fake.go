@@ -22,6 +22,14 @@ type Tracker struct {
 	Issues          []tracker.Issue
 	Statuses        []string
 	RecordedUpdates []Update
+
+	// Closed[id] == true → IsIssueClosed returns (true, nil) for id.
+	// Default zero-value (absent or false) → IsIssueClosed returns (false, nil).
+	Closed map[string]bool
+	// Unknown[id] == true → IsIssueClosed returns (false, tracker.ErrIssueNotFound).
+	Unknown map[string]bool
+	// Errors[id] != nil → IsIssueClosed returns (false, Errors[id]) — for transport-error scenarios.
+	Errors map[string]error
 }
 
 // Update captures one UpdateIssueStatus call.
@@ -58,6 +66,22 @@ func (t *Tracker) ListStatuses(_ context.Context) ([]string, error) {
 	copy(out, t.Statuses)
 
 	return out, nil
+}
+
+// IsIssueClosed consults Closed / Unknown / Errors in that priority order.
+func (t *Tracker) IsIssueClosed(_ context.Context, issueID string) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if err, ok := t.Errors[issueID]; ok && err != nil {
+		return false, err
+	}
+
+	if t.Unknown[issueID] {
+		return false, tracker.ErrIssueNotFound
+	}
+
+	return t.Closed[issueID], nil
 }
 
 // UpdateIssueStatus records the call so tests can assert on it.

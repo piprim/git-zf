@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -119,17 +120,28 @@ func (*githubAdapter) ListStatuses(_ context.Context) ([]string, error) {
 	return []string{statusOpen, statusClosed}, nil
 }
 
-// UpdateIssueStatus toggles the issue's state to "open" or "closed" via
-// PATCH /repos/{owner}/{repo}/issues/{number}. The owner/repo is taken from
-// cfg.Projects, which must contain exactly one "owner/repo" entry.
-func (a *githubAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusName string) error {
+// ownerRepo resolves the single "owner/repo" entry from cfg.Projects.
+// It returns an error when Projects does not contain exactly one valid entry.
+func (a *githubAdapter) ownerRepo() (owner, repo string, err error) {
 	if len(a.cfg.Projects) != 1 {
-		return errors.New("github: UpdateIssueStatus requires exactly one project configured")
+		return "", "", errors.New("github: exactly one project must be configured (got " + strconv.Itoa(len(a.cfg.Projects)) + ")")
 	}
 
 	owner, repo, ok := strings.Cut(a.cfg.Projects[0], "/")
 	if !ok || owner == "" || repo == "" {
-		return fmt.Errorf("github: invalid project %q (expected owner/repo)", a.cfg.Projects[0])
+		return "", "", fmt.Errorf("github: invalid project %q (expected owner/repo)", a.cfg.Projects[0])
+	}
+
+	return owner, repo, nil
+}
+
+// UpdateIssueStatus toggles the issue's state to "open" or "closed" via
+// PATCH /repos/{owner}/{repo}/issues/{number}. The owner/repo is taken from
+// cfg.Projects, which must contain exactly one "owner/repo" entry.
+func (a *githubAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusName string) error {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return err
 	}
 
 	state, err := mapState(statusName)
@@ -148,6 +160,32 @@ func (a *githubAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusNa
 	}
 
 	return nil
+}
+
+// IsIssueClosed asks GitHub for the issue's state. The id is the issue number
+// as a decimal string. HTTP 404 → tracker.ErrIssueNotFound; other failures
+// are wrapped.
+func (a *githubAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return false, fmt.Errorf("github: resolve owner/repo: %w", err)
+	}
+
+	n, err := strconv.Atoi(issueID)
+	if err != nil {
+		return false, fmt.Errorf("github: issue id %q not an integer: %w", issueID, err)
+	}
+
+	iss, resp, err := a.client.Issues.Get(ctx, owner, repo, n)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return false, tracker.ErrIssueNotFound
+		}
+
+		return false, fmt.Errorf("github: get issue %s: %w", issueID, err)
+	}
+
+	return iss.GetState() == statusClosed, nil
 }
 
 func mapState(name string) (string, error) {

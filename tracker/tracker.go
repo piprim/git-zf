@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -18,6 +19,11 @@ type Issue struct {
 	Project     string
 }
 
+// ErrIssueNotFound is returned by IsIssueClosed when the tracker has no record
+// of the requested issueID (HTTP 404 or equivalent). Callers can branch on it
+// via errors.Is to distinguish "tracker says open" from "tracker doesn't know".
+var ErrIssueNotFound = errors.New("tracker: issue not found")
+
 // Tracker is the contract every adapter must satisfy.
 type Tracker interface {
 	// ListIssues retrieves the issues from the tracker
@@ -26,6 +32,10 @@ type Tracker interface {
 	ListStatuses(ctx context.Context) ([]string, error)
 	// UpdateIssueStatus updates the status from the given issueID
 	UpdateIssueStatus(ctx context.Context, issueID, statusName string) error
+	// IsIssueClosed reports whether the tracker considers issueID closed.
+	// Returns ErrIssueNotFound for missing-issue cases so callers can format
+	// the warning distinctly from transport/auth failures.
+	IsIssueClosed(ctx context.Context, issueID string) (bool, error)
 }
 
 var (

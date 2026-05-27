@@ -11,9 +11,10 @@ import (
 
 type stubTracker struct{}
 
-func (s *stubTracker) ListIssues(_ context.Context) ([]tracker.Issue, error)  { return nil, nil }
-func (s *stubTracker) ListStatuses(_ context.Context) ([]string, error)       { return nil, nil }
-func (s *stubTracker) UpdateIssueStatus(_ context.Context, _, _ string) error { return nil }
+func (s *stubTracker) ListIssues(_ context.Context) ([]tracker.Issue, error)          { return nil, nil }
+func (s *stubTracker) ListStatuses(_ context.Context) ([]string, error)               { return nil, nil }
+func (s *stubTracker) UpdateIssueStatus(_ context.Context, _, _ string) error         { return nil }
+func (s *stubTracker) IsIssueClosed(_ context.Context, _ string) (bool, error)        { return false, nil }
 
 func TestNew(t *testing.T) {
 	t.Parallel()

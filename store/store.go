@@ -50,14 +50,16 @@ type BranchStatus string
 const (
 	BranchStatusInProgress BranchStatus = "in_progress"
 	BranchStatusMerged     BranchStatus = "merged"
+	BranchStatusClosed     BranchStatus = "closed"
 	BranchStatusAll        BranchStatus = "" // sentinel: no WHERE filter; not a DB value
 )
 
-// StatusIDInProgress and StatusIDMerged are the integer primary keys for the
-// seeded rows in the statuses table (see migrations/0001_initial.sql).
+// StatusID* constants are the integer primary keys for the seeded rows in
+// the statuses table (see migrations/).
 const (
 	StatusIDInProgress int64 = 1
 	StatusIDMerged     int64 = 2
+	StatusIDClosed     int64 = 3
 )
 
 // BranchRow is the joined result of one branch with its parent issue and status.

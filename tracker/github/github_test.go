@@ -1,15 +1,20 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/tracker"
 )
 
 func TestNew(t *testing.T) {
@@ -344,6 +349,83 @@ func TestUpdateIssueStatus(t *testing.T) {
 		}
 		if hits != 0 {
 			t.Errorf("server hits = %d, want 0", hits)
+		}
+	})
+}
+
+// newTestAdapterWithHandler returns a *githubAdapter whose HTTP client is
+// directed at an httptest.Server running handler. The server is closed via
+// t.Cleanup. Projects is set to ["a/b"] so ownerRepo() resolves cleanly.
+func newTestAdapterWithHandler(t *testing.T, handler http.HandlerFunc) *githubAdapter {
+	t.Helper()
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	return newTestAdapter(t, srv, []string{"a/b"})
+}
+
+func TestIsIssueClosed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns true for closed issue", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/issues/42") {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			_, _ = io.WriteString(w, `{"number":42,"state":"closed"}`)
+		})
+
+		closed, err := a.IsIssueClosed(context.Background(), "42")
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if !closed {
+			t.Fatal("want closed=true")
+		}
+	})
+
+	t.Run("returns false for open issue", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"number":42,"state":"open"}`)
+		})
+
+		closed, err := a.IsIssueClosed(context.Background(), "42")
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if closed {
+			t.Fatal("want closed=false")
+		}
+	})
+
+	t.Run("returns ErrIssueNotFound on 404", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+		})
+
+		_, err := a.IsIssueClosed(context.Background(), "42")
+		if !errors.Is(err, tracker.ErrIssueNotFound) {
+			t.Fatalf("got %v, want ErrIssueNotFound", err)
+		}
+	})
+
+	t.Run("wraps other transport errors", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `boom`, http.StatusInternalServerError)
+		})
+
+		_, err := a.IsIssueClosed(context.Background(), "42")
+		if err == nil || errors.Is(err, tracker.ErrIssueNotFound) {
+			t.Fatalf("want wrapped non-404 error, got %v", err)
 		}
 	})
 }

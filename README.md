@@ -273,17 +273,18 @@ prompt:
 
 ### Branch
 ```
-$ git zf branch new       # create a branch with manual input
-$ git zf branch list      # list tracked branches
-$ git zf branch merge     # merge a branch via TUI
-$ git zf branch prune     # clean up stale DB records
+$ git zf branch new            # create a branch with manual input
+$ git zf branch list           # list tracked branches
+$ git zf branch merge          # merge a branch via TUI
+$ git zf branch prune          # clean up stale DB records (local-only)
+$ git zf branch prune-tracker  # reap branches whose tracker issue is closed
 ```
 
 `branch new` is the same flow as `issue start` but pre-selects manual input. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
 `branch list` flags:
 ```
---status string   filter by status: in_progress, merged, all (default: in_progress)
+--status string   filter by status: in_progress, merged, closed, all (default: in_progress)
 --stdout          print table to stdout without TUI
 --json            print JSON array to stdout
 ```
@@ -292,6 +293,28 @@ $ git zf branch prune     # clean up stale DB records
 ```
 --base string   base branch for merge detection (default: auto-detected)
 --dry-run       show what would be pruned without executing
+```
+
+`branch prune-tracker` discovers local branches whose issue ID (regex-extracted from the branch name) is closed in the configured tracker, then offers per-branch reap actions. Successful reaps flip the corresponding store row to status `closed` (distinct from `merged` — which only the local `branch prune` produces when the tip is reachable from base).
+
+By default, an interactive huh form is presented with one selector per candidate (safe-delete / force-delete / skip), with `safe-delete` pre-selected. Pass `--safe-delete`, `--force-delete`, or `--skip-delete` to apply that action to every candidate non-interactively (CI / scripting). The three action flags are mutually exclusive.
+
+The discovery is per-issue — one tracker lookup per local branch whose name parses as an issue ID. Branches that don't parse are silently skipped; tracker lookup failures (404 / transport / auth) print a `WARN:` line and skip that branch without aborting the run.
+
+`branch prune-tracker` flags:
+```
+--base string     base branch (default: auto-detect) — used by --safe-delete's ancestry check
+--dry-run         show what would be done; no prompts, no mutations
+--safe-delete     non-interactive: apply `git branch -d` to every match
+--force-delete    non-interactive: apply `git branch -D` to every match
+--skip-delete     non-interactive: never touch refs; only flip store status to closed
+```
+
+Examples:
+```
+$ git zf branch prune-tracker --dry-run                # preview only
+$ git zf branch prune-tracker --safe-delete            # CI: safe-delete every closed-issue branch
+$ git zf branch prune-tracker --force-delete --base main
 ```
 
 ### Config

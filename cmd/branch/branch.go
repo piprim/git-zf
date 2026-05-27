@@ -42,7 +42,7 @@ func (b Branch) GetRootCmd() *cobra.Command {
 		Short: "Manage local branches",
 		RunE:  b.runE,
 	}
-	cmd.AddCommand(listCmd(), b.newCmd(), b.pruneCmd(), mergeCmd())
+	cmd.AddCommand(listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), mergeCmd())
 
 	return cmd
 }
@@ -61,6 +61,8 @@ func (b Branch) runE(cmd *cobra.Command, args []string) error {
 		return b.newRunE(cmd, args)
 	case tui.BranchActionNamePrune:
 		return b.pruneRunE(cmd, pruneFlags{})
+	case tui.BranchActionNamePruneTracker:
+		return b.pruneTrackerRunE(cmd, pruneTrackerFlags{})
 	default:
 		fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
 
@@ -77,7 +79,7 @@ func listCmd() *cobra.Command {
 	}
 
 	f := cmd.Flags()
-	f.StringVar(&flags.status, "status", "", "filter by status: in_progress, merged, all")
+	f.StringVar(&flags.status, "status", "", "filter by status: in_progress, merged, closed, all")
 	f.BoolVar(&flags.stdout, "stdout", false, "print table to stdout without TUI")
 	f.BoolVar(&flags.jsonOut, "json", false, "print JSON array to stdout")
 
@@ -168,6 +170,8 @@ func toStoreStatus(s string) store.BranchStatus {
 		return store.BranchStatusInProgress
 	case "merged":
 		return store.BranchStatusMerged
+	case "closed":
+		return store.BranchStatusClosed
 	default:
 		return store.BranchStatusAll
 	}
