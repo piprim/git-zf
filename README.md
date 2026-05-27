@@ -255,6 +255,22 @@ When adding a new toggle, confirm, or picker form, extend `StartPrompter` and
 add a matching E2E test alongside the existing happy-path and failure-mode
 tests.
 
+#### Testing the prune flow
+
+The branch-prune flow is end-to-end tested in `cmd/branch/prune_e2e_test.go`.
+Tests construct a real on-disk repo + seeded store, then drive the flow with
+a `scriptedPrunePrompter` (canned confirm responses) or
+`autoConfirmPrunePrompter` (mirrors `--yes`).
+
+To exercise just the prune-flow tests:
+
+    mise exec -- go test ./cmd/branch/... -run "^TestRunPrune_" -v
+
+For non-interactive use (CI, cron), pass `--yes` to skip the confirmation
+prompt:
+
+    git zf branch prune --yes
+
 ### Branch
 ```
 $ git zf branch new       # create a branch with manual input

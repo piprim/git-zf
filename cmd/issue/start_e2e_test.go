@@ -2,6 +2,7 @@ package issue
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,32 +28,34 @@ type startTestRig struct {
 	stderr  *bytes.Buffer
 }
 
+// runGitIn invokes `git` in dir with the given args and t.Fatals on failure.
+// Free function so newStartRig can call it before the rig struct exists.
+func runGitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
 func newStartRig(t *testing.T) *startTestRig {
 	t.Helper()
 
 	dir := t.TempDir()
 
-	runGit := func(args ...string) {
-		t.Helper()
-
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	runGit("init", "-q", "-b", "main")
-	runGit("config", "user.name", "Test User")
-	runGit("config", "user.email", "test@test.com")
-	runGit("config", "commit.gpgsign", "false")
+	runGitIn(t, dir, "init", "-q", "-b", "main")
+	runGitIn(t, dir, "config", "user.name", "Test User")
+	runGitIn(t, dir, "config", "user.email", "test@test.com")
+	runGitIn(t, dir, "config", "commit.gpgsign", "false")
 
 	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatalf("write base.txt: %v", err)
 	}
 
-	runGit("add", "base.txt")
-	runGit("commit", "-m", "chore: init")
+	runGitIn(t, dir, "add", "base.txt")
+	runGitIn(t, dir, "commit", "-m", "chore: init")
 
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
@@ -96,6 +99,14 @@ func (r *startTestRig) deps(flags issuepkg.IssueStartFlags) StartDeps {
 // noTrackerDeps returns a StartDeps with deps.Tracker = nil (manual-only path).
 func (r *startTestRig) noTrackerDeps(flags issuepkg.IssueStartFlags) StartDeps {
 	return StartDeps{Client: r.client, Cfg: r.cfg, Tracker: nil, Flags: flags}
+}
+
+// runGit invokes `git` inside the rig's working tree and t.Fatals on failure.
+// Shared by tests that need to pre-seed the repo (e.g. collision setup).
+func (r *startTestRig) runGit(t *testing.T, args ...string) {
+	t.Helper()
+
+	runGitIn(t, r.dir, args...)
 }
 
 func TestRunIssueStart_BranchHappyPath_NoTracker(t *testing.T) {
@@ -305,17 +316,7 @@ func TestRunIssueStart_VariantOnCollision(t *testing.T) {
 	rig := newStartRig(t)
 	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
 
-	runGit := func(args ...string) {
-		t.Helper()
-
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = rig.dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	runGit("branch", "ABC-6@feat@add-search", "main")
+	rig.runGit(t, "branch", "ABC-6@feat@add-search", "main")
 
 	picked := &issuepkg.Issue{
 		Type:  "feat",
@@ -367,17 +368,7 @@ func TestRunIssueStart_AbortOnCollision(t *testing.T) {
 	rig := newStartRig(t)
 	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
 
-	runGit := func(args ...string) {
-		t.Helper()
-
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = rig.dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-
-	runGit("branch", "ABC-7@feat@add-export", "main")
+	rig.runGit(t, "branch", "ABC-7@feat@add-export", "main")
 
 	picked := &issuepkg.Issue{
 		Type:  "feat",
@@ -498,6 +489,104 @@ func TestRunIssueStart_NoTrackerStatusUpdate(t *testing.T) {
 	t.Run("tracker received no UpdateIssueStatus calls", func(t *testing.T) {
 		if got := len(rig.tracker.RecordedUpdates); got != 0 {
 			t.Errorf("RecordedUpdates = %d, want 0 when TrackerStatus is empty", got)
+		}
+	})
+}
+
+func TestRunIssueStart_UseWorktreeConfigOverride(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+
+	// Override the worktree toggle via config. PickUseWorktree must NOT be
+	// invoked when cfg.Branch.UseWorktree is non-nil.
+	override := true
+	rig.cfg.Branch.UseWorktree = &override
+
+	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
+
+	picked := &issuepkg.Issue{
+		Type:  "feat",
+		Issue: tracker.Issue{ID: "ABC-10", Subject: "Worktree override"},
+	}
+
+	// Tripwire: PickUseWorktree returning an error would surface here. The
+	// scripted prompter's UseWorktree=false would route to createBranchFlow if
+	// the toggle were consulted — instead we expect it to be skipped entirely
+	// and the override (true) to drive the worktree flow.
+	prompter := &scriptedStartPrompter{
+		IssueFromUser:   picked,
+		UseWorktree:     false, // intentionally opposite of the override
+		UseWorktreeErr:  errors.New("PickUseWorktree should not be called when override is set"),
+		ConfirmWorktree: true,
+	}
+
+	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+		t.Fatalf("RunIssueStart: %v", err)
+	}
+
+	wantBranch := "ABC-10@feat@worktree-override"
+
+	t.Run("branch ref exists", func(t *testing.T) {
+		exists, err := rig.client.BranchExists(wantBranch)
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if !exists {
+			t.Errorf("branch %q was not created", wantBranch)
+		}
+	})
+
+	t.Run("worktree directory exists (override forced worktree path)", func(t *testing.T) {
+		parent := filepath.Dir(rig.dir)
+		repoName := filepath.Base(rig.dir)
+		wantPath := filepath.Join(parent, repoName+"--"+wantBranch)
+		if _, err := os.Stat(wantPath); err != nil {
+			t.Errorf("worktree dir %q not found: %v", wantPath, err)
+		}
+	})
+}
+
+func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: ""}
+
+	// Tracker is configured (rig.cfg.IssueTracker.Type = "fake") but the
+	// operator declines the toggle. pickIssue should fall through to
+	// issue.GetFromUser → prompter.PickIssueFromUser.
+	manualPicked := &issuepkg.Issue{
+		Type:  "feat",
+		Issue: tracker.Issue{ID: "ABC-11", Subject: "Manual choice"},
+	}
+
+	prompter := &scriptedStartPrompter{
+		UseTracker:    false, // operator declines the tracker toggle
+		IssueFromUser: manualPicked,
+		// Tripwire: if pickIssue mis-routes to GetFromTracker, this error fires.
+		IssueFromTrackerErr: errors.New("PickIssueFromTracker should not be called when UseTracker=false"),
+		UseWorktree:         false,
+		ConfirmBranch:       true,
+	}
+
+	if err := RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
+		t.Fatalf("RunIssueStart: %v", err)
+	}
+
+	t.Run("manual branch was created", func(t *testing.T) {
+		exists, err := rig.client.BranchExists("ABC-11@feat@manual-choice")
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if !exists {
+			t.Error("ABC-11@feat@manual-choice was not created")
+		}
+	})
+
+	t.Run("tracker received no UpdateIssueStatus calls", func(t *testing.T) {
+		if got := len(rig.tracker.RecordedUpdates); got != 0 {
+			t.Errorf("RecordedUpdates = %d, want 0 when tracker toggle declined", got)
 		}
 	})
 }

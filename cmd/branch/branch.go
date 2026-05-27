@@ -195,17 +195,22 @@ func (b Branch) newRunE(cmd *cobra.Command, _ []string) error {
 	}
 
 	flags := issue.IssueStartFlags{TrackerFirst: false, Variant: variant}
-	deps, err := issuecmd.BuildStartDeps(cmd.Context(), cmd, b.appConfig, flags)
+	deps, err := issuecmd.BuildStartDeps(cmd, b.appConfig, flags)
 	if err != nil {
-		return err
+		return fmt.Errorf("build start deps: %w", err)
 	}
 
-	return issuecmd.RunIssueStart(cmd.Context(), deps, issuecmd.NewHuhStartPrompter())
+	if err := issuecmd.RunIssueStart(cmd.Context(), deps, issuecmd.NewHuhStartPrompter()); err != nil {
+		return fmt.Errorf("run issue start: %w", err)
+	}
+
+	return nil
 }
 
 type pruneFlags struct {
 	dryRun bool
 	base   string
+	yes    bool // when true, skip the confirmation prompt (CI-friendly)
 }
 
 // pruneResult holds branches categorised by prune action.
@@ -220,13 +225,14 @@ func (b Branch) pruneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Remove DB records for branches deleted or merged outside " + b.appConfig.ProgName,
-		Long: `Scans all in-progress branches in the local store and:
-  - deletes records whose local git ref no longer exists
-  - marks records as merged when their tip is reachable from the base branch`,
+		Long: `Compare each in-progress branch in the store against the local refs and
+remove store rows whose branches are either gone or already merged into the
+base branch. Use --dry-run to preview, --yes to skip the confirm prompt.`,
 	}
 
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "show what would be pruned without executing")
 	cmd.Flags().StringVar(&flags.base, "base", "", "base branch for merge detection (default: auto-detected)")
+	cmd.Flags().BoolVarP(&flags.yes, "yes", "y", false, "skip the confirmation prompt (CI-friendly)")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		return b.pruneRunE(cmd, flags)
@@ -264,12 +270,20 @@ func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 		c.SetRemote(b.appConfig.Branch.Remote)
 	}
 
-	return runPrune(ctx, os.Stdout, s, c, flags)
+	var prompter PrunePrompter = newHuhPrunePrompter()
+	if flags.yes {
+		prompter = newAutoConfirmPrunePrompter()
+	}
+
+	return runPrune(ctx, os.Stdout, s, c, prompter, flags)
 }
 
 // runPrune executes the prune logic. w receives non-TUI output.
-// When dryRun is true it prints the summary and returns without mutating the store.
-func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, flags pruneFlags) error {
+// When flags.dryRun is true it prints the summary and returns without mutating
+// the store. Otherwise it delegates the destructive confirmation to prompter
+// (huh-driven in production, auto-confirm under --yes, scripted in tests) and
+// then calls executePrune.
+func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, prompter PrunePrompter, flags pruneFlags) error {
 	base := flags.base
 	if base == "" {
 		var err error
@@ -327,10 +341,9 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, f
 		return nil
 	}
 
-	var confirmed bool
-	err = huh.NewForm(tui.BranchPruneConfirm(len(result.toDelete), len(result.toMerge), &confirmed)).RunWithContext(ctx)
+	confirmed, err := prompter.ConfirmPrune(ctx, len(result.toDelete), len(result.toMerge))
 	if err != nil {
-		return fmt.Errorf("confirm: %w", err)
+		return fmt.Errorf("confirm prune: %w", err)
 	}
 
 	if !confirmed {
@@ -339,7 +352,7 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, f
 		return nil
 	}
 
-	return executePrune(ctx, s, result)
+	return executePrune(ctx, w, s, result)
 }
 
 func renderPruneSummary(w io.Writer, result pruneResult) {
@@ -360,7 +373,11 @@ func renderPruneSummary(w io.Writer, result pruneResult) {
 	}
 }
 
-func executePrune(ctx context.Context, s *store.Store, result pruneResult) error {
+// executePrune performs the destructive store mutations gathered into result:
+// it deletes rows whose local ref is gone and marks the remaining ones merged.
+// The caller is responsible for obtaining confirmation beforehand. w receives
+// the final "Pruned: N deleted, M marked merged." success line.
+func executePrune(ctx context.Context, w io.Writer, s *store.Store, result pruneResult) error {
 	now := time.Now()
 
 	for i := range result.toDelete {
@@ -375,7 +392,7 @@ func executePrune(ctx context.Context, s *store.Store, result pruneResult) error
 		}
 	}
 
-	fmt.Printf("Pruned: %d deleted, %d marked merged.\n", len(result.toDelete), len(result.toMerge))
+	fmt.Fprintf(w, "Pruned: %d deleted, %d marked merged.\n", len(result.toDelete), len(result.toMerge))
 
 	return nil
 }

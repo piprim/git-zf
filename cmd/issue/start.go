@@ -24,18 +24,16 @@ import (
 type StartDeps struct {
 	Client  *git.Client
 	Cfg     *config.AppConfig
-	Tracker tracker.Tracker // nil when cfg.IssueTracker.Type == "" OR factory failed (warn)
+	Tracker tracker.Tracker // nil when cfg.IssueTracker.Type == ""
 	Flags   issue.IssueStartFlags
 }
 
 // BuildStartDeps constructs the production StartDeps from a cobra command.
-// Returns an error if the repo cannot be opened. When cfg.IssueTracker.Type
-// == "" the returned deps.Tracker is nil (RunIssueStart treats that as "no
-// tracker available"). When the tracker factory fails, the error is
-// non-fatal — BuildStartDeps warns to client.IO().Err and returns deps with
-// a nil tracker.
+// Returns an error if the repo cannot be opened or if a configured tracker
+// (cfg.IssueTracker.Type != "") fails to initialise. When
+// cfg.IssueTracker.Type == "" the returned deps.Tracker is nil and
+// RunIssueStart falls through to the manual issue-input flow.
 func BuildStartDeps(
-	_ context.Context,
 	cmd *cobra.Command,
 	cfg *config.AppConfig,
 	flags issue.IssueStartFlags,
@@ -58,10 +56,10 @@ func BuildStartDeps(
 	if cfg.IssueTracker.Type != "" {
 		t, err := tracker.New(cfg.IssueTracker)
 		if err != nil {
-			fmt.Fprintf(client.IO().Err, "warning: init tracker: %v\n", err)
-		} else {
-			deps.Tracker = t
+			return StartDeps{}, fmt.Errorf("init tracker %q: %w", cfg.IssueTracker.Type, err)
 		}
+
+		deps.Tracker = t
 	}
 
 	return deps, nil
@@ -90,7 +88,7 @@ func (i Issue) startRunE(cmd *cobra.Command, _ []string) error {
 
 	flags := issue.IssueStartFlags{TrackerFirst: true, Variant: variant}
 
-	deps, err := BuildStartDeps(cmd.Context(), cmd, i.appConfig, flags)
+	deps, err := BuildStartDeps(cmd, i.appConfig, flags)
 	if err != nil {
 		return err
 	}
@@ -99,13 +97,15 @@ func (i Issue) startRunE(cmd *cobra.Command, _ []string) error {
 }
 
 // RunIssueStart is the prompter-driven core of the issue-start flow. Called
-// from startRunE (production, via a huhStartPrompter) and from cmd/branch's
+// from startRunE (production, via a HuhStartPrompter) and from cmd/branch's
 // newRunE (also production). Tests call it directly with a
 // scriptedStartPrompter. TrackerFirst is carried inside deps.Flags.
 //
-// Returns nil on the empty-list short-circuit from pickIssue (operator
-// declined the tracker toggle and no manual fallback was offered) and nil
-// on the (nil, nil) abort path from prompter.ResolveBranchConflict.
+// Returns nil on two non-error exits: (1) pickIssue returns (nil, nil) — only
+// possible when a test prompter does so; production prompters always return
+// a non-nil issue or an error — and (2) prompter.ResolveBranchConflict
+// returns (nil, nil) to signal the operator aborted or checked out an
+// existing branch.
 func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) error {
 	allowedBranchTypes := make([]string, 0, len(deps.Cfg.CommitTypes))
 	for _, t := range deps.Cfg.CommitTypes {
@@ -138,11 +138,9 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 }
 
 // pickIssue chooses between tracker-driven and user-driven issue input.
-// Returns (nil, nil) when the operator declined the tracker toggle AND
-// no manual fallback was offered (only reachable via tracker path with
-// useTracker=false — but in that branch we explicitly call GetFromUser,
-// so (nil, nil) is currently unreachable in practice; the caller still
-// guards against it).
+// Returns nil only if a test prompter returns nil; production prompters
+// always return a non-nil issue or an error. The (nil, nil) guard in
+// RunIssueStart exists for test safety.
 func pickIssue(
 	ctx context.Context,
 	deps StartDeps,

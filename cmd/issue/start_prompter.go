@@ -26,8 +26,11 @@ type BranchClient interface {
 // The production implementation drives huh forms; the test implementation in
 // start_prompter_test.go returns canned values.
 //
-// Each method maps 1:1 to a huh.NewForm call in the pre-refactor flow. The
-// order below mirrors the order calls happen in RunIssueStart.
+// Methods correspond to the huh forms in the pre-refactor flow. The order
+// below mirrors the order calls happen in RunIssueStart. Note:
+// PickIssueFromTracker covers a single form that lets the operator pick both
+// the issue and its branch type, so the mapping is interface→form, not 1:1
+// for every UI element.
 type StartPrompter interface {
 	// Prompter contributes the three issue-input methods used by
 	// issuepkg.GetFromUser and issuepkg.GetFromTracker.
@@ -69,20 +72,20 @@ type StartPrompter interface {
 var _ BranchClient = (*git.Client)(nil)
 
 // Compile-time check.
-var _ StartPrompter = (*huhStartPrompter)(nil)
+var _ StartPrompter = (*HuhStartPrompter)(nil)
 
-// huhStartPrompter is the production StartPrompter. It opens real huh forms.
+// HuhStartPrompter is the production StartPrompter. It opens real huh forms.
 // Constructed once per `issue start` (or `branch new`) invocation.
-type huhStartPrompter struct{}
+type HuhStartPrompter struct{}
 
 // NewHuhStartPrompter constructs the production huh-driven StartPrompter.
 // Exported so cmd/branch/branch.go can build one when delegating to
 // RunIssueStart.
-func NewHuhStartPrompter() *huhStartPrompter { //nolint:revive // returns unexported type by design — only the constructor needs to be public.
-	return &huhStartPrompter{}
+func NewHuhStartPrompter() *HuhStartPrompter {
+	return &HuhStartPrompter{}
 }
 
-func (p *huhStartPrompter) PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error) {
+func (p *HuhStartPrompter) PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error) {
 	var got issuepkg.Issue
 	if err := huh.NewForm(
 		tui.IssueInput(&got.ID, &got.Subject, &got.Type, allowedTypes),
@@ -93,7 +96,7 @@ func (p *huhStartPrompter) PickIssueFromUser(ctx context.Context, allowedTypes [
 	return &got, nil
 }
 
-func (p *huhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error) {
+func (p *HuhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error) {
 	var got issuepkg.Issue
 	var pickedIssue tracker.Issue
 
@@ -109,7 +112,7 @@ func (p *huhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tr
 	return &got, nil
 }
 
-func (p *huhStartPrompter) NotifyTrackerError(ctx context.Context, message string) error {
+func (p *HuhStartPrompter) NotifyTrackerError(ctx context.Context, message string) error {
 	if err := huh.NewForm(tui.IssueTrackerError(message)).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("error note: %w", err)
 	}
@@ -117,7 +120,7 @@ func (p *huhStartPrompter) NotifyTrackerError(ctx context.Context, message strin
 	return nil
 }
 
-func (p *huhStartPrompter) PickUseTracker(ctx context.Context, trackerType string, trackerFirst bool) (bool, error) {
+func (p *HuhStartPrompter) PickUseTracker(ctx context.Context, trackerType string, trackerFirst bool) (bool, error) {
 	var use bool
 	form := tui.IssueTrackerToggle(&use, trackerFirst, trackerType)
 	if err := huh.NewForm(form).RunWithContext(ctx); err != nil {
@@ -127,7 +130,7 @@ func (p *huhStartPrompter) PickUseTracker(ctx context.Context, trackerType strin
 	return use, nil
 }
 
-func (p *huhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {
+func (p *HuhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {
 	var use bool
 	if err := huh.NewForm(tui.WorktreeToggle(&use)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("worktree toggle: %w", err)
@@ -136,7 +139,7 @@ func (p *huhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {
 	return use, nil
 }
 
-func (p *huhStartPrompter) ConfirmCreateBranch(ctx context.Context, message string) (bool, error) {
+func (p *HuhStartPrompter) ConfirmCreateBranch(ctx context.Context, message string) (bool, error) {
 	var confirmed bool
 	if err := huh.NewForm(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm branch: %w", err)
@@ -145,7 +148,7 @@ func (p *huhStartPrompter) ConfirmCreateBranch(ctx context.Context, message stri
 	return confirmed, nil
 }
 
-func (p *huhStartPrompter) ConfirmCreateWorktree(ctx context.Context, message string) (bool, error) {
+func (p *HuhStartPrompter) ConfirmCreateWorktree(ctx context.Context, message string) (bool, error) {
 	var confirmed bool
 	if err := huh.NewForm(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm worktree: %w", err)
@@ -154,7 +157,7 @@ func (p *huhStartPrompter) ConfirmCreateWorktree(ctx context.Context, message st
 	return confirmed, nil
 }
 
-func (p *huhStartPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
+func (p *HuhStartPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
 	var selected string
 	if err := huh.NewForm(tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("status picker form: %w", err)
@@ -166,7 +169,7 @@ func (p *huhStartPrompter) PickTrackerStatus(ctx context.Context, issueID, track
 // ResolveBranchConflict is the production conflict-resolution loop. It is the
 // body of the pre-refactor cmd/issue/conflict.go:resolveBranchConflict lifted
 // verbatim onto the prompter so tests can substitute a scripted result.
-func (p *huhStartPrompter) ResolveBranchConflict(ctx context.Context, client BranchClient, b *branch.Branch, picked *issuepkg.Issue) (*branch.Branch, error) {
+func (p *HuhStartPrompter) ResolveBranchConflict(ctx context.Context, client BranchClient, b *branch.Branch, picked *issuepkg.Issue) (*branch.Branch, error) {
 	for {
 		exists, err := client.BranchExists(b.Name())
 		if err != nil {
