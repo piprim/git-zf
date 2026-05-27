@@ -303,7 +303,7 @@ The discovery is per-issue — one tracker lookup per local branch whose name pa
 
 `branch prune-tracker` flags:
 ```
---base string     base branch (default: auto-detect) — used by --safe-delete's ancestry check
+--base string     base branch name to exclude from candidate discovery (default: auto-detect)
 --dry-run         show what would be done; no prompts, no mutations
 --safe-delete     non-interactive: apply `git branch -d` to every match
 --force-delete    non-interactive: apply `git branch -D` to every match

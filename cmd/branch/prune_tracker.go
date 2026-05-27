@@ -174,15 +174,17 @@ func runExecuteTracker(
 		switch action {
 		case "safe":
 			if err := pr.SafeDeleteBranch(c.BranchName); err != nil {
+				var line string
 				if errors.Is(err, git.ErrBranchNotMerged) {
-					line := fmt.Sprintf("WARN: kept %s — git refused safe-delete (not merged into base)", c.BranchName)
-					warnings = append(warnings, line)
-					fmt.Fprintln(w, line)
-					nKept++
-					flipStore = false
+					line = fmt.Sprintf("WARN: kept %s — git refused safe-delete (branch not fully merged into HEAD or upstream)", c.BranchName)
 				} else {
-					return warnings, fmt.Errorf("safe-delete %s: %w", c.BranchName, err)
+					line = fmt.Sprintf("WARN: kept %s — safe-delete failed: %v", c.BranchName, err)
 				}
+
+				warnings = append(warnings, line)
+				fmt.Fprintln(w, line)
+				nKept++
+				flipStore = false
 			} else {
 				nSafe++
 			}
@@ -235,7 +237,7 @@ store row to status='closed'.`,
 
 	f := cmd.Flags()
 	f.BoolVar(&flags.dryRun, "dry-run", false, "show what would be done without prompting or mutating")
-	f.StringVar(&flags.base, "base", "", "base branch (default: auto-detect)")
+	f.StringVar(&flags.base, "base", "", "base branch name to exclude from candidate discovery (default: auto-detect)")
 	f.BoolVar(&flags.safeDelete, "safe-delete", false, "non-interactive: apply `git branch -d` to every match")
 	f.BoolVar(&flags.forceDelete, "force-delete", false, "non-interactive: apply `git branch -D` to every match")
 	f.BoolVar(&flags.skipDelete, "skip-delete", false, "non-interactive: never touch refs; only flip store status")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -198,7 +199,10 @@ func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool)
 		flag = "-D"
 	}
 
-	out, err := exec.CommandContext(ctx, "git", "-C", root, "branch", flag, name).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "branch", flag, name)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if !force && strings.Contains(string(out), "not fully merged") {
 			return fmt.Errorf("delete branch %s: %w (%s)", name, ErrBranchNotMerged, strings.TrimSpace(string(out)))
