@@ -45,7 +45,7 @@ func (i Issue) runE(cmd *cobra.Command, args []string) error {
 	case tui.IssueActionNameClose:
 		return i.closeRunE(cmd, args)
 	default:
-		fmt.Println("Not yet implemented.")
+		fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
 
 		return nil
 	}

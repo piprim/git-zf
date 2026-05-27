@@ -62,7 +62,7 @@ func (b Branch) runE(cmd *cobra.Command, args []string) error {
 	case tui.BranchActionNamePrune:
 		return b.pruneRunE(cmd, pruneFlags{})
 	default:
-		fmt.Println("Not yet implemented.")
+		fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
 
 		return nil
 	}
@@ -405,8 +405,8 @@ func mergeCmd() *cobra.Command {
 	}
 }
 
-func mergeRunE(_ *cobra.Command, _ []string) error {
-	fmt.Println("Not yet implemented.")
+func mergeRunE(cmd *cobra.Command, _ []string) error {
+	fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
 
 	return nil
 }
