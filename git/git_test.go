@@ -1169,6 +1169,77 @@ func TestForceDeleteBranch(t *testing.T) {
 	})
 }
 
+func TestGitDir(t *testing.T) {
+	t.Run("regular repo returns <root>/.git", func(t *testing.T) {
+		c, dir := newTestClient(t)
+
+		got, err := c.GitDir()
+		if err != nil {
+			t.Fatalf("GitDir: %v", err)
+		}
+
+		want := filepath.Join(dir, ".git")
+		// Real filesystems may differ in symlink resolution between TempDir and the
+		// path git prints. Compare resolved paths to dodge that.
+		gotResolved, _ := filepath.EvalSymlinks(got)
+		wantResolved, _ := filepath.EvalSymlinks(want)
+		if gotResolved != wantResolved {
+			t.Fatalf("GitDir = %q, want %q (resolved: %q vs %q)", got, want, gotResolved, wantResolved)
+		}
+	})
+
+	t.Run("submodule returns parent <root>/.git/modules/<name>", func(t *testing.T) {
+		// Create a parent repo + a separate "remote" we can add as a submodule.
+		_, parentDir := newTestClient(t)
+		_, remoteDir := newTestClient(t)
+
+		// Recent git refuses to add a local-path submodule without this.
+		runGitInDir(t, parentDir, "-c", "protocol.file.allow=always",
+			"submodule", "add", remoteDir, "sub")
+		runGitInDir(t, parentDir, "commit", "-m", "add submodule")
+
+		subDir := filepath.Join(parentDir, "sub")
+
+		// Inside the submodule, <subDir>/.git is a gitlink FILE — verify the
+		// premise so this test would fail loudly if git's submodule layout
+		// changes in a future version.
+		info, err := os.Stat(filepath.Join(subDir, ".git"))
+		if err != nil {
+			t.Fatalf("stat sub/.git: %v", err)
+		}
+		if info.IsDir() {
+			t.Fatalf("sub/.git is a directory — submodule layout changed; test premise invalid")
+		}
+
+		// Construct a Client pointing at the submodule worktree and resolve GitDir.
+		c, err := NewClientAt(nil, subDir)
+		if err != nil {
+			t.Fatalf("NewClientAt(sub): %v", err)
+		}
+
+		got, err := c.GitDir()
+		if err != nil {
+			t.Fatalf("GitDir: %v", err)
+		}
+
+		gotResolved, _ := filepath.EvalSymlinks(got)
+		wantPrefix, _ := filepath.EvalSymlinks(filepath.Join(parentDir, ".git", "modules"))
+		if !strings.HasPrefix(gotResolved, wantPrefix) {
+			t.Fatalf("GitDir = %q, want path under %q", got, wantPrefix)
+		}
+
+		// And the resolved GitDir is actually a directory (the bug was that
+		// downstream code joined ".git" to the worktree and got a file).
+		dirInfo, err := os.Stat(got)
+		if err != nil {
+			t.Fatalf("stat resolved GitDir: %v", err)
+		}
+		if !dirInfo.IsDir() {
+			t.Fatalf("resolved GitDir %q is not a directory", got)
+		}
+	})
+}
+
 // newTestClient initialises a real on-disk git repo in a temp dir with one
 // initial commit on "master" and returns a Client + the repo directory.
 // The repo uses "master" (not "main") so it matches the prune-tracker tests

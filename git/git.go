@@ -132,6 +132,32 @@ func (c *Client) WorkingTreeRoot() (string, error) {
 	return "", fmt.Errorf("filesystem type %T does not expose Root()", wt.Filesystem)
 }
 
+// GitDir returns the absolute path of the repository's .git directory.
+// For a regular repository this is "<worktree>/.git". For a submodule it is
+// "<parent>/.git/modules/<name>" (because <worktree>/.git is a gitlink file,
+// not a directory). For a linked worktree it is the per-worktree git dir.
+// Resolved by shelling out to `git rev-parse --git-dir` to handle all forms.
+func (c *Client) GitDir() (string, error) {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return "", fmt.Errorf("working tree root: %w", err)
+	}
+
+	cmd := exec.CommandContext(context.Background(), "git", "-C", root, "rev-parse", "--git-dir")
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --git-dir: %w", err)
+	}
+
+	gitDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(root, gitDir)
+	}
+
+	return gitDir, nil
+}
+
 // IO returns the injected IO streams. Callers should write status/diagnostic
 // messages through these instead of os.Stdout/os.Stderr so Cobra-aware
 // redirection (tests, subcommand piping, future TUI capture) keeps working.
