@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1236,6 +1237,126 @@ func TestGitDir(t *testing.T) {
 		}
 		if !dirInfo.IsDir() {
 			t.Fatalf("resolved GitDir %q is not a directory", got)
+		}
+	})
+}
+
+func TestAuthors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns the seed author after a single commit", func(t *testing.T) {
+		t.Parallel()
+
+		c, _ := newTestClient(t)
+
+		got, err := c.Authors(t.Context())
+		if err != nil {
+			t.Fatalf("Authors: %v", err)
+		}
+
+		want := []string{"Test User <test@test.com>"}
+		if !slices.Equal(got, want) {
+			t.Errorf("Authors = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("deduplicates repeated authors", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newTestClient(t)
+
+		// Two extra commits by the same seed author.
+		runGitInDir(t, dir, "commit", "--allow-empty", "-m", "chore: empty 1")
+		runGitInDir(t, dir, "commit", "--allow-empty", "-m", "chore: empty 2")
+
+		got, err := c.Authors(t.Context())
+		if err != nil {
+			t.Fatalf("Authors: %v", err)
+		}
+
+		want := []string{"Test User <test@test.com>"}
+		if !slices.Equal(got, want) {
+			t.Errorf("Authors = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("lists every distinct author across the history", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newTestClient(t)
+
+		// Two more authors, each with one commit. shortlog -n orders by
+		// commit count desc, so the seed (2 commits below) sorts first.
+		runGitInDir(t, dir, "commit", "--allow-empty", "-m", "chore: seed extra")
+		runGitInDir(t, dir, "commit", "--allow-empty",
+			"--author=Alice Example <alice@example.com>", "-m", "chore: alice")
+		runGitInDir(t, dir, "commit", "--allow-empty",
+			"--author=Bob Example <bob@example.com>", "-m", "chore: bob")
+
+		got, err := c.Authors(t.Context())
+		if err != nil {
+			t.Fatalf("Authors: %v", err)
+		}
+
+		want := []string{
+			"Test User <test@test.com>",
+			"Alice Example <alice@example.com>",
+			"Bob Example <bob@example.com>",
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("Authors = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("surfaces authors reachable only from non-HEAD refs (--all)", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newTestClient(t)
+
+		// Create a sibling branch with a commit by a third party, then
+		// switch back. The new commit is NOT in HEAD's ancestry, but
+		// shortlog --all must still surface its author.
+		runGitInDir(t, dir, "checkout", "-q", "-b", "sidequest")
+		runGitInDir(t, dir, "commit", "--allow-empty",
+			"--author=Carol Sidequest <carol@example.com>", "-m", "chore: carol")
+		runGitInDir(t, dir, "checkout", "-q", "master")
+
+		got, err := c.Authors(t.Context())
+		if err != nil {
+			t.Fatalf("Authors: %v", err)
+		}
+
+		if !slices.Contains(got, "Carol Sidequest <carol@example.com>") {
+			t.Errorf("Authors = %q, missing Carol from sidequest branch", got)
+		}
+	})
+
+	t.Run("succeeds on a repo with no refs and returns only the configured identity", func(t *testing.T) {
+		t.Parallel()
+
+		// Brand-new repo with no commits. `git shortlog --all` exits
+		// non-zero here; Authors() must swallow that ExitError and fall
+		// back to "just the configured identity". Setting local user.*
+		// overrides whatever /etc/gitconfig holds on the test machine,
+		// so the assertion is deterministic.
+		dir := t.TempDir()
+		runGitInDir(t, dir, "init", "-q", "-b", "master")
+		runGitInDir(t, dir, "config", "user.name", "Empty Repo")
+		runGitInDir(t, dir, "config", "user.email", "empty@example.com")
+
+		c, err := NewClientAt(nil, dir)
+		if err != nil {
+			t.Fatalf("NewClientAt: %v", err)
+		}
+
+		got, err := c.Authors(t.Context())
+		if err != nil {
+			t.Fatalf("Authors: %v", err)
+		}
+
+		want := []string{"Empty Repo <empty@example.com>"}
+		if !slices.Equal(got, want) {
+			t.Errorf("Authors = %q, want %q", got, want)
 		}
 	})
 }

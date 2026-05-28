@@ -7,13 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/piprim/git-zf/internal/pkg"
 )
 
@@ -98,12 +96,14 @@ func (c *Client) Remote() (string, error) {
 		return c.remote, nil
 	default:
 		for _, r := range remotes {
-			if r.Config().Name == "origin" {
-				c.remote = "origin"
-				c.remoteResolved = true
-
-				return c.remote, nil
+			if r.Config().Name != "origin" {
+				continue
 			}
+
+			c.remote = "origin"
+			c.remoteResolved = true
+
+			return c.remote, nil
 		}
 
 		names := make([]string, len(remotes))
@@ -233,31 +233,53 @@ func (c *Client) CurrentBranch() (string, error) {
 	return head.Name().Short(), nil
 }
 
-// Authors returns a deduplicated, alphabetically sorted list of commit author strings
-// ("Name <email>") from the repository history.
-// The current git config identity is prepended as the first (default) entry.
-func (c *Client) Authors() ([]string, error) {
-	iter, err := c.repo.Log(&gogit.LogOptions{})
+// Authors returns a deduplicated list of commit author identities
+// ("Name <email>") from the repository history, ordered by commit count
+// (most active first). Uses `git shortlog -sne --all` so it walks every
+// ref instead of just HEAD's ancestry, and tolerates partial packfiles
+// that trip go-git's commit iterator (e.g. submodules with a malformed
+// .idx). The current git config identity is prepended as the first
+// (default) entry.
+func (c *Client) Authors(ctx context.Context) ([]string, error) {
+	root, err := c.WorkingTreeRoot()
 	if err != nil {
-		// empty repo (no commits yet) — not an error
-		return []string{}, nil
+		return nil, fmt.Errorf("working tree root: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "shortlog", "-sne", "--all")
+
+	out, err := cmd.Output()
+	if err != nil {
+		// shortlog exits non-zero on a brand-new repo with no refs.
+		// Treat that as "no authors", consistent with prior behaviour.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return []string{}, nil
+		}
+
+		return nil, fmt.Errorf("git shortlog: %w", err)
 	}
 
 	seen := make(map[string]struct{})
 	var list []string
-	if err := iter.ForEach(func(commit *object.Commit) error {
-		entry := commit.Author.Name + " <" + commit.Author.Email + ">"
-		if _, ok := seen[entry]; !ok {
-			seen[entry] = struct{}{}
-			list = append(list, entry)
+	for line := range strings.SplitSeq(string(out), "\n") {
+		_, after, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
 		}
 
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("walk commits: %w", err)
-	}
+		entry := strings.TrimSpace(after)
+		if entry == "" {
+			continue
+		}
 
-	slices.Sort(list)
+		if _, ok := seen[entry]; ok {
+			continue
+		}
+
+		seen[entry] = struct{}{}
+		list = append(list, entry)
+	}
 
 	cfg, err := c.repo.ConfigScoped(config.SystemScope)
 	if err == nil && cfg.User.Name != "" {
@@ -376,8 +398,8 @@ func (c *Client) LocalBranchNames() ([]string, error) {
 // RepoName returns a short identifier for this repository.
 // Resolution order:
 //
-//	1. Last path segment of the configured remote URL, with ".git" stripped.
-//	2. Base name of the working tree root directory (local-only fallback).
+//  1. Last path segment of the configured remote URL, with ".git" stripped.
+//  2. Base name of the working tree root directory (local-only fallback).
 func (c *Client) RepoName() (string, error) {
 	remote, err := c.Remote()
 	if err != nil {
@@ -391,16 +413,18 @@ func (c *Client) RepoName() (string, error) {
 		}
 
 		for _, r := range remotes {
-			if r.Config().Name == remote && len(r.Config().URLs) > 0 {
-				u := r.Config().URLs[0]
-				// Strip trailing slashes then take last segment.
-				u = strings.TrimRight(u, "/")
-				seg := u[strings.LastIndexAny(u, "/:")+1:]
-				seg = strings.TrimSuffix(seg, ".git")
+			if r.Config().Name != remote || len(r.Config().URLs) == 0 {
+				continue
+			}
 
-				if seg != "" {
-					return seg, nil
-				}
+			u := r.Config().URLs[0]
+			// Strip trailing slashes then take last segment.
+			u = strings.TrimRight(u, "/")
+			seg := u[strings.LastIndexAny(u, "/:")+1:]
+			seg = strings.TrimSuffix(seg, ".git")
+
+			if seg != "" {
+				return seg, nil
 			}
 		}
 	}

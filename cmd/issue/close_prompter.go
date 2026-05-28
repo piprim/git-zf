@@ -109,7 +109,7 @@ func (p *huhPrompter) ConfirmMerge(ctx context.Context, branch, base string, str
 }
 
 func (p *huhPrompter) ComposeMessage(ctx context.Context, prefill map[string]any) ([]byte, tui.CommitOption, error) {
-	authors, err := p.client.Authors()
+	authors, err := p.client.Authors(ctx)
 	if err != nil {
 		slog.Warn("could not load author list", "error", err)
 

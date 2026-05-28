@@ -81,7 +81,7 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	authors, err := client.Authors()
+	authors, err := client.Authors(cmd.Context())
 	if err != nil {
 		slog.Warn("could not load author list", "error", err)
 		authors = []string{}
