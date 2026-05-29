@@ -8,6 +8,7 @@ import (
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/convert"
 	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
@@ -105,14 +106,7 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
 
-	if err := client.Commit(cmd.Context(), msg, git.CommitOptions{
-		All:        opts.All,
-		Amend:      opts.Amend,
-		NoVerify:   opts.NoVerify,
-		Signoff:    opts.Signoff,
-		AllowEmpty: opts.AllowEmpty,
-		Author:     opts.Author,
-	}); err != nil {
+	if err := client.Commit(cmd.Context(), msg, convert.CommitOptionsFromTUI(opts)); err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 

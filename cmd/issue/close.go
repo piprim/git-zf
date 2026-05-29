@@ -10,6 +10,7 @@ import (
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/convert"
 	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
@@ -283,31 +284,10 @@ func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter
 		return fmt.Errorf("merge squash: %w", err)
 	}
 
-	hint := commitpkg.IssueHint{
-		IssueID:    mc.pickedBranch.IssueSlug,
-		BranchType: mc.pickedBranch.Type,
-	}
-	prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
-	prefill["subject"] = fmt.Sprintf("Squashed merge of %s into %s.",
+	subject := fmt.Sprintf("Squashed merge of %s into %s.",
 		branchHash.String()[:shortSHALen], baseHash.String()[:shortSHALen])
 
-	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
-	if err != nil {
-		return err //nolint:wrapcheck // prompter error already wrapped
-	}
-
-	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
-		All:        opts.All,
-		Amend:      opts.Amend,
-		NoVerify:   opts.NoVerify,
-		Signoff:    opts.Signoff,
-		AllowEmpty: opts.AllowEmpty,
-		Author:     opts.Author,
-	}); err != nil {
-		return fmt.Errorf("commit squash: %w", err)
-	}
-
-	return nil
+	return composeAndCommit(ctx, mc, prompter, subject, "squash")
 }
 
 // updateClosedStatus marks the branch and issue as merged in the store and,
@@ -419,28 +399,11 @@ func doRebaseClose(ctx context.Context, mc mergeContext, prompter ClosePrompter)
 		return fmt.Errorf("resolve %s: %w", baseRef, err)
 	}
 
-	hint := commitpkg.IssueHint{
-		IssueID:    mc.pickedBranch.IssueSlug,
-		BranchType: mc.pickedBranch.Type,
-	}
-	prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
-	prefill["subject"] = fmt.Sprintf("Squashed close of %s into %s.",
+	subject := fmt.Sprintf("Squashed close of %s into %s.",
 		plan.featureOrigSHA.String()[:shortSHALen], baseOriginSHA.String()[:shortSHALen])
 
-	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
-	if err != nil {
-		return err //nolint:wrapcheck // prompter error already wrapped
-	}
-
-	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
-		All:        opts.All,
-		Amend:      opts.Amend,
-		NoVerify:   opts.NoVerify,
-		Signoff:    opts.Signoff,
-		AllowEmpty: opts.AllowEmpty,
-		Author:     opts.Author,
-	}); err != nil {
-		return fmt.Errorf("commit: %w", err)
+	if err := composeAndCommit(ctx, mc, prompter, subject, "rebase"); err != nil {
+		return err
 	}
 
 	if ffErr := mc.client.FastForwardOnly(ctx, mc.pickedBranch.BranchName, mc.baseBranch); ffErr != nil {
@@ -514,34 +477,13 @@ func doClassicClose(ctx context.Context, mc mergeContext, prompter ClosePrompter
 	}()
 
 	// Steps 5 + 6: TUI form (pre-filled) → commit.
-	hint := commitpkg.IssueHint{
-		IssueID:    mc.pickedBranch.IssueSlug,
-		BranchType: mc.pickedBranch.Type,
-	}
-	prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
-	prefill["subject"] = fmt.Sprintf("Merge %s into %s.",
+	subject := fmt.Sprintf("Merge %s into %s.",
 		plan.featureOrigSHA.String()[:shortSHALen], baseSHA.String()[:shortSHALen])
-
-	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
-	if err != nil {
-		return err //nolint:wrapcheck // prompter error already wrapped
-	}
-
-	if err := mc.client.Commit(ctx, msg, git.CommitOptions{
-		All:        opts.All,
-		Amend:      opts.Amend,
-		NoVerify:   opts.NoVerify,
-		Signoff:    opts.Signoff,
-		AllowEmpty: opts.AllowEmpty,
-		Author:     opts.Author,
-	}); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
 
 	// No post-commit fast-forward: unlike Rebase, the merge commit lands
 	// directly on base (MergeNoFFNoCommit checked out base before merging),
 	// so base is already at the new HEAD. No errFastForwardDeferred path.
-	return nil
+	return composeAndCommit(ctx, mc, prompter, subject, "classic")
 }
 
 // rebasePlan captures the state computed by rebasePreflight and consumed by
@@ -625,6 +567,26 @@ func mergeDryRun(ctx context.Context, mc mergeContext, remoteBase string) error 
 		}
 
 		return fmt.Errorf("merge conflicts vs %s in %q", remoteBase, mc.pickedBranch.BranchName)
+	}
+
+	return nil
+}
+
+// composeAndCommit builds the prefill from issue context + a strategy subject,
+// drives the commit form, and commits. strategy labels the commit error (e.g.
+// "squash", "rebase", "classic").
+func composeAndCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter, subject, strategy string) error {
+	hint := commitpkg.IssueHint{IssueID: mc.pickedBranch.IssueSlug, BranchType: mc.pickedBranch.Type}
+	prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
+	prefill["subject"] = subject
+
+	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
+	if err != nil {
+		return err //nolint:wrapcheck // prompter error already wrapped
+	}
+
+	if err := mc.client.Commit(ctx, msg, convert.CommitOptionsFromTUI(opts)); err != nil {
+		return fmt.Errorf("commit %s: %w", strategy, err)
 	}
 
 	return nil

@@ -104,7 +104,7 @@ func NewClientForCmd(cmd *cobra.Command, cfg *config.AppConfig) (*git.Client, er
 }
 ```
 
-#### R2 — git.CommitOptions constructor (smell #2)
+#### R2 — git.CommitOptions constructor (smell #2) [DONE]
 
 Before (3×):
 
@@ -122,18 +122,16 @@ has no other consumer at the commit site):
 
 This is the single highest-risk duplication: a new commit flag added to one of the three strategies and forgotten in the others is silent. (ROADMAP rec #3.)
 
-#### R3 — Extract the strategy commit tail (smells #3 + #4)
+#### R3 — Extract the strategy commit tail (smells #3 + #4) [DONE]
 
-All three do*Close helpers end with: build IssueHint → Prefill → set subject → ComposeMessage →
-Commit. Extract:
+All three do*Close helpers end with: build IssueHint → Prefill → set subject → ComposeMessage → Commit.
+Extract:
 
 ```go
 // composeAndCommit builds the prefill from issue context + a strategy subject,
 // drives the commit form, and commits.
-func composeAndCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter, subject string)
-error {
-    hint := commitpkg.IssueHint{IssueID: mc.pickedBranch.IssueSlug, BranchType: mc.pickedBranch.
-Type}
+func composeAndCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter, subject string) error {
+    hint := commitpkg.IssueHint{IssueID: mc.pickedBranch.IssueSlug, BranchType: mc.pickedBranch.Type}
     prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
     prefill["subject"] = subject
 
@@ -206,7 +204,7 @@ func (m *issueTableModel) refreshRows() {
 
 Then split Update into `updatePicking` / `updateFiltering` / `updateNormal` key handlers to tame smell #11.
 
-#### R7 — Magic constant (smell #9)
+#### R7 — Magic constant (smell #9) [DONE]
 
 `cmd/branch/branch.go:394`: `s.UpdateBranchStatus(ctx, ..., 2, &now)` → `store.StatusIDMerged`. One-line, removes a correctness hazard if IDs ever change. Do this first.
 
@@ -218,8 +216,8 @@ Slightly more involved than R1–R7 because the confirm message and success outp
 
 #### PRIORITY ORDER
 
-1. ~~R7 — magic 2 → `StatusIDMerged` — trivial, fixes a latent correctness bug.~~ (DONE)
-2. R2 + R3 — `CommitOptionsFromTUI` + `composeAndCommit` — kills the most dangerous duplication (silent missing commit flag) and 30 lines.
+1. ~~R7 — magic 2 → `StatusIDMerged` — trivial, fixes a latent correctness bug.~~ [DONE]
+2. ~~R2 + R3 — `CommitOptionsFromTUI` + `composeAndCommit` — kills the most dangerous duplication (silent missing commit flag) and 30 lines.~~ [DONE]
 3. R1 — `NewClientForCmd` — mechanical, 5 sites, low risk.
 4. R4 — `applyTrackerStatus` — removes the second cross-file duplication.
 5. R5 — `scanBranchRow` — guards against column drift.
