@@ -391,7 +391,7 @@ func executePrune(ctx context.Context, w io.Writer, s *store.Store, result prune
 	}
 
 	for i := range result.toMerge {
-		if err := s.UpdateBranchStatus(ctx, result.toMerge[i].BranchName, 2, &now); err != nil {
+		if err := s.UpdateBranchStatus(ctx, result.toMerge[i].BranchName, store.StatusIDMerged, &now); err != nil {
 			return fmt.Errorf("mark merged %q: %w", result.toMerge[i].BranchName, err)
 		}
 	}

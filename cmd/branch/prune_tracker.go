@@ -25,9 +25,7 @@ import (
 //
 // Intentionally narrow for v1. Lift to AppConfig.Branch.IssueIDPattern in a
 // follow-up if user-extensibility is needed.
-var defaultIssueIDPattern = regexp.MustCompile(
-	`^(?:([0-9]+)[-@_|+=.]|([^@|]+)[@|]).+`,
-)
+var defaultIssueIDPattern = regexp.MustCompile(`^(?:(\d+)[-@_|+=.]|([^@|]+)[@|]).+`)
 
 // extractIssueID returns the first non-empty regex capture from name.
 // Returns ("", false) if the name does not match the pattern.

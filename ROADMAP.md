@@ -218,7 +218,7 @@ Slightly more involved than R1–R7 because the confirm message and success outp
 
 #### PRIORITY ORDER
 
-1. R7 — magic 2 → `StatusIDMerged` — trivial, fixes a latent correctness bug.
+1. ~~R7 — magic 2 → `StatusIDMerged` — trivial, fixes a latent correctness bug.~~ (DONE)
 2. R2 + R3 — `CommitOptionsFromTUI` + `composeAndCommit` — kills the most dangerous duplication (silent missing commit flag) and 30 lines.
 3. R1 — `NewClientForCmd` — mechanical, 5 sites, low risk.
 4. R4 — `applyTrackerStatus` — removes the second cross-file duplication.
