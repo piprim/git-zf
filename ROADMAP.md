@@ -2,40 +2,38 @@
 
 ## Enhancement
 
-### CONCERNS
+### CODE SMELLS
 
-1. `cmd/branch` imports `cmd/issue` (cross-command coupling). branch new delegates to
-   `issuecmd.BuildStartDeps` + `issuecmd.RunIssueStart`. A sibling command package depending on another
-   command package is a layering smell — cmd/* should be leaf orchestrators. The shared use-case
-   (`RunIssueStart` and its `StartDeps`/`StartPrompter`) is really application logic, not CLI wiring, and its
-   home in `cmd/issue` is what forces the cross-import.
-2. config and store both depend on git. `config.RepoDir/RepoPath` call `git.NewClient`, and
-   `store.OpenRepo` does too. Because config is imported by nearly every package, this makes git (and go-git)
-   a transitive dependency of almost the whole tree. Persistence and configuration layers reaching
-   into the VCS layer for repo discovery inverts the usual dependency direction. No cycle exists (git
-   never imports the project config), but the coupling is wider than necessary.
-3. Duplicated orchestration. Several near-identical blocks:
-   - `createBranchFlow` vs `createWorktreeFlow` (`start.go`) — same prepare→resolve-conflict→confirm→persist→tracker shape.
-   - `updateClosedStatus` (`close.go`) vs `updateTrackerStatus` (`start.go`) — the "fetch statuses → pick → update,
-     all non-fatal" tracker routine appears twice.
-   - The `git.CommitOptions{All: opts.All, Amend: opts.Amend, ...}` field-by-field mapping is copy-pasted
-     in `doSquashCommit`, `doRebaseClose`, `doClassicClose`.
-   - The `git.NewClient(&pkg.IO{...})` + `SetRemote` preamble repeats in `BuildStartDeps`, `buildCloseDeps`,
-   and `pruneRunE`.
-4. Leaky constant in `executePrune`. `s.UpdateBranchStatus(ctx, ..., 2, &now)` uses the literal 2 where
-   `store.StatusIDMerged` exists and is used everywhere else. This is a latent bug magnet — the magic
-   number bypasses the abstraction the `StatusID` constants were created to provide.
-5. `git.Client` is a god object. It owns commit, branch CRUD, merge strategies, remote resolution,
-   author listing, worktree creation, dirty checks, ref resolution — 30 methods spanning several
-   responsibilities. The small consumer interfaces shield callers, but the type itself has low cohesion
-   and the `merge.go`/`git.go`/`system.go` split is by file, not by concern.
-6. Domain/transport leakage in the issue model. `issue.Issue` embeds `tracker.Issue` and carries a
-   `TrackerType` string; the issue package (a domain package) also defines a Prompter interface and form-driving
-   service functions. The domain entity is entangled with the tracker DTO and with UI
-   orchestration. There are also three distinct Issue shapes (`tracker.Issue`, `issue.Issue`, `store.Issue`)
-   plus store.IssueRow — mapping friction that's tolerable but undocumented.
-7. Global Viper singleton. `cmd/root` mutates the package-global viper instance and `config.Load()` reads it.
-   This hidden global state makes config loading order-dependent and harder to exercise in isolation (vs. `viper.New()` per load).
+The single inventory of issues. Each row links to the fix in **RECOMMENDATIONS**
+(high-level) or **REFACTORING SUGGESTIONS** (concrete, `R*`) below. Severity tags
+risk × yield: "High (latent bug)" is a correctness hazard; a plain "High" on a
+duplication row means high churn/yield, not danger.
+
+#### Duplication (highest-yield category)
+
+| # | Smell | Location(s) | Severity |
+|---|-------|-------------|----------|
+| 1 | `git.NewClient(&pkg.IO{In/Out/Err})` + `SetRemote` preamble copy-pasted | `cmd/issue/start.go:41-53`, `cmd/issue/close.go:41-54`, `cmd/branch/branch.go:264-275`, `cmd/branch/prune_tracker.go:271-282`; `cmd/commit/commit.go:75` (NewClient only — no SetRemote) | High |
+| 2 | `git.CommitOptions{All, Amend, …}` field-by-field map from `tui.CommitOption` | `cmd/issue/close.go:299-307, 435-443, 530-538` | High |
+| 3 | `IssueHint{…}` + `Prefill()` + `prefill["subject"] = fmt.Sprintf(...)` block | `cmd/issue/close.go:286-292, 422-428, 517-523` | Medium |
+| 4 | Compose-message-then-commit tail (identical 8 lines) | end of `doSquashCommit`, `doRebaseClose`, `doClassicClose` | Medium |
+| 5 | "fetch statuses → pick → update, all non-fatal" tracker routine | `cmd/issue/close.go:331-351` vs `cmd/issue/start.go:335-361` | Medium |
+| 6 | `createBranchFlow` vs `createWorktreeFlow` — same prepare→resolve→confirm→persist→tracker shape | `cmd/issue/start.go:196-245` vs `247-311` | Medium |
+| 7 | Row-scan loop (`Scan` + `parseSQLiteTime` + append) + near-identical SELECT | `store/store.go:237-264` vs `295-320` (+ query at `216-219`/`275-280`) | Medium |
+| 8 | `includeProj := len(m.projects) > 1; m.table.SetRows(applyFilters(...))` repeated | `tui/issue.go:396-397, 423-424, 436-437, 447-448` (+ `tui/issue.go:208`, the same shape outside `Update`) | Medium |
+
+#### Other smells
+
+| # | Smell | Location | Severity |
+|---|-------|----------|----------|
+| 9 | Magic constant `2` instead of `store.StatusIDMerged` | `cmd/branch/branch.go:394` | High (latent bug) |
+| 10 | `git.Client` god object — ~30 methods, file split by file not concern | `git/git.go` (556 ln) + `merge.go` + `system.go` | Low–Med |
+| 11 | Long method `issueTableModel.Update` — nested modal state machine, 90+ lines | `tui/issue.go:384-477` | Medium |
+| 12 | cmd→cmd coupling: `cmd/branch` imports `cmd/issue` for `BuildStartDeps`/`RunIssueStart` | `cmd/branch/branch.go:14` | Medium (architectural) |
+| 13 | Repeated `//nolint:wrapcheck // prompter error already wrapped` on every prompter return | `close.go` ×6, throughout | Low (convention worth a doc, not 6 inline comments) |
+| 14 | config/store reach into `git` for repo discovery — `config.RepoDir/RepoPath` and `store.OpenRepo` build a full `git.Client`, making go-git a transitive dependency of nearly the whole tree | `config/config.go:163-164, 219`; `store/store.go:360-361` | Medium (architectural) |
+| 15 | Domain/transport leakage — `issue.Issue` embeds `tracker.Issue`, and the issue domain package also defines the `Prompter` interface + `GetFromUser/GetFromTracker`. Three Issue shapes (`tracker.Issue`, `issue.Issue`, `store.Issue`) + `store.IssueRow`, with undocumented mapping | `issue/issue.go:31`; `tracker/tracker.go:13`; `store/store.go:27` | Medium (architectural) |
+| 16 | Global Viper singleton — `cmd/root` mutates the package-global viper and `config.Load()` reads it; load order-dependent and hard to exercise in isolation (vs. `viper.New()` per load) | `cmd/root.go:117-137`; `config/config.go:98+` | Low–Med (testability) |
 
 ### RECOMMENDATIONS
 
@@ -63,55 +61,6 @@
    UI-orchestration concerns.
 7. Use `viper.New()` per config load threaded through `initConfig/config.Load` instead of the global.
    Rationale: removes hidden global state; makes config fully unit-testable.
-
-
-### CODE SMELLS
-
-#### Duplication (highest-yield category)
-
- # │ Smell                                    │ Location(s)                              │ Severity
-───┼──────────────────────────────────────────┼──────────────────────────────────────────┼─────────
- 1 │ git.NewClient(&pkg.IO{In/Out/Err}) +     │ cmd/issue/start.go:41-53,                │ High
-   │ SetRemote preamble copy-pasted           │ cmd/issue/close.go:41-54,                │
-   │                                          │ cmd/branch/branch.go:264-275,            │
-   │                                          │ cmd/branch/prune_tracker.go:271-282,     │
-   │                                          │ cmd/commit/commit.go:75                  │
- 2 │ git.CommitOptions{All: opts.All, Amend:  │ cmd/issue/close.go:299-307, 435-         │ High
-   │ …} field-by-field map from               │ 443, 530-538                             │
-   │ tui.CommitOption                         │                                          │
- 3 │ IssueHint{…} + Prefill() +               │ cmd/issue/close.go:286-292, 422-         │ Medium
-   │ prefill["subject"] = fmt.Sprintf(...)    │ 428, 517-523                             │
-   │ block                                    │                                          │
- 4 │ Compose-message-then-commit tail         │ end of doSquashCommit, doRebaseClose,    │ Medium
-   │ (identical 8 lines)                      │ doClassicClose                           │
- 5 │ "fetch statuses → pick → update, all     │ cmd/issue/close.go:331-351 vs            │ Medium
-   │ non-fatal" tracker routine               │ cmd/issue/start.go:335-361               │
- 6 │ createBranchFlow vs createWorktreeFlow — │ cmd/issue/start.go:196-245 vs 247-311    │ Medium
-   │ same                                     │                                          │
-   │ prepare→resolve→confirm→persist→tracker  │                                          │
-   │ shape                                    │                                          │
- 7 │ Row-scan loop (Scan + parseSQLiteTime +  │ store/store.go:237-264 vs 295-320 (+     │ Medium
-   │ append) + near-identical SELECT          │ query at 216-219/275-280)                │
- 8 │ includeProj := len(m.projects) > 1; m.ta │ tui/issue.go:396-397, 423-424, 436-      │ Medium
-   │ ble.SetRows(applyFilters(...)) repeated  │ 437, 447-448                             │
-
-### Other smells
-
- #  │ Smell                                         │ Location                │ Severity
-────┼───────────────────────────────────────────────┼─────────────────────────┼───────────────────
- 9  │ Magic constant 2 instead of                   │ cmd/branch/branch.go:39 │ High (latent bug)
-    │ store.StatusIDMerged                          │ 4                       │
- 10 │ git.Client god object — ~30 methods, file     │ git/git.go (556 ln) +   │ Low–Med
-    │ split by file not concern                     │ merge.go + system.go    │
- 11 │ Long method issueTableModel.Update — nested   │ tui/issue.go:384-477    │ Medium
-    │ modal state machine, 90+ lines                │                         │
- 12 │ cmd→cmd coupling: cmd/branch imports          │ cmd/branch/branch.go:14 │ Medium
-    │ cmd/issue for BuildStartDeps/RunIssueStart    │                         │ (architectural)
- 13 │ Repeated                                      │ close.go ×6, throughout │ Low (signals a
-    │ //nolint:wrapcheck // prompter error already  │                         │ convention worth
-    │ wrapped on every prompter return              │                         │ a doc, not 6
-    │                                               │                         │ inline comments)
-
 
 ### REFACTORING SUGGESTIONS
 
@@ -276,9 +225,10 @@ Slightly more involved than R1–R7 because the confirm message and success outp
 5. R5 — `scanBranchRow` — guards against column drift.
 6. R6 — `refreshRows` + split Update — readability of the TUI state machine.
 7. R8 — merge create flows — higher effort, lower urgency.
-8. (Architectural, separate effort) ROADMAP rec #1/#2: lift `RunIssueStart/close` use-cases into an
+8. (Architectural, separate effort) ROADMAP rec #1/#2 (smells #12, #14): lift `RunIssueStart/close` use-cases into an
    `app/` package to break the `cmd/branch` → `cmd/issue` import, and introduce a narrow `GitDir()` discovery
-   helper so config/store stop pulling in go-git transitively.
+   helper so config/store stop pulling in go-git transitively. Smells #15 (Issue-type leakage, rec #6) and
+   #16 (viper global, rec #7) ride along with this layering pass.
 
 #### DEPENDENCIES
 
