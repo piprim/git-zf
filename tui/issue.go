@@ -161,7 +161,6 @@ func IssueTrackerPicker(
 	return huh.NewGroup(
 		huh.NewSelect[tracker.Issue]().
 			Title("Pick an issue:").
-			Filtering(true).
 			Options(opts...).
 			Value(selected).
 			Height(issueTrackerPickerHeight),
@@ -200,7 +199,7 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 		huh.NewSelect[string]().
 			Title(fmt.Sprintf("Update issue %s status in %s:", issueID, trackerType)).
 			Options(opts...).
-			Value(selected).Filtering(true),
+			Value(selected),
 	)
 }
 
