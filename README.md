@@ -4,7 +4,7 @@
   <img src="./assets/git-zf-logo.webp" alt="Logo git-zf" width="272" />
 </p>
 
-> Command line utility to manage git workflow, connect to issue trackers, and standardize commit messages through a TUI.
+> A TUI powered CLI that wraps a git-flow workflow (issue → branch → commit → close) with optional issue-tracker integration.
 
 ## Getting Started
 
