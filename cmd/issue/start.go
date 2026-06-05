@@ -71,21 +71,27 @@ func (i Issue) getStartCmd() *cobra.Command {
 		Short: "Start work on an issue (create branch)",
 		Long: `Enter issue details, then a properly named branch is created and
 checked out from the default base branch. Branch state is saved to .git/git-zf.db.`,
-		RunE: i.startRunE,
 	}
 
 	cmd.Flags().String("variant", "",
 		"create a parallel branch for the same issue (e.g. --variant=spike)")
 
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		variant, err := cmd.Flags().GetString("variant")
+		if err != nil {
+			return fmt.Errorf("read --variant flag: %w", err)
+		}
+
+		return i.startRunE(cmd, variant)
+	}
+
 	return cmd
 }
 
-func (i Issue) startRunE(cmd *cobra.Command, _ []string) error {
-	variant, err := cmd.Flags().GetString("variant")
-	if err != nil {
-		return fmt.Errorf("read --variant flag: %w", err)
-	}
-
+// startRunE drives the tracker-first issue-start flow. variant carries the
+// --variant flag value; the interactive dispatcher (runE) passes "" because
+// the issue root command defines no such flag.
+func (i Issue) startRunE(cmd *cobra.Command, variant string) error {
 	flags := issue.IssueStartFlags{TrackerFirst: true, Variant: variant}
 
 	deps, err := BuildStartDeps(cmd, i.appConfig, flags)

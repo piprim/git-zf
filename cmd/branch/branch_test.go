@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -111,6 +112,49 @@ func TestBranchList(t *testing.T) {
 		}
 		if !strings.Contains(buf.String(), "No branches found.") {
 			t.Errorf("expected 'No branches found.', got: %q", buf.String())
+		}
+	})
+}
+
+// TestNewRunE_InteractiveDispatch is a regression test for the bug where
+// `git zf branch` → "New" dispatched through the branch root command (which
+// defines no --variant flag) and newRunE tried to read that flag, failing with
+// "read --variant flag: flag accessed but not defined: variant". newRunE must
+// take the variant as a parameter so the interactive dispatcher can pass "".
+func TestNewRunE_InteractiveDispatch(t *testing.T) {
+	b := New(&config.AppConfig{})
+	root := b.GetRootCmd()
+
+	t.Run("branch root command defines no --variant flag", func(t *testing.T) {
+		if root.Flags().Lookup("variant") != nil {
+			t.Fatal("branch root command unexpectedly defines a --variant flag")
+		}
+	})
+
+	t.Run("new subcommand still defines --variant", func(t *testing.T) {
+		newSub, _, err := root.Find([]string{"new"})
+		if err != nil {
+			t.Fatalf("find new subcommand: %v", err)
+		}
+		if newSub.Flags().Lookup("variant") == nil {
+			t.Fatal("new subcommand lost its --variant flag")
+		}
+	})
+
+	t.Run("newRunE on the root command does not read the undefined --variant flag", func(t *testing.T) {
+		t.Chdir(t.TempDir()) // a directory outside any git repo
+
+		err := b.newRunE(root, "")
+		if err == nil {
+			t.Fatal("expected an error outside a git repo, got nil")
+		}
+		if strings.Contains(err.Error(), "flag accessed but not defined") {
+			t.Fatalf("regression: dispatch path still reads the undefined --variant flag: %v", err)
+		}
+		// The flow fails later, at repo detection — proving flag reading was
+		// passed without error.
+		if !strings.Contains(err.Error(), "git repository") {
+			t.Fatalf("expected a git-repository error, got: %v", err)
 		}
 	})
 }

@@ -47,7 +47,7 @@ func (b Branch) GetRootCmd() *cobra.Command {
 	return cmd
 }
 
-func (b Branch) runE(cmd *cobra.Command, args []string) error {
+func (b Branch) runE(cmd *cobra.Command, _ []string) error {
 	var action string
 	if err := huh.NewForm(tui.BranchActionSelect(&action)).RunWithContext(cmd.Context()); err != nil {
 		return fmt.Errorf("action select: %w", err)
@@ -58,7 +58,10 @@ func (b Branch) runE(cmd *cobra.Command, args []string) error {
 		// zero flags → TUI path (status filter presented interactively)
 		return listRunE(cmd, listFlags{})
 	case tui.BranchActionNameNew:
-		return b.newRunE(cmd, args)
+		// Interactive path: no --variant flag exists on the branch root
+		// command, so pass an empty variant (variants are chosen via the
+		// branch-conflict prompter, not a CLI flag).
+		return b.newRunE(cmd, "")
 	case tui.BranchActionNamePrune:
 		return b.pruneRunE(cmd, pruneFlags{})
 	case tui.BranchActionNamePruneTracker:
@@ -182,22 +185,27 @@ func (b Branch) newCmd() *cobra.Command {
 		Use:   "new",
 		Short: "Create a new branch (manual input)",
 		Long:  "Enter issue details manually, then a named branch is created and checked out.",
-		RunE:  b.newRunE,
 	}
 
 	cmd.Flags().String("variant", "",
 		"create a parallel branch for the same issue (e.g. --variant=spike)")
 
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		variant, err := cmd.Flags().GetString("variant")
+		if err != nil {
+			return fmt.Errorf("read --variant flag: %w", err)
+		}
+
+		return b.newRunE(cmd, variant)
+	}
+
 	return cmd
 }
 
 // newRunE delegates to RunIssueStart with manual-first (tracker toggle defaults to NO).
-func (b Branch) newRunE(cmd *cobra.Command, _ []string) error {
-	variant, err := cmd.Flags().GetString("variant")
-	if err != nil {
-		return fmt.Errorf("read --variant flag: %w", err)
-	}
-
+// variant carries the --variant flag value; the interactive dispatcher (runE)
+// passes "" because the branch root command defines no such flag.
+func (b Branch) newRunE(cmd *cobra.Command, variant string) error {
 	flags := issue.IssueStartFlags{TrackerFirst: false, Variant: variant}
 	deps, err := issuecmd.BuildStartDeps(cmd, b.appConfig, flags)
 	if err != nil {
