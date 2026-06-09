@@ -515,3 +515,9 @@ When a tracker is configured:
 ### Commit auto-fill from issue branch
 
 When you run `git zf commit` on an issue branch (e.g. `ABC-42@feat@add-oauth`), the issue ID is automatically pre-filled into the commit form — into `scope` if that field exists, otherwise `footer`, otherwise `subject` as a fallback. The pre-fill is a hint only; you can edit or clear it before confirming.
+
+---
+
+## LLM policy
+
+This project is assisted by LLMs.
