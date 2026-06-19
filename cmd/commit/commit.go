@@ -99,7 +99,7 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	prefill := hint.Prefill(c.appConfig.CommitMessage.Items)
+	prefill := hint.Prefill(c.appConfig.CommitMessage)
 
 	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill)
 	if err != nil {

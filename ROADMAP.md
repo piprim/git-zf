@@ -2,6 +2,8 @@
 
 ## Enhancement
 
+- vérifier qu'on fetch/merge origin/issue dans issue avant de merger pour ne pas oublier les potentielles revues de code.
+
 ### CODE SMELLS
 
 The single inventory of issues. Each row links to the fix in **RECOMMENDATIONS**

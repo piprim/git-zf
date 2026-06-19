@@ -371,20 +371,49 @@ Override the list of commit types shown in the type selector:
 
 ### Commit message
 
-Override the form fields and/or the message template:
+Override the form fields, the message template, and/or the issue-reference formats:
 
-```json
-{
-  "commit-message": {
-    "items": [
-      { "name": "scope",   "desc": "Scope (users, db, poll…):", "form": "input" },
-      { "name": "subject", "desc": "Concise description. Imperative, lower case, no final dot:", "form": "input", "required": true },
-      { "name": "body",    "desc": "Motivation for the change:", "form": "multiline" },
-      { "name": "footer",  "desc": "Breaking changes and referenced issues:", "form": "multiline" }
-    ],
-    "template": "{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}{{with .body}}\n\n{{.}}{{end}}{{with .footer}}\n\n{{.}}{{end}}"
-  }
-}
+```toml
+[commit-message]
+template    = "{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}{{with .body}}\n\n{{.}}{{end}}{{with .footer}}\n\n{{.}}{{end}}"
+ref-format   = "Refs #%s"   # footer text when committing on an issue branch (not closing)
+close-format = "Closes #%s"  # footer text when closing an issue via `issue close`
+
+[[commit-message.items]]
+name     = "scope"
+desc     = "Scope (users, db, poll…):"
+form     = "input"
+
+[[commit-message.items]]
+name     = "subject"
+desc     = "Concise description. Imperative, lower case, no final dot:"
+form     = "input"
+required = true
+
+[[commit-message.items]]
+name = "body"
+desc = "Motivation for the change:"
+form = "multiline"
+
+[[commit-message.items]]
+name = "footer"
+desc = "Breaking changes and referenced issues:"
+form = "multiline"
+```
+
+`ref-format` and `close-format` are Go `fmt.Sprintf` patterns; the single `%s` verb is replaced by the issue ID (e.g. `ABC-42` for Redmine/Jira or `123` for GitHub).
+
+| Key | Default | When used |
+|-----|---------|-----------|
+| `ref-format` | `"Refs #%s"` | Regular commits on an issue branch (`git zf commit`) |
+| `close-format` | `"Closes #%s"` | Merge commits produced by `git zf issue close` |
+
+Examples for common trackers:
+
+| Tracker | `ref-format` | `close-format` |
+|---------|-------------|----------------|
+| Redmine / GitHub / GitLab | `"Refs #%s"` *(default)* | `"Closes #%s"` *(default)* |
+| Jira | `"Refs: %s"` | `"Fixes: %s"` |
 ```
 
 ### Branch naming
@@ -514,7 +543,19 @@ When a tracker is configured:
 
 ### Commit auto-fill from issue branch
 
-When you run `git zf commit` on an issue branch (e.g. `ABC-42@feat@add-oauth`), the issue ID is automatically pre-filled into the commit form — into `scope` if that field exists, otherwise `footer`, otherwise `subject` as a fallback. The pre-fill is a hint only; you can edit or clear it before confirming.
+When you run `git zf commit` on an issue branch (e.g. `ABC-42@feat@add-oauth`), the issue ID and branch type are automatically pre-filled into the commit form. The pre-fill is a hint only; you can edit or clear any field before confirming.
+
+**Regular commits** (`git zf commit`):
+- `scope` ← issue ID (if the field exists)
+- `footer` ← `ref-format % id` (e.g. `Refs #ABC-42`) — always set when the field exists, independent of scope
+- `subject` ← `(ABC-42)` — fallback only when neither `scope` nor `footer` exist
+
+**Closing commits** (`git zf issue close`):
+- `scope` ← issue ID (if the field exists)
+- `footer` ← `close-format % id` (e.g. `Closes #ABC-42`) — always set when the field exists
+- `subject` ← `(ABC-42)` — fallback only when neither `scope` nor `footer` exist
+
+The formats used for `footer` are configurable via `ref-format` and `close-format` (see [Commit message](#commit-message)).
 
 ---
 

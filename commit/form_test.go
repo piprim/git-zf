@@ -574,20 +574,23 @@ func TestIssueHint_Prefill(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		items []config.CommitItem
-		hint  IssueHint
-		want  map[string]any
+		name        string
+		items       []config.CommitItem
+		refFormat   string
+		closeFormat string
+		hint        IssueHint
+		want        map[string]any
 	}{
 		{
-			name: "scope_present_uses_scope",
+			name: "scope_present_uses_scope_and_footer",
 			items: []config.CommitItem{
 				{Name: "subject"}, {Name: "scope"}, {Name: "footer"},
 			},
 			hint: IssueHint{IssueID: testIssueID, BranchType: "fix"},
 			want: map[string]any{
-				"scope": testIssueID,
-				"type":  "fix",
+				"scope":  testIssueID,
+				"type":   "fix",
+				"footer": "Refs #" + testIssueID,
 			},
 		},
 		{
@@ -597,8 +600,9 @@ func TestIssueHint_Prefill(t *testing.T) {
 			},
 			hint: IssueHint{IssueID: testIssueID, BranchType: "fix"},
 			want: map[string]any{
-				"footer": "Refs: " + testIssueID,
-				"type":   "fix",
+				"subject": "(" + testIssueID + ")",
+				"footer":  "Refs #" + testIssueID,
+				"type":    "fix",
 			},
 		},
 		{
@@ -640,13 +644,92 @@ func TestIssueHint_Prefill(t *testing.T) {
 			hint:  IssueHint{},
 			want:  map[string]any{},
 		},
+		// Closing=true cases
+		{
+			name: "closing_footer_only_sets_fix",
+			items: []config.CommitItem{
+				{Name: "subject"}, {Name: "footer"},
+			},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			want: map[string]any{
+				"footer": "Closes #" + testIssueID,
+				"type":   "fix",
+			},
+		},
+		{
+			name: "closing_scope_and_footer_sets_both",
+			items: []config.CommitItem{
+				{Name: "subject"}, {Name: "scope"}, {Name: "footer"},
+			},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			want: map[string]any{
+				"scope":  testIssueID,
+				"footer": "Closes #" + testIssueID,
+				"type":   "fix",
+			},
+		},
+		{
+			name: "closing_scope_only_no_footer",
+			items: []config.CommitItem{
+				{Name: "subject"}, {Name: "scope"},
+			},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			want: map[string]any{
+				"scope": testIssueID,
+				"type":  "fix",
+			},
+		},
+		{
+			name:  "closing_subject_fallback_when_no_scope_or_footer",
+			items: []config.CommitItem{{Name: "subject"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			want: map[string]any{
+				"subject": "(" + testIssueID + ")",
+				"type":    "fix",
+			},
+		},
+		{
+			name:  "closing_no_matching_field_only_type",
+			items: []config.CommitItem{{Name: "body"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			want: map[string]any{
+				"type": "fix",
+			},
+		},
+		// Custom format strings
+		{
+			name:      "custom_ref_format_used_for_footer",
+			items:     []config.CommitItem{{Name: "subject"}, {Name: "footer"}},
+			refFormat: "Refs: %s",
+			hint:      IssueHint{IssueID: testIssueID, BranchType: "fix"},
+			want: map[string]any{
+				"subject": "(" + testIssueID + ")",
+				"footer":  "Refs: " + testIssueID,
+				"type":    "fix",
+			},
+		},
+		{
+			name:        "custom_close_format_used_for_footer",
+			items:       []config.CommitItem{{Name: "subject"}, {Name: "footer"}},
+			closeFormat: "Tests #%s",
+			hint:        IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			want: map[string]any{
+				"footer": "Tests #" + testIssueID,
+				"type":   "fix",
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := tt.hint.Prefill(tt.items)
+			msgCfg := config.CommitMessageConfig{
+				Items:       tt.items,
+				RefFormat:   tt.refFormat,
+				CloseFormat: tt.closeFormat,
+			}
+			got := tt.hint.Prefill(msgCfg)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Prefill() = %v, want %v", got, tt.want)
 			}

@@ -265,31 +265,80 @@ func assembleMessage(buf *bytes.Buffer, tmplText string, answers map[string]any)
 type IssueHint struct {
 	IssueID    string
 	BranchType string
+	// Closing indicates this is a merge/close commit. When true, Prefill
+	// always sets footer to CloseFormat % id (if the footer field exists) and
+	// independently sets scope (if the scope field exists). When false, the
+	// fallback chain scope → footer (RefFormat % id) → subject is used instead.
+	Closing bool
 }
 
 // Prefill returns the issue-hint contribution to a FillOutForm prefill map.
-// IssueID populates one field using the fallback chain
 //
-//	"scope" → "footer" (as "Refs: <id>") → "subject" (as "(<id>)").
+// When Closing is false, IssueID populates one field using the fallback chain:
+//
+//	"scope" → "footer" (as msgCfg.RefFormat % id) → "subject" (as "(<id>)").
+//
+// When Closing is true, footer always receives msgCfg.CloseFormat % id when
+// present, scope independently receives id when present, and subject is the
+// last resort when neither scope nor footer exist.
 //
 // BranchType is emitted as "type" when non-empty; loadForm validates it
 // against cfg.CommitTypes and silently ignores an unconfigured value.
-func (h IssueHint) Prefill(items []config.CommitItem) map[string]any {
+func (h IssueHint) Prefill(msgCfg config.CommitMessageConfig) map[string]any {
 	out := make(map[string]any)
 
 	if h.IssueID != "" {
-		switch {
-		case hasItem(items, "scope"):
-			out["scope"] = h.IssueID
-		case hasItem(items, "footer"):
-			out["footer"] = "Refs: " + h.IssueID
-		case hasItem(items, "subject"):
-			out["subject"] = "(" + h.IssueID + ")"
+		if h.Closing {
+			out = h.prefillClosed(msgCfg)
+		} else {
+			out = h.prefillNotClosed(msgCfg)
 		}
 	}
 
 	if h.BranchType != "" {
 		out["type"] = h.BranchType
+	}
+
+	return out
+}
+
+// prefillClosed returns the issue-hint contribution to a FillOutForm prefill map when closing issue.
+func (h IssueHint) prefillClosed(msgCfg config.CommitMessageConfig) map[string]any {
+	closeFmt := msgCfg.CloseFormat
+	if closeFmt == "" {
+		closeFmt = "Closes #%s"
+	}
+
+	out := make(map[string]any)
+	if hasItem(msgCfg.Items, "scope") {
+		out["scope"] = h.IssueID
+	}
+	if hasItem(msgCfg.Items, "footer") {
+		out["footer"] = fmt.Sprintf(closeFmt, h.IssueID)
+	} else if !hasItem(msgCfg.Items, "scope") && hasItem(msgCfg.Items, "subject") {
+		out["subject"] = "(" + h.IssueID + ")"
+	}
+
+	return out
+}
+
+// prefillNotClosed returns the issue-hint contribution to a FillOutForm prefill map when not closing issue.
+func (h IssueHint) prefillNotClosed(msgCfg config.CommitMessageConfig) map[string]any {
+	refFmt := msgCfg.RefFormat
+	if refFmt == "" {
+		refFmt = "Refs #%s"
+	}
+
+	out := make(map[string]any)
+	switch {
+	case hasItem(msgCfg.Items, "scope"):
+		out["scope"] = h.IssueID
+	case hasItem(msgCfg.Items, "subject"):
+		out["subject"] = "(" + h.IssueID + ")"
+	}
+
+	if hasItem(msgCfg.Items, "footer") {
+		out["footer"] = fmt.Sprintf(refFmt, h.IssueID)
 	}
 
 	return out

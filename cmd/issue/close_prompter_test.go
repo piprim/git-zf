@@ -33,6 +33,10 @@ type scriptedPrompter struct {
 	MessageErr       error
 	TrackerStatusErr error
 	DeleteBranchErr  error
+
+	// CapturedPrefill holds the last prefill map received by ComposeMessage.
+	// Tests can assert on it after runClose returns.
+	CapturedPrefill map[string]any
 }
 
 func (s *scriptedPrompter) PickBranch(_ context.Context, _ []store.BranchRow, _ string) (*store.BranchRow, error) {
@@ -59,10 +63,12 @@ func (s *scriptedPrompter) ConfirmMerge(_ context.Context, _, _ string, _ MergeS
 	return s.Confirm, nil
 }
 
-func (s *scriptedPrompter) ComposeMessage(_ context.Context, _ map[string]any) ([]byte, tui.CommitOption, error) {
+func (s *scriptedPrompter) ComposeMessage(_ context.Context, prefill map[string]any) ([]byte, tui.CommitOption, error) {
 	if s.MessageErr != nil {
 		return nil, tui.CommitOption{}, s.MessageErr
 	}
+
+	s.CapturedPrefill = prefill
 
 	return s.Message, s.MessageOpts, nil
 }

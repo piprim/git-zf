@@ -382,6 +382,40 @@ func TestClose_UserAbortsAtConfirm(t *testing.T) {
 	})
 }
 
+func TestClose_PrefillHasFixFooter(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+
+	// Give the config a footer item so IssueHint.Prefill can populate it.
+	rig.cfg.CommitMessage.Items = []config.CommitItem{
+		{Name: "subject", Required: true},
+		{Name: "footer"},
+	}
+
+	prompter := &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      StrategyRebase,
+		Confirm:       true,
+		Message:       []byte("feat: close ABC-1\n\nCloses #ABC-1\n"),
+		TrackerStatus: "Closed",
+		DeleteBranch:  false,
+	}
+
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("ComposeMessage prefill has footer Closes #ABC-1", func(t *testing.T) {
+		got, ok := prompter.CapturedPrefill["footer"]
+		if !ok {
+			t.Error("prefill missing 'footer' key")
+		} else if got != "Closes #ABC-1" {
+			t.Errorf("prefill[footer] = %q, want %q", got, "Closes #ABC-1")
+		}
+	})
+}
+
 func TestClose_ConflictAborts(t *testing.T) {
 	t.Parallel()
 

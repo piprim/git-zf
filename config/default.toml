@@ -40,6 +40,8 @@ desc = "Work in progress"
 
 [commit-message]
 template = "{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}{{with .body}}\n\n{{.}}{{end}}{{with .footer}}\n\n{{.}}{{end}}"
+ref-format = "Refs #%s"
+close-format = "Closes #%s"
 
 [[commit-message.items]]
 name = "scope"

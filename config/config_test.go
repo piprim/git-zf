@@ -36,6 +36,12 @@ func TestLoad(t *testing.T) {
 		if len(cfg.CommitMessage.Items) != 4 {
 			t.Errorf("CommitMessage.Items len = %d, want 4", len(cfg.CommitMessage.Items))
 		}
+		if cfg.CommitMessage.RefFormat != "Refs #%s" {
+			t.Errorf("CommitMessage.RefFormat = %q, want %q", cfg.CommitMessage.RefFormat, "Refs #%s")
+		}
+		if cfg.CommitMessage.CloseFormat != "Closes #%s" {
+			t.Errorf("CommitMessage.CloseFormat = %q, want %q", cfg.CommitMessage.CloseFormat, "Closes #%s")
+		}
 		if cfg.IssueTracker.Type != "" {
 			t.Errorf("IssueTracker.Type = %q, want empty", cfg.IssueTracker.Type)
 		}
@@ -200,6 +206,30 @@ token = "tok"
 		if cfg.CommitMessage.Template == "" {
 			t.Error("CommitMessage.Template should be preserved from built-in default")
 		}
+	})
+
+	t.Run("ref-format and close-format are loaded when viper keys are set", func(t *testing.T) {
+		viper.Reset()
+		defer viper.Reset()
+
+		viper.Set("commit-message.ref-format", "Refs: %s")
+		viper.Set("commit-message.close-format", "Closes #%s")
+
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		t.Run("ref-format", func(t *testing.T) {
+			if cfg.CommitMessage.RefFormat != "Refs: %s" {
+				t.Errorf("RefFormat = %q, want %q", cfg.CommitMessage.RefFormat, "Refs: %s")
+			}
+		})
+		t.Run("close-format", func(t *testing.T) {
+			if cfg.CommitMessage.CloseFormat != "Closes #%s" {
+				t.Errorf("CloseFormat = %q, want %q", cfg.CommitMessage.CloseFormat, "Closes #%s")
+			}
+		})
 	})
 
 	t.Run("branch.remote is loaded when viper key is set", func(t *testing.T) {

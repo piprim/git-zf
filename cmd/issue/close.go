@@ -576,8 +576,8 @@ func mergeDryRun(ctx context.Context, mc mergeContext, remoteBase string) error 
 // drives the commit form, and commits. strategy labels the commit error (e.g.
 // "squash", "rebase", "classic").
 func composeAndCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter, subject, strategy string) error {
-	hint := commitpkg.IssueHint{IssueID: mc.pickedBranch.IssueSlug, BranchType: mc.pickedBranch.Type}
-	prefill := hint.Prefill(mc.cfg.CommitMessage.Items)
+	hint := commitpkg.IssueHint{IssueID: mc.pickedBranch.IssueSlug, BranchType: mc.pickedBranch.Type, Closing: true}
+	prefill := hint.Prefill(mc.cfg.CommitMessage)
 	prefill["subject"] = subject
 
 	msg, opts, err := prompter.ComposeMessage(ctx, prefill)

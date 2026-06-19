@@ -49,8 +49,10 @@ type CommitItem struct {
 // CommitMessageConfig holds the ordered list of form fields and the Go template
 // used to assemble the commit message.
 type CommitMessageConfig struct {
-	Items    []CommitItem `json:"items"    toml:"items"    mapstructure:"items"`
-	Template string       `json:"template" toml:"template" mapstructure:"template"`
+	Items       []CommitItem `json:"items"        toml:"items"        mapstructure:"items"`
+	Template    string       `json:"template"     toml:"template"     mapstructure:"template"`
+	RefFormat   string       `json:"ref-format"   toml:"ref-format"   mapstructure:"ref-format"`
+	CloseFormat string       `json:"close-format" toml:"close-format" mapstructure:"close-format"`
 }
 
 // BranchConfig holds branch-related settings.
@@ -109,6 +111,14 @@ func Load() (*AppConfig, error) {
 
 	if viper.IsSet("commit-message.template") {
 		cfg.CommitMessage.Template = viper.GetString("commit-message.template")
+	}
+
+	if viper.IsSet("commit-message.ref-format") {
+		cfg.CommitMessage.RefFormat = viper.GetString("commit-message.ref-format")
+	}
+
+	if viper.IsSet("commit-message.close-format") {
+		cfg.CommitMessage.CloseFormat = viper.GetString("commit-message.close-format")
 	}
 
 	if viper.IsSet("branch.base") {
