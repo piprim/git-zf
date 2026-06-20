@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/cmd/review"
 	"github.com/piprim/git-zf/config"
 	_ "github.com/piprim/git-zf/tracker/github"  // registers github adapter
 	_ "github.com/piprim/git-zf/tracker/redmine" // registers redmine adapter
@@ -26,7 +27,7 @@ func (i Issue) GetRootCmd() *cobra.Command {
 		RunE:  i.runE,
 	}
 
-	cmd.AddCommand(i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd())
+	cmd.AddCommand(i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(), review.TrackCmd(i.appConfig))
 
 	return cmd
 }

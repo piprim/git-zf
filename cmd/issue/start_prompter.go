@@ -154,7 +154,7 @@ func (p *HuhStartPrompter) PickBaseBranch(ctx context.Context, defaultBase strin
 }
 
 func (p *HuhStartPrompter) ConfirmCreateBranch(ctx context.Context, message string) (bool, error) {
-	var confirmed bool
+	var confirmed = true
 	if err := huh.NewForm(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm branch: %w", err)
 	}
@@ -171,9 +171,11 @@ func (p *HuhStartPrompter) ConfirmCreateWorktree(ctx context.Context, message st
 	return confirmed, nil
 }
 
-func (p *HuhStartPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
+func (p *HuhStartPrompter) PickTrackerStatus(
+	ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
 	var selected string
-	if err := huh.NewForm(tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
+	if err := huh.NewForm(
+		tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("status picker form: %w", err)
 	}
 

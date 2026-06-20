@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/piprim/git-zf/config"
@@ -459,5 +460,178 @@ func TestReviewRefPush_LeaseCorrectness(t *testing.T) {
 				t.Errorf("remote ref status: got %q, want %q", ref.Status, "approved")
 			}
 		})
+	})
+}
+
+func TestTrack_Developer_RegistersUnknownBranch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+
+	// Create a feature branch with plain git (not via git zf issue start).
+	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-b", "X.2@feat@part-two"); err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+
+	err := runTrack(ctx, rig.deps())
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runTrack: %v", err)
+		}
+	})
+
+	t.Run("branch appears in store as in_progress", func(t *testing.T) {
+		rows, listErr := rig.store.ListBranches(ctx, store.BranchStatusInProgress)
+		if listErr != nil {
+			t.Fatalf("ListBranches: %v", listErr)
+		}
+		var found bool
+		for _, r := range rows {
+			if r.BranchName == "X.2@feat@part-two" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("branch not found in store as in_progress")
+		}
+	})
+
+	t.Run("output mentions branch name", func(t *testing.T) {
+		if out := rig.stdout.String(); !strings.Contains(out, "X.2@feat@part-two") {
+			t.Errorf("stdout = %q, want it to mention branch name", out)
+		}
+	})
+}
+
+func TestTrack_Developer_IdempotentWhenAlreadyTracked(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+
+	// The rig already has 77@feat@my-feature in the store; check it out.
+	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "77@feat@my-feature"); err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+
+	err := runTrack(ctx, rig.deps())
+
+	t.Run("no error on duplicate", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runTrack on already-tracked branch: %v", err)
+		}
+	})
+
+	t.Run("output says already tracked", func(t *testing.T) {
+		if out := rig.stdout.String(); !strings.Contains(out, "already tracked") {
+			t.Errorf("stdout = %q, want 'already tracked'", out)
+		}
+	})
+}
+
+func TestTrack_Developer_ErrorOnUnrecognizedBranch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+
+	// Create a branch with no git-zf naming convention.
+	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-b", "my-random-branch"); err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+
+	err := runTrack(ctx, rig.deps())
+
+	t.Run("returns error", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("expected error for unrecognized branch name, got nil")
+		}
+	})
+
+	t.Run("error mentions naming convention", func(t *testing.T) {
+		if !strings.Contains(err.Error(), "naming convention") {
+			t.Errorf("error = %v, want mention of naming convention", err)
+		}
+	})
+}
+
+func TestTrack_Reviewer_RegistersReviewBranch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+
+	// Simulate the developer having submitted for review: write an in_review ref.
+	featureSHA, shaErr := rig.client.ResolveRef("refs/heads/77@feat@my-feature")
+	if shaErr != nil {
+		t.Fatalf("ResolveRef: %v", shaErr)
+	}
+	ref := git.ReviewRef{
+		Status:     "in_review",
+		Round:      1,
+		FeatureSHA: featureSHA.String(),
+		CreatedAt:  "2026-06-20T10:00:00Z",
+	}
+	if _, err := rig.client.WriteReviewRef(ctx, "77", ref, ""); err != nil {
+		t.Fatalf("WriteReviewRef: %v", err)
+	}
+
+	// Reviewer creates branch manually (no git zf review start).
+	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-b", "77@review"); err != nil {
+		t.Fatalf("checkout review branch: %v", err)
+	}
+
+	err := runTrack(ctx, rig.deps())
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runTrack reviewer path: %v", err)
+		}
+	})
+
+	t.Run("review record exists in store", func(t *testing.T) {
+		latest, getErr := rig.store.GetLatestReview(ctx, "77")
+		if getErr != nil {
+			t.Fatalf("GetLatestReview: %v", getErr)
+		}
+		if latest == nil {
+			t.Fatal("expected review row, got nil")
+		}
+	})
+
+	t.Run("reviewer identity recorded", func(t *testing.T) {
+		latest, _ := rig.store.GetLatestReview(ctx, "77")
+		if latest != nil && latest.Reviewer == "" {
+			t.Error("reviewer identity not recorded")
+		}
+	})
+
+	t.Run("output mentions registered", func(t *testing.T) {
+		if out := rig.stdout.String(); !strings.Contains(out, "registered") {
+			t.Errorf("stdout = %q, want 'registered'", out)
+		}
+	})
+}
+
+func TestTrack_Reviewer_ErrorWhenNoRefExists(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+
+	// Checkout a review branch manually — but no review ref exists.
+	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-b", "77@review"); err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+
+	err := runTrack(ctx, rig.deps())
+
+	t.Run("returns error", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("expected error when no review ref exists, got nil")
+		}
 	})
 }

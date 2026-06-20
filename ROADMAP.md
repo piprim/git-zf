@@ -2,7 +2,7 @@
 
 ## Enhancement
 
-- vérifier qu'on fetch/merge origin/issue dans issue avant de merger pour ne pas oublier les potentielles revues de code.
+- `git zf review request` should ask to update the issue status in the tracker like `issue start` does.
 
 ### CODE SMELLS
 

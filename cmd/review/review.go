@@ -32,6 +32,7 @@ func (r Review) GetRootCmd() *cobra.Command {
 		r.getFetchCmd(),
 		r.getSyncCmd(),
 		r.getGuardCmd(),
+		TrackCmd(r.appConfig),
 	)
 
 	return cmd

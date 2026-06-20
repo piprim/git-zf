@@ -35,6 +35,8 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 	}
 	if len(branches) == 0 {
 		fmt.Fprintln(deps.client.IO().Out, "No in-progress branches to submit for review.")
+		fmt.Fprintln(deps.client.IO().Out, "Tip: run 'git zf issue track'.")
+
 		return nil
 	}
 
