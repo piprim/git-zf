@@ -82,6 +82,14 @@ const (
 // uses it to skip post-merge bookkeeping while still exiting cleanly.
 var errFastForwardDeferred = errors.New("commit created, fast-forward deferred")
 
+// ErrBranchLockedForReview is returned by reviewPreflight when the branch is
+// locked because a review is in progress. Use errors.Is to detect it.
+var ErrBranchLockedForReview = errors.New("branch locked for review")
+
+// ErrReviewChangesRequested is returned by reviewPreflight when the reviewer
+// has requested changes. Use errors.Is to detect it.
+var ErrReviewChangesRequested = errors.New("reviewer requested changes")
+
 // mergeContext bundles inputs for doMerge / doSquashCommit so each helper
 // stays under the revive argument-limit while keeping inputs immutable.
 type mergeContext struct {
@@ -134,12 +142,45 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return nil
 	}
 
+	if err := reviewPreflight(ctx, deps, picked); err != nil {
+		return err
+	}
+
 	base := deps.cfg.Branch.Base
 	if base == "" {
 		base, err = deps.client.DefaultBaseBranch()
 		if err != nil {
 			return fmt.Errorf("detect base branch: %w", err)
 		}
+	}
+
+	// Sub-task: redirect merge target to parent integration branch.
+	if parentSlug, err := deps.store.GetParentIssue(ctx, picked.IssueSlug); err != nil {
+		return fmt.Errorf("check parent issue: %w", err)
+	} else if parentSlug != "" {
+		parentBranches, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
+		if err != nil {
+			return fmt.Errorf("list branches for parent %q: %w", parentSlug, err)
+		}
+		for _, b := range parentBranches {
+			if b.IssueSlug == parentSlug {
+				base = b.BranchName
+				break
+			}
+		}
+	}
+
+	// Parent issue: block close until all children are merged.
+	if allDone, err := deps.store.ChildrenAllMerged(ctx, picked.IssueSlug); err != nil {
+		return fmt.Errorf("check children: %w", err)
+	} else if !allDone {
+		children, listErr := deps.store.ListChildIssues(ctx, picked.IssueSlug)
+		if listErr != nil {
+			return fmt.Errorf("issue %q has open sub-tasks (list unavailable: %w) — close all sub-tasks before closing the parent",
+				picked.IssueSlug, listErr)
+		}
+		return fmt.Errorf("issue %q has open sub-tasks: %v — close all sub-tasks before closing the parent",
+			picked.IssueSlug, children)
 	}
 
 	mc := mergeContext{
@@ -172,6 +213,57 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
+
+	return nil
+}
+
+// reviewPreflight checks whether the issue has an active review. Returns an
+// error if close should be refused. When status is approved and the review
+// branch has reviewer commits, it fast-forwards the feature branch to
+// incorporate them and cleans up the review branch and ref.
+func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRow) error {
+	latest, err := deps.store.GetLatestReview(ctx, picked.IssueSlug)
+	if err != nil {
+		return fmt.Errorf("check review status: %w", err)
+	}
+
+	if latest == nil {
+		return nil // no review record — proceed
+	}
+
+	switch latest.Status {
+	case store.ReviewStatusInReview:
+		return fmt.Errorf(
+			"branch %q is locked for review (issue %q, round %d) — awaiting reviewer decision.\n"+
+				"Run `git zf review list` to check review status: %w",
+			picked.BranchName, picked.IssueSlug, latest.Round, ErrBranchLockedForReview)
+
+	case store.ReviewStatusChangesRequested:
+		return fmt.Errorf(
+			"reviewer requested changes on issue %q (round %d).\n"+
+				"Address feedback and run `git zf review request %s` for round %d: %w",
+			picked.IssueSlug, latest.Round, picked.IssueSlug, latest.Round+1, ErrReviewChangesRequested)
+
+	case store.ReviewStatusApproved:
+		reviewBranch := picked.IssueSlug + "@review"
+		if exists, _ := deps.client.BranchExists(reviewBranch); exists {
+			n, countErr := deps.client.CommitsAhead(ctx, reviewBranch, picked.BranchName)
+			if countErr == nil && n > 0 {
+				fmt.Fprintf(deps.client.IO().Out,
+					"Incorporating %d reviewer commit(s) from %s into %s...\n",
+					n, reviewBranch, picked.BranchName)
+				if err := deps.client.FastForwardOnly(ctx, reviewBranch, picked.BranchName); err != nil {
+					return fmt.Errorf("fast-forward %s to %s: %w", picked.BranchName, reviewBranch, err)
+				}
+			}
+			if err := deps.client.DeleteLocalBranch(ctx, reviewBranch, true); err != nil {
+				fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
+			}
+			_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
+			_ = deps.client.DeleteReviewRef(ctx, picked.IssueSlug)
+		}
+		return nil
+	}
 
 	return nil
 }

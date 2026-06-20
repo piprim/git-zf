@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -42,6 +43,27 @@ type Branch struct {
 	StatusID  int64
 	CreatedAt time.Time
 	MergedAt  *time.Time
+}
+
+// ReviewStatus is the typed status of a review round in the reviews table.
+type ReviewStatus string
+
+const (
+	ReviewStatusInReview         ReviewStatus = "in_review"
+	ReviewStatusApproved         ReviewStatus = "approved"
+	ReviewStatusChangesRequested ReviewStatus = "changes_requested"
+)
+
+// ReviewRow is one round of review from the reviews table.
+type ReviewRow struct {
+	ID         int64
+	IssueSlug  string
+	Round      int
+	Reviewer   string
+	Status     ReviewStatus
+	HasCommits bool
+	CreatedAt  time.Time
+	ResolvedAt *time.Time
 }
 
 // BranchStatus is the typed string representation of the statuses table.
@@ -448,6 +470,273 @@ func (s *Store) InsertCommandHistory(ctx context.Context, command string, payloa
 	}
 
 	return nil
+}
+
+// InsertReview opens a new review round for issueSlug. The round number is
+// one greater than the highest existing round for that slug (or 1 if none).
+// The SELECT MAX + INSERT is wrapped in a transaction so the round counter
+// is incremented atomically.
+func (s *Store) InsertReview(ctx context.Context, issueSlug, reviewer string) (*ReviewRow, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var maxRound int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(round), 0) FROM reviews WHERE issue_slug = ?`, issueSlug,
+	).Scan(&maxRound); err != nil {
+		return nil, fmt.Errorf("get max round: %w", err)
+	}
+
+	round := maxRound + 1
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO reviews (issue_slug, round, reviewer, status, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		issueSlug, round, reviewer, string(ReviewStatusInReview), now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert review: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("last insert id: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit tx: %w", err)
+	}
+
+	createdAt, _ := parseSQLiteTime(now)
+
+	return &ReviewRow{
+		ID:        id,
+		IssueSlug: issueSlug,
+		Round:     round,
+		Reviewer:  reviewer,
+		Status:    ReviewStatusInReview,
+		CreatedAt: createdAt,
+	}, nil
+}
+
+// GetLatestReview returns the most recent review row for issueSlug, or nil if none.
+func (s *Store) GetLatestReview(ctx context.Context, issueSlug string) (*ReviewRow, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, issue_slug, round, reviewer, status, has_commits, created_at, resolved_at
+		 FROM reviews WHERE issue_slug = ? ORDER BY round DESC LIMIT 1`,
+		issueSlug,
+	)
+	return scanReviewRow(row)
+}
+
+func scanReviewRow(row *sql.Row) (*ReviewRow, error) {
+	var r ReviewRow
+	var createdAtStr string
+	var resolvedAtStr *string
+
+	err := row.Scan(&r.ID, &r.IssueSlug, &r.Round, &r.Reviewer,
+		(*string)(&r.Status), &r.HasCommits, &createdAtStr, &resolvedAtStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan review row: %w", err)
+	}
+
+	t, parseErr := parseSQLiteTime(createdAtStr)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse created_at: %w", parseErr)
+	}
+	r.CreatedAt = t
+
+	if resolvedAtStr != nil {
+		rt, parseErr := parseSQLiteTime(*resolvedAtStr)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse resolved_at: %w", parseErr)
+		}
+		r.ResolvedAt = &rt
+	}
+
+	return &r, nil
+}
+
+// UpdateReviewStatus sets the status, has_commits, and resolved_at of an existing review row.
+func (s *Store) UpdateReviewStatus(ctx context.Context, id int64, status ReviewStatus, hasCommits bool) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	hasCommitsInt := 0
+	if hasCommits {
+		hasCommitsInt = 1
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE reviews SET status = ?, has_commits = ?, resolved_at = ? WHERE id = ?`,
+		string(status), hasCommitsInt, now, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update review status: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("update review status: no review with id %d", id)
+	}
+
+	return nil
+}
+
+// UpdateReviewerIdentity sets the reviewer field on an existing review row.
+func (s *Store) UpdateReviewerIdentity(ctx context.Context, id int64, reviewer string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE reviews SET reviewer = ? WHERE id = ?`, reviewer, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update reviewer identity: %w", err)
+	}
+	return nil
+}
+
+// ListReviews returns all review rounds for issueSlug, newest first.
+func (s *Store) ListReviews(ctx context.Context, issueSlug string) ([]ReviewRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, issue_slug, round, reviewer, status, has_commits, created_at, resolved_at
+		 FROM reviews WHERE issue_slug = ? ORDER BY round DESC`,
+		issueSlug,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list reviews query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []ReviewRow
+	for rows.Next() {
+		var r ReviewRow
+		var createdAtStr string
+		var resolvedAtStr *string
+
+		if err := rows.Scan(&r.ID, &r.IssueSlug, &r.Round, &r.Reviewer,
+			(*string)(&r.Status), &r.HasCommits, &createdAtStr, &resolvedAtStr); err != nil {
+			return nil, fmt.Errorf("scan review row: %w", err)
+		}
+
+		t, parseErr := parseSQLiteTime(createdAtStr)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse created_at: %w", parseErr)
+		}
+		r.CreatedAt = t
+
+		if resolvedAtStr != nil {
+			rt, _ := parseSQLiteTime(*resolvedAtStr)
+			r.ResolvedAt = &rt
+		}
+
+		result = append(result, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate reviews: %w", err)
+	}
+
+	if result == nil {
+		result = []ReviewRow{}
+	}
+	return result, nil
+}
+
+// InsertIssueRelation records a parent-child relationship between two issue slugs.
+// Silently succeeds if the relation already exists (idempotent).
+func (s *Store) InsertIssueRelation(ctx context.Context, parentSlug, childSlug string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO issue_relations (parent_issue_slug, child_issue_slug) VALUES (?, ?)`,
+		parentSlug, childSlug,
+	)
+	if err != nil {
+		return fmt.Errorf("insert issue relation: %w", err)
+	}
+	return nil
+}
+
+// GetParentIssue returns the parent issue slug for childSlug, or "" if it has no parent.
+func (s *Store) GetParentIssue(ctx context.Context, childSlug string) (string, error) {
+	var parent string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT parent_issue_slug FROM issue_relations WHERE child_issue_slug = ?`,
+		childSlug,
+	).Scan(&parent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get parent issue: %w", err)
+	}
+	return parent, nil
+}
+
+// ListChildIssues returns the slugs of all direct children of parentSlug.
+func (s *Store) ListChildIssues(ctx context.Context, parentSlug string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT child_issue_slug FROM issue_relations WHERE parent_issue_slug = ?`,
+		parentSlug,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list children query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, fmt.Errorf("scan child slug: %w", err)
+		}
+		result = append(result, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate children: %w", err)
+	}
+	return result, nil
+}
+
+// ChildrenAllMerged reports whether every branch of every child issue of
+// parentSlug has BranchStatusMerged. A child with no branches (not yet started)
+// is treated as not merged. Returns true when parentSlug has no children.
+//
+// Uses a COUNT query per child to handle issues with multiple branches
+// (e.g. created with --variant): all branches must be merged, not just one.
+func (s *Store) ChildrenAllMerged(ctx context.Context, parentSlug string) (bool, error) {
+	children, err := s.ListChildIssues(ctx, parentSlug)
+	if err != nil {
+		return false, err
+	}
+	if len(children) == 0 {
+		return true, nil
+	}
+
+	for _, child := range children {
+		var total, nonMerged int
+		err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*),
+			        COALESCE(SUM(CASE WHEN st.name != 'merged' THEN 1 ELSE 0 END), 0)
+			 FROM branches b
+			 JOIN issues i ON b.issue_id = i.id
+			 JOIN statuses st ON b.status_id = st.id
+			 WHERE i.id_slug = ?`,
+			child,
+		).Scan(&total, &nonMerged)
+		if err != nil {
+			return false, fmt.Errorf("check child %q branches: %w", child, err)
+		}
+		if total == 0 || nonMerged > 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // ListCommandHistory returns the most recent limit entries for command, newest-first.

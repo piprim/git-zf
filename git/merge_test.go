@@ -1153,3 +1153,54 @@ func TestAbortMerge_noActiveMerge(t *testing.T) {
 		t.Error("AbortMerge with no active merge: expected error, got nil")
 	}
 }
+
+func TestMergeForward(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Create integration branch with one extra commit.
+	run("checkout", "-b", "integration")
+	run("commit", "--allow-empty", "-m", "integration base")
+
+	// Create sub-task branch from initial main commit (before integration commit).
+	run("checkout", "main")
+	run("checkout", "-b", "subtask")
+	run("commit", "--allow-empty", "-m", "subtask work")
+
+	// Now integration has a commit subtask doesn't — subtask has drifted.
+	t.Run("MergeForward merges source into target without force-push", func(t *testing.T) {
+		if err := client.MergeForward(t.Context(), "integration", "subtask"); err != nil {
+			t.Fatalf("MergeForward: %v", err)
+		}
+
+		// After merge, subtask should have 1 commit ahead of integration
+		// (the merge commit itself, since integration's history is now included).
+		n, err := client.CommitsAhead(t.Context(), "subtask", "integration")
+		if err != nil {
+			t.Fatalf("CommitsAhead post-merge: %v", err)
+		}
+		if n == 0 {
+			t.Error("expected subtask to have at least the merge commit ahead of integration")
+		}
+	})
+
+	t.Run("MergeForward leaves working tree on target branch", func(t *testing.T) {
+		current, err := client.CurrentBranch()
+		if err != nil {
+			t.Fatalf("CurrentBranch: %v", err)
+		}
+		if current != "subtask" {
+			t.Errorf("CurrentBranch: got %q, want %q", current, "subtask")
+		}
+	})
+}

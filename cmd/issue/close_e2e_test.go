@@ -468,3 +468,57 @@ func TestClose_ConflictAborts(t *testing.T) {
 		}
 	})
 }
+
+func TestClose_ReviewPreflight(t *testing.T) {
+	t.Parallel()
+
+	t.Run("blocked when branch is in_review", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newCloseRig(t)
+		if _, err := rig.store.InsertReview(t.Context(), "ABC-1", "alice"); err != nil {
+			t.Fatalf("InsertReview: %v", err)
+		}
+
+		p := &scriptedPrompter{Branch: rig.pickedBranchRow()}
+		err := runClose(t.Context(), rig.deps(), p)
+
+		t.Run("returns error", func(t *testing.T) {
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+		t.Run("error wraps ErrBranchLockedForReview", func(t *testing.T) {
+			if !errors.Is(err, ErrBranchLockedForReview) {
+				t.Errorf("expected ErrBranchLockedForReview, got: %v", err)
+			}
+		})
+	})
+
+	t.Run("blocked when changes_requested", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newCloseRig(t)
+		row, err := rig.store.InsertReview(t.Context(), "ABC-1", "alice")
+		if err != nil {
+			t.Fatalf("InsertReview: %v", err)
+		}
+		if err := rig.store.UpdateReviewStatus(t.Context(), row.ID, store.ReviewStatusChangesRequested, false); err != nil {
+			t.Fatalf("UpdateReviewStatus: %v", err)
+		}
+
+		p := &scriptedPrompter{Branch: rig.pickedBranchRow()}
+		err = runClose(t.Context(), rig.deps(), p)
+
+		t.Run("returns error", func(t *testing.T) {
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+		t.Run("error wraps ErrReviewChangesRequested", func(t *testing.T) {
+			if !errors.Is(err, ErrReviewChangesRequested) {
+				t.Errorf("expected ErrReviewChangesRequested, got: %v", err)
+			}
+		})
+	})
+}

@@ -10,8 +10,10 @@ import (
 	"github.com/piprim/git-zf/cmd/commit"
 	"github.com/piprim/git-zf/cmd/completion"
 	cfgcmd "github.com/piprim/git-zf/cmd/config"
+	init_cmd "github.com/piprim/git-zf/cmd/init"
 	"github.com/piprim/git-zf/cmd/install"
 	"github.com/piprim/git-zf/cmd/issue"
+	"github.com/piprim/git-zf/cmd/review"
 	"github.com/piprim/git-zf/cmd/uninstall"
 	"github.com/piprim/git-zf/cmd/version"
 	"github.com/piprim/git-zf/config"
@@ -66,6 +68,8 @@ func GetRootCmd() (*cobra.Command, error) {
 	uin := uninstall.New(appConfig)
 	vs := version.New(Version, Name)
 	cf := cfgcmd.New(appConfig)
+	rv := review.New(appConfig)
+	it := init_cmd.New()
 
 	rootCmd.AddCommand(
 		cp.GetRootCmd(),
@@ -76,6 +80,8 @@ func GetRootCmd() (*cobra.Command, error) {
 		in.GetRootCmd(),
 		uin.GetRootCmd(),
 		cf.GetRootCmd(),
+		rv.GetRootCmd(),
+		it.GetRootCmd(),
 	)
 
 	return rootCmd, nil

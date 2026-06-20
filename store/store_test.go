@@ -594,6 +594,233 @@ func TestListCommandHistory(t *testing.T) {
 	})
 }
 
+func TestReviewStore(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	// Seed an issue + branch so subsequent tests can reference a real slug.
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&Issue{IDSlug: "42", Title: "test issue", StatusID: StatusIDInProgress},
+		&Branch{Name: "42@feature@test", Type: "feature", StatusID: StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+
+	t.Run("InsertReview returns round 1 for new issue", func(t *testing.T) {
+		row, err := s.InsertReview(t.Context(), "42", "alice <alice@example.com>")
+		if err != nil {
+			t.Fatalf("InsertReview: %v", err)
+		}
+		if row.Round != 1 {
+			t.Errorf("round: got %d, want 1", row.Round)
+		}
+		if row.Status != ReviewStatusInReview {
+			t.Errorf("status: got %q, want %q", row.Status, ReviewStatusInReview)
+		}
+		if row.IssueSlug != "42" {
+			t.Errorf("IssueSlug: got %q, want %q", row.IssueSlug, "42")
+		}
+	})
+
+	t.Run("GetLatestReview returns most recent row", func(t *testing.T) {
+		got, err := s.GetLatestReview(t.Context(), "42")
+		if err != nil {
+			t.Fatalf("GetLatestReview: %v", err)
+		}
+		if got == nil {
+			t.Fatal("got nil, want review row")
+		}
+		if got.IssueSlug != "42" {
+			t.Errorf("IssueSlug: got %q, want %q", got.IssueSlug, "42")
+		}
+	})
+
+	t.Run("GetLatestReview returns nil for unknown issue", func(t *testing.T) {
+		got, err := s.GetLatestReview(t.Context(), "999")
+		if err != nil {
+			t.Fatalf("GetLatestReview: %v", err)
+		}
+		if got != nil {
+			t.Errorf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("UpdateReviewStatus transitions to approved", func(t *testing.T) {
+		row, _ := s.GetLatestReview(t.Context(), "42")
+		if err := s.UpdateReviewStatus(t.Context(), row.ID, ReviewStatusApproved, false); err != nil {
+			t.Fatalf("UpdateReviewStatus: %v", err)
+		}
+		updated, _ := s.GetLatestReview(t.Context(), "42")
+		if updated.Status != ReviewStatusApproved {
+			t.Errorf("status: got %q, want %q", updated.Status, ReviewStatusApproved)
+		}
+		if updated.ResolvedAt == nil {
+			t.Error("resolved_at should be set after status update")
+		}
+	})
+
+	t.Run("UpdateReviewStatus sets has_commits flag", func(t *testing.T) {
+		row, _ := s.GetLatestReview(t.Context(), "42")
+		if err := s.UpdateReviewStatus(t.Context(), row.ID, ReviewStatusApproved, true); err != nil {
+			t.Fatalf("UpdateReviewStatus with has_commits: %v", err)
+		}
+		updated, _ := s.GetLatestReview(t.Context(), "42")
+		if !updated.HasCommits {
+			t.Error("HasCommits should be true")
+		}
+	})
+
+	t.Run("UpdateReviewStatus returns error for unknown id", func(t *testing.T) {
+		if err := s.UpdateReviewStatus(t.Context(), 9999, ReviewStatusApproved, false); err == nil {
+			t.Error("expected error for missing review id, got nil")
+		}
+	})
+
+	t.Run("UpdateReviewerIdentity sets reviewer field", func(t *testing.T) {
+		row, _ := s.GetLatestReview(t.Context(), "42")
+		if err := s.UpdateReviewerIdentity(t.Context(), row.ID, "bob <bob@example.com>"); err != nil {
+			t.Fatalf("UpdateReviewerIdentity: %v", err)
+		}
+		updated, _ := s.GetLatestReview(t.Context(), "42")
+		if updated.Reviewer != "bob <bob@example.com>" {
+			t.Errorf("Reviewer: got %q, want %q", updated.Reviewer, "bob <bob@example.com>")
+		}
+	})
+
+	t.Run("InsertReview increments round on second call", func(t *testing.T) {
+		row, err := s.InsertReview(t.Context(), "42", "carol <carol@example.com>")
+		if err != nil {
+			t.Fatalf("InsertReview round 2: %v", err)
+		}
+		if row.Round != 2 {
+			t.Errorf("round: got %d, want 2", row.Round)
+		}
+	})
+
+	t.Run("ListReviews returns all rounds newest first", func(t *testing.T) {
+		rows, err := s.ListReviews(t.Context(), "42")
+		if err != nil {
+			t.Fatalf("ListReviews: %v", err)
+		}
+		if len(rows) != 2 {
+			t.Fatalf("len: got %d, want 2", len(rows))
+		}
+		if rows[0].Round != 2 {
+			t.Errorf("first row round: got %d, want 2 (newest first)", rows[0].Round)
+		}
+	})
+
+	t.Run("ListReviews returns empty slice for unknown issue", func(t *testing.T) {
+		rows, err := s.ListReviews(t.Context(), "unknown-99")
+		if err != nil {
+			t.Fatalf("ListReviews: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Errorf("expected empty slice, got %d rows", len(rows))
+		}
+	})
+}
+
+func TestIssueRelationsStore(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+
+	t.Run("InsertIssueRelation links parent to children", func(t *testing.T) {
+		if err := s.InsertIssueRelation(t.Context(), "10", "10.1"); err != nil {
+			t.Fatalf("InsertIssueRelation child 1: %v", err)
+		}
+		if err := s.InsertIssueRelation(t.Context(), "10", "10.2"); err != nil {
+			t.Fatalf("InsertIssueRelation child 2: %v", err)
+		}
+	})
+
+	t.Run("InsertIssueRelation is idempotent", func(t *testing.T) {
+		if err := s.InsertIssueRelation(t.Context(), "10", "10.1"); err != nil {
+			t.Fatalf("duplicate InsertIssueRelation should not error: %v", err)
+		}
+	})
+
+	t.Run("GetParentIssue returns parent slug", func(t *testing.T) {
+		parent, err := s.GetParentIssue(t.Context(), "10.1")
+		if err != nil {
+			t.Fatalf("GetParentIssue: %v", err)
+		}
+		if parent != "10" {
+			t.Errorf("got %q, want %q", parent, "10")
+		}
+	})
+
+	t.Run("GetParentIssue returns empty string for root issue", func(t *testing.T) {
+		parent, err := s.GetParentIssue(t.Context(), "99")
+		if err != nil {
+			t.Fatalf("GetParentIssue for unknown slug: %v", err)
+		}
+		if parent != "" {
+			t.Errorf("expected empty, got %q", parent)
+		}
+	})
+
+	t.Run("ListChildIssues returns all children", func(t *testing.T) {
+		children, err := s.ListChildIssues(t.Context(), "10")
+		if err != nil {
+			t.Fatalf("ListChildIssues: %v", err)
+		}
+		if len(children) != 2 {
+			t.Errorf("len: got %d, want 2", len(children))
+		}
+	})
+
+	t.Run("ListChildIssues returns nil for childless issue", func(t *testing.T) {
+		children, err := s.ListChildIssues(t.Context(), "999")
+		if err != nil {
+			t.Fatalf("ListChildIssues for unknown parent: %v", err)
+		}
+		if len(children) != 0 {
+			t.Errorf("expected empty, got %d children", len(children))
+		}
+	})
+
+	t.Run("ChildrenAllMerged returns true when no children", func(t *testing.T) {
+		ok, err := s.ChildrenAllMerged(t.Context(), "orphan")
+		if err != nil {
+			t.Fatalf("ChildrenAllMerged: %v", err)
+		}
+		if !ok {
+			t.Error("expected true for issue with no children")
+		}
+	})
+
+	t.Run("ChildrenAllMerged returns false when child branch not started", func(t *testing.T) {
+		// 10.1 exists in issue_relations but has no branch in branches table.
+		ok, err := s.ChildrenAllMerged(t.Context(), "10")
+		if err != nil {
+			t.Fatalf("ChildrenAllMerged: %v", err)
+		}
+		if ok {
+			t.Error("expected false — child has no branch (not merged)")
+		}
+	})
+
+	t.Run("ChildrenAllMerged returns false when child branch in_progress", func(t *testing.T) {
+		if err := s.InsertIssueWithBranch(t.Context(),
+			&Issue{IDSlug: "10.1", Title: "sub-task", StatusID: StatusIDInProgress},
+			&Branch{Name: "10.1@feature@sub-task", Type: "feature", StatusID: StatusIDInProgress},
+		); err != nil {
+			t.Fatalf("seed child branch: %v", err)
+		}
+
+		ok, err := s.ChildrenAllMerged(t.Context(), "10")
+		if err != nil {
+			t.Fatalf("ChildrenAllMerged: %v", err)
+		}
+		if ok {
+			t.Error("expected false — child branch is in_progress, not merged")
+		}
+	})
+}
+
 func TestMigration0004BranchesNamePK(t *testing.T) {
 	t.Parallel()
 

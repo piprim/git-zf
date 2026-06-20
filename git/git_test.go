@@ -1407,3 +1407,70 @@ func writeFile(t *testing.T, dir, name, content string) {
 		t.Fatalf("writeFile %s: %v", name, err)
 	}
 }
+
+func TestCommitsAhead(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	t.Run("returns 0 when branches are equal", func(t *testing.T) {
+		n, err := client.CommitsAhead(t.Context(), "main", "main")
+		if err != nil {
+			t.Fatalf("CommitsAhead: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("got %d, want 0", n)
+		}
+	})
+
+	t.Run("returns count of extra commits on feature branch", func(t *testing.T) {
+		run("checkout", "-b", "feature/99")
+		run("commit", "--allow-empty", "-m", "commit A")
+		run("commit", "--allow-empty", "-m", "commit B")
+
+		n, err := client.CommitsAhead(t.Context(), "feature/99", "main")
+		if err != nil {
+			t.Fatalf("CommitsAhead: %v", err)
+		}
+		if n != 2 {
+			t.Errorf("got %d, want 2", n)
+		}
+		run("checkout", "main")
+	})
+
+	t.Run("returns 0 when base is ahead of branch", func(t *testing.T) {
+		n, err := client.CommitsAhead(t.Context(), "main", "feature/99")
+		if err != nil {
+			t.Fatalf("CommitsAhead: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("main is not ahead of feature/99 in this direction; got %d, want 0", n)
+		}
+	})
+}
+
+func TestConfigUser(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newDiskRepo(t)
+
+	t.Run("returns identity from git config", func(t *testing.T) {
+		identity, err := client.ConfigUser(t.Context())
+		if err != nil {
+			t.Fatalf("ConfigUser: %v", err)
+		}
+		// newDiskRepo sets user.name="Test User" and user.email="test@test.com"
+		if identity != "Test User <test@test.com>" {
+			t.Errorf("got %q, want %q", identity, "Test User <test@test.com>")
+		}
+	})
+}

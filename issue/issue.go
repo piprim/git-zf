@@ -23,8 +23,9 @@ type Prompter interface {
 }
 
 type IssueStartFlags struct {
-	TrackerFirst bool
-	Variant      string
+	TrackerFirst    bool
+	Variant         string
+	ParentIssueSlug string // non-empty when this is a sub-task; value is the parent's IssueSlug
 }
 
 // Issue is the representation of a work item.

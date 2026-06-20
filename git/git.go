@@ -480,6 +480,83 @@ func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
 	return merged, nil
 }
 
+// CommitsAhead returns the number of commits in branchName that are not reachable
+// from baseBranch. Uses `git rev-list --count <baseBranch>..<branchName>`.
+func (c *Client) CommitsAhead(ctx context.Context, branchName, baseBranch string) (int, error) {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return 0, fmt.Errorf("working tree root: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", root,
+		"rev-list", "--count", baseBranch+".."+branchName)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("rev-list --count %s..%s: %w", baseBranch, branchName, err)
+	}
+
+	var n int
+	if _, err := fmt.Sscan(strings.TrimSpace(string(out)), &n); err != nil {
+		return 0, fmt.Errorf("parse rev-list count %q: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	return n, nil
+}
+
+// DeleteRemoteBranch deletes branchName on the configured remote.
+// No-op when no remote is configured.
+func (c *Client) DeleteRemoteBranch(ctx context.Context, branchName string) error {
+	remote, err := c.Remote()
+	if err != nil {
+		return fmt.Errorf("resolve remote: %w", err)
+	}
+	if remote == "" {
+		return nil
+	}
+
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	if err := c.runInteractive(ctx, root, "push", remote, "--delete", branchName); err != nil {
+		return fmt.Errorf("delete remote branch %s: %w", branchName, err)
+	}
+
+	return nil
+}
+
+// RunGitAt runs an arbitrary git command in dir with the client's IO streams.
+// Exported for review subcommands that need low-level git operations.
+func (c *Client) RunGitAt(ctx context.Context, dir string, args ...string) error {
+	return c.runInteractive(ctx, dir, args...)
+}
+
+// ConfigUser returns the git config user identity as "Name <email>".
+// Returns an empty string when not configured.
+func (c *Client) ConfigUser(ctx context.Context) (string, error) {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return "", fmt.Errorf("working tree root: %w", err)
+	}
+
+	nameCmd := exec.CommandContext(ctx, "git", "-C", root, "config", "user.name")
+	nameOut, err := nameCmd.Output()
+	if err != nil {
+		return "", nil
+	}
+
+	emailCmd := exec.CommandContext(ctx, "git", "-C", root, "config", "user.email")
+	emailOut, _ := emailCmd.Output()
+
+	name := strings.TrimSpace(string(nameOut))
+	email := strings.TrimSpace(string(emailOut))
+	if email != "" {
+		return name + " <" + email + ">", nil
+	}
+	return name, nil
+}
+
 // BranchExists returns true if refs/heads/<name> resolves locally. It does
 // not consult remotes — see resolveBranchConflict for the rationale (no
 // fetch on the happy path of `issue start`).

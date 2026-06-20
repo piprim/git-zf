@@ -278,6 +278,27 @@ func (c *Client) ResetHard(ctx context.Context, target string) error {
 	return nil
 }
 
+// MergeForward checks out targetBranch and runs `git merge --no-edit sourceBranch`,
+// creating a merge commit. Used by `review sync` to integrate a parent integration
+// branch into a drifted sub-task branch without rewriting history (no force-push needed).
+// Returns a wrapped error on conflict; the caller should run AbortMerge to clean up.
+func (c *Client) MergeForward(ctx context.Context, sourceBranch, targetBranch string) error {
+	if err := c.Checkout(ctx, targetBranch); err != nil {
+		return fmt.Errorf("checkout %s: %w", targetBranch, err)
+	}
+
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	if err := c.runInteractive(ctx, root, "merge", "--no-edit", sourceBranch); err != nil {
+		return fmt.Errorf("merge --no-edit %s: %w", sourceBranch, err)
+	}
+
+	return nil
+}
+
 // parseConflictFiles extracts file paths from git merge conflict output lines.
 // Each conflict line looks like: "CONFLICT (content): Merge conflict in path/to/file.go"
 func parseConflictFiles(output string) []string {

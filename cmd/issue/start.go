@@ -75,6 +75,8 @@ checked out from the default base branch. Branch state is saved to .git/git-zf.d
 
 	cmd.Flags().String("variant", "",
 		"create a parallel branch for the same issue (e.g. --variant=spike)")
+	cmd.Flags().String("parent", "",
+		"parent issue slug — creates this as a sub-task branching from the parent integration branch")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		variant, err := cmd.Flags().GetString("variant")
@@ -82,7 +84,12 @@ checked out from the default base branch. Branch state is saved to .git/git-zf.d
 			return fmt.Errorf("read --variant flag: %w", err)
 		}
 
-		return i.startRunE(cmd, variant)
+		parent, err := cmd.Flags().GetString("parent")
+		if err != nil {
+			return fmt.Errorf("read --parent flag: %w", err)
+		}
+
+		return i.startRunE(cmd, variant, parent)
 	}
 
 	return cmd
@@ -91,8 +98,8 @@ checked out from the default base branch. Branch state is saved to .git/git-zf.d
 // startRunE drives the tracker-first issue-start flow. variant carries the
 // --variant flag value; the interactive dispatcher (runE) passes "" because
 // the issue root command defines no such flag.
-func (i Issue) startRunE(cmd *cobra.Command, variant string) error {
-	flags := issue.IssueStartFlags{TrackerFirst: true, Variant: variant}
+func (i Issue) startRunE(cmd *cobra.Command, variant, parentSlug string) error {
+	flags := issue.IssueStartFlags{TrackerFirst: true, Variant: variant, ParentIssueSlug: parentSlug}
 
 	deps, err := BuildStartDeps(cmd, i.appConfig, flags)
 	if err != nil {
@@ -200,7 +207,19 @@ func resolveUseWorktree(ctx context.Context, deps StartDeps, prompter StartPromp
 }
 
 func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
-	b, base, err := prepareBranch(deps, picked)
+	// Open a single store connection shared by prepareBranch (parent lookup)
+	// and persistParentRelation, avoiding two separate connections.
+	var parentStore *store.Store
+	if deps.Flags.ParentIssueSlug != "" {
+		var err error
+		parentStore, err = store.OpenRepo(ctx)
+		if err != nil {
+			return fmt.Errorf("open store for parent lookup: %w", err)
+		}
+		defer func() { _ = parentStore.Close() }()
+	}
+
+	b, base, err := prepareBranch(ctx, deps, picked, parentStore)
 	if err != nil {
 		return err
 	}
@@ -241,6 +260,12 @@ func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompte
 		fmt.Fprintf(deps.Client.IO().Err, "warning: branch created but store record failed: %v\n", err)
 	}
 
+	if deps.Flags.ParentIssueSlug != "" && parentStore != nil {
+		if err := parentStore.InsertIssueRelation(ctx, deps.Flags.ParentIssueSlug, b.IssueID()); err != nil {
+			fmt.Fprintf(deps.Client.IO().Err, "warning: record parent relation: %v\n", err)
+		}
+	}
+
 	fmt.Fprintf(deps.Client.IO().Out, "Switched to new branch %q (based on %q)\n", branchName, base)
 
 	if picked.TrackerType != "" {
@@ -251,7 +276,17 @@ func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompte
 }
 
 func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
-	b, base, err := prepareBranch(deps, picked)
+	var parentStore *store.Store
+	if deps.Flags.ParentIssueSlug != "" {
+		var err error
+		parentStore, err = store.OpenRepo(ctx)
+		if err != nil {
+			return fmt.Errorf("open store for parent lookup: %w", err)
+		}
+		defer func() { _ = parentStore.Close() }()
+	}
+
+	b, base, err := prepareBranch(ctx, deps, picked, parentStore)
 	if err != nil {
 		return err
 	}
@@ -304,6 +339,12 @@ func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPromp
 		fmt.Fprintf(deps.Client.IO().Err, "warning: worktree created but store record failed: %v\n", err)
 	}
 
+	if deps.Flags.ParentIssueSlug != "" && parentStore != nil {
+		if err := parentStore.InsertIssueRelation(ctx, deps.Flags.ParentIssueSlug, b.IssueID()); err != nil {
+			fmt.Fprintf(deps.Client.IO().Err, "warning: record parent relation: %v\n", err)
+		}
+	}
+
 	fmt.Fprintf(deps.Client.IO().Out, "Created worktree %q at %q (based on %q)\n", branchName, path, base)
 
 	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700"))
@@ -318,10 +359,26 @@ func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPromp
 
 // prepareBranch assembles the branch and resolves the base branch. Shared by
 // createBranchFlow and createWorktreeFlow.
-func prepareBranch(deps StartDeps, picked *issue.Issue) (b *branch.Branch, base string, err error) {
+//
+// When deps.Flags.ParentIssueSlug is set, parentStore (must be non-nil) is
+// queried to find the parent's in-progress branch, which becomes the base.
+func prepareBranch(ctx context.Context, deps StartDeps, picked *issue.Issue, parentStore *store.Store) (b *branch.Branch, base string, err error) {
 	b, err = branch.New(picked.ID, picked.Type, picked.Subject, deps.Flags.Variant)
 	if err != nil {
 		return nil, "", fmt.Errorf("assemble branch name: %w", err)
+	}
+
+	if deps.Flags.ParentIssueSlug != "" && parentStore != nil {
+		branches, err := parentStore.ListBranches(ctx, store.BranchStatusInProgress)
+		if err != nil {
+			return nil, "", fmt.Errorf("list branches for parent %q: %w", deps.Flags.ParentIssueSlug, err)
+		}
+		for _, br := range branches {
+			if br.IssueSlug == deps.Flags.ParentIssueSlug {
+				return b, br.BranchName, nil
+			}
+		}
+		return nil, "", fmt.Errorf("no in-progress branch found for parent issue %q", deps.Flags.ParentIssueSlug)
 	}
 
 	base = deps.Cfg.Branch.Base

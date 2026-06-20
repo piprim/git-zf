@@ -41,7 +41,7 @@ func (i Issue) runE(cmd *cobra.Command, args []string) error {
 	case tui.IssueActionNameStart:
 		// Interactive path: the issue root command defines no --variant flag,
 		// so pass an empty variant.
-		return i.startRunE(cmd, "")
+		return i.startRunE(cmd, "", "")
 	case tui.IssueActionNameList:
 		return i.issueListRunE(cmd, issueListFlags{})
 	case tui.IssueActionNameClose:

@@ -76,7 +76,7 @@ func TestStartRunE_InteractiveDispatch(t *testing.T) {
 	t.Run("startRunE on the root command does not read the undefined --variant flag", func(t *testing.T) {
 		t.Chdir(t.TempDir()) // a directory outside any git repo
 
-		err := i.startRunE(root, "")
+		err := i.startRunE(root, "", "")
 		if err == nil {
 			t.Fatal("expected an error outside a git repo, got nil")
 		}
