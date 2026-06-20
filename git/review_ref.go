@@ -149,6 +149,57 @@ func (c *Client) PushReviewRef(ctx context.Context, issueID, expectedOldSHA stri
 	return nil
 }
 
+// ListReviewRefs returns all locally available review refs as a map of
+// issueID → ReviewRef. Call FetchReviewRefs first to ensure the local
+// namespace is up to date. Does not require the issue to exist in the store.
+func (c *Client) ListReviewRefs(ctx context.Context) (map[string]*ReviewRef, error) {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return nil, fmt.Errorf("working tree root: %w", err)
+	}
+
+	// List all refs under refs/zf/reviews/ with their SHA.
+	cmd := exec.CommandContext(ctx, "git", "-C", root,
+		"for-each-ref", "--format=%(objectname) %(refname)", reviewRefPrefix)
+	out, err := cmd.Output()
+	if err != nil {
+		// No refs exist yet — return empty map, not an error.
+		return map[string]*ReviewRef{}, nil
+	}
+
+	result := make(map[string]*ReviewRef)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		sha := parts[0]
+		refName := parts[1] // e.g. refs/zf/reviews/X.1
+
+		issueID := strings.TrimPrefix(refName, reviewRefPrefix)
+		if issueID == "" {
+			continue
+		}
+
+		catCmd := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", sha)
+		blobOut, catErr := catCmd.Output()
+		if catErr != nil {
+			continue // skip malformed ref
+		}
+
+		var ref ReviewRef
+		if jsonErr := json.Unmarshal(blobOut, &ref); jsonErr != nil {
+			continue
+		}
+		result[issueID] = &ref
+	}
+
+	return result, nil
+}
+
 // DeleteReviewRef deletes refs/zf/reviews/<issueID> locally. If a remote is
 // configured, also attempts to delete it there (best-effort; errors are ignored).
 func (c *Client) DeleteReviewRef(ctx context.Context, issueID string) error {

@@ -31,17 +31,17 @@ func runReviewStartInteractive(ctx context.Context, deps reviewDeps, prompter Re
 		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
 	}
 
-	// Collect issue slugs with in_review refs by scanning the store.
-	branches, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
+	// Collect issue slugs directly from git refs — does not require the
+	// reviewer to have the branch registered in their local store.
+	allRefs, err := deps.client.ListReviewRefs(ctx)
 	if err != nil {
-		return fmt.Errorf("list branches: %w", err)
+		return fmt.Errorf("list review refs: %w", err)
 	}
 
 	var inReviewSlugs []string
-	for _, b := range branches {
-		ref, _, refErr := deps.client.ReadReviewRef(ctx, b.IssueSlug)
-		if refErr == nil && ref != nil && ref.Status == string(store.ReviewStatusInReview) {
-			inReviewSlugs = append(inReviewSlugs, b.IssueSlug)
+	for issueID, ref := range allRefs {
+		if ref.Status == string(store.ReviewStatusInReview) {
+			inReviewSlugs = append(inReviewSlugs, issueID)
 		}
 	}
 

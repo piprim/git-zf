@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// store is used indirectly via ReviewStatusInReview/Approved constants.
+
 func (r Review) getListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
@@ -30,23 +32,20 @@ func runReviewList(ctx context.Context, deps reviewDeps) error {
 		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
 	}
 
-	branches, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
+	// Read directly from git refs — works even when the reviewer's store is
+	// empty (fresh clone that never ran git zf issue start).
+	allRefs, err := deps.client.ListReviewRefs(ctx)
 	if err != nil {
-		return fmt.Errorf("list branches: %w", err)
+		return fmt.Errorf("list review refs: %w", err)
 	}
 
 	printed := 0
-	for _, b := range branches {
-		latest, err := deps.store.GetLatestReview(ctx, b.IssueSlug)
-		if err != nil || latest == nil {
+	for issueID, ref := range allRefs {
+		if ref.Status != string(store.ReviewStatusInReview) && ref.Status != string(store.ReviewStatusApproved) {
 			continue
 		}
-		if latest.Status != store.ReviewStatusInReview && latest.Status != store.ReviewStatusApproved {
-			continue
-		}
-
-		fmt.Fprintf(deps.client.IO().Out, "%-12s  %-30s  round %-2d  %s\n",
-			b.IssueSlug, b.BranchName, latest.Round, latest.Status)
+		fmt.Fprintf(deps.client.IO().Out, "%-12s  round %-2d  %s\n",
+			issueID, ref.Round, ref.Status)
 		printed++
 	}
 

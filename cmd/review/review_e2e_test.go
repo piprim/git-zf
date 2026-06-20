@@ -463,6 +463,122 @@ func TestReviewRefPush_LeaseCorrectness(t *testing.T) {
 	})
 }
 
+// TestReviewList_And_Start_WorkOnEmptyReviewerStore verifies the cross-machine
+// scenario: a reviewer on a fresh clone (empty git-zf store) can discover and
+// start a review using only git refs fetched from the remote.
+//
+// This exercises the core design requirement: "Any team member who runs git
+// fetch sees the current review state without needing access to another
+// developer's store."
+func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+
+	// ── Developer side ───────────────────────────────────────────────────────
+	devRig := newReviewE2ERigWithOrigin(t)
+
+	// Resolve origin from the dev rig.
+	remoteCmd := exec.CommandContext(ctx, "git", "-C", devRig.dir, "remote", "get-url", "origin")
+	remoteOut, err := remoteCmd.Output()
+	if err != nil {
+		t.Fatalf("get origin url: %v", err)
+	}
+	originDir = string(remoteOut[:len(remoteOut)-1])
+
+	// Developer checks out the feature branch and submits for review.
+	if err := devRig.client.RunGitAt(ctx, devRig.dir, "checkout", "77@feat@my-feature"); err != nil {
+		t.Fatalf("dev checkout feature branch: %v", err)
+	}
+	branches, _ := devRig.store.ListBranches(ctx, store.BranchStatusInProgress)
+	var picked store.BranchRow
+	for _, b := range branches {
+		if b.IssueSlug == "77" {
+			picked = b
+		}
+	}
+	p := &scriptedReviewPrompter{Branch: &picked}
+	if err := runReviewRequestInteractive(ctx, devRig.deps(), p); err != nil {
+		t.Fatalf("developer review request: %v", err)
+	}
+
+	// ── Reviewer side — fresh clone, empty store ──────────────────────────────
+	reviewerDir := t.TempDir()
+	runInDir := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+		}
+	}
+	runInDir(filepath.Dir(reviewerDir), "clone", "--quiet", originDir, filepath.Base(reviewerDir))
+	runInDir(reviewerDir, "config", "user.name", "Carol")
+	runInDir(reviewerDir, "config", "user.email", "carol@example.com")
+	runInDir(reviewerDir, "config", "commit.gpgsign", "false")
+
+	reviewerStdout := &bytes.Buffer{}
+	reviewerStderr := &bytes.Buffer{}
+	reviewerClient, err := git.NewClientAt(&pkg.IO{
+		In:  bytes.NewReader(nil),
+		Out: reviewerStdout,
+		Err: reviewerStderr,
+	}, reviewerDir)
+	if err != nil {
+		t.Fatalf("reviewer NewClientAt: %v", err)
+	}
+
+	// Reviewer's store is EMPTY — no InsertIssueWithBranch has been called.
+	reviewerGitDir := filepath.Join(reviewerDir, ".git")
+	reviewerStore, err := store.Open(ctx, reviewerGitDir)
+	if err != nil {
+		t.Fatalf("reviewer store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = reviewerStore.Close() })
+
+	reviewerDeps := reviewDeps{
+		client: reviewerClient,
+		store:  reviewerStore,
+		cfg:    &config.AppConfig{},
+	}
+
+	// Reviewer fetches refs — this is the only setup they do.
+	if err := reviewerClient.FetchReviewRefs(ctx); err != nil {
+		t.Fatalf("reviewer FetchReviewRefs: %v", err)
+	}
+
+	t.Run("review list shows issue on empty store after fetch", func(t *testing.T) {
+		reviewerStdout.Reset()
+		if err := runReviewList(ctx, reviewerDeps); err != nil {
+			t.Fatalf("runReviewList on empty store: %v", err)
+		}
+		out := reviewerStdout.String()
+		if strings.Contains(out, "No issues currently in review") {
+			t.Errorf("review list incorrectly reported no issues; stdout = %q", out)
+		}
+		if !strings.Contains(out, "77") {
+			t.Errorf("review list did not show issue 77; stdout = %q", out)
+		}
+	})
+
+	t.Run("review start succeeds on empty store after fetch", func(t *testing.T) {
+		reviewerStdout.Reset()
+		reviewPrompter := &scriptedReviewPrompter{IssueSlug: "77"}
+		if err := runReviewStartInteractive(ctx, reviewerDeps, reviewPrompter); err != nil {
+			t.Fatalf("runReviewStartInteractive on empty store: %v", err)
+		}
+		// Verify the review branch was created.
+		exists, brErr := reviewerClient.BranchExists("77@review")
+		if brErr != nil {
+			t.Fatalf("BranchExists: %v", brErr)
+		}
+		if !exists {
+			t.Error("77@review branch was not created on reviewer's machine")
+		}
+	})
+}
+
 func TestTrack_Developer_RegistersUnknownBranch(t *testing.T) {
 	t.Parallel()
 
