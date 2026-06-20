@@ -39,6 +39,10 @@ type scriptedStartPrompter struct {
 	// Counter set by NotifyTrackerError so tests can assert "fallback fired".
 	TrackerErrorNotifications int
 
+	// BaseBranch picker return value and error injection.
+	BaseBranch    string
+	BaseBranchErr error
+
 	// Error injection — when non-nil, the corresponding method returns this
 	// error immediately.
 	IssueFromUserErr    error
@@ -88,6 +92,10 @@ func (s *scriptedStartPrompter) PickUseWorktree(_ context.Context) (bool, error)
 	}
 
 	return s.UseWorktree, nil
+}
+
+func (s *scriptedStartPrompter) PickBaseBranch(_ context.Context, _ string, _ []string) (string, error) {
+	return s.BaseBranch, s.BaseBranchErr
 }
 
 func (s *scriptedStartPrompter) ConfirmCreateBranch(_ context.Context, _ string) (bool, error) {

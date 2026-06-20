@@ -45,6 +45,11 @@ type StartPrompter interface {
 	// only when cfg.Branch.UseWorktree == nil.
 	PickUseWorktree(ctx context.Context) (use bool, err error)
 
+	// PickBaseBranch presents a picker over all local git branches.
+	// defaultBase is pre-selected. Called only when --parent was not explicitly
+	// provided and the repo has more than one local branch.
+	PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (baseBranch string, err error)
+
 	// ConfirmCreateBranch gates client.CreateBranch. message is the full
 	// human-readable "Create branch %q based on %q?" string.
 	ConfirmCreateBranch(ctx context.Context, message string) (confirmed bool, err error)
@@ -137,6 +142,15 @@ func (p *HuhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {
 	}
 
 	return use, nil
+}
+
+func (p *HuhStartPrompter) PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error) {
+	var picked string
+	if err := huh.NewForm(tui.BaseBranchPicker(defaultBase, branches, &picked)).RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("base branch picker: %w", err)
+	}
+
+	return picked, nil
 }
 
 func (p *HuhStartPrompter) ConfirmCreateBranch(ctx context.Context, message string) (bool, error) {

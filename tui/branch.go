@@ -176,3 +176,20 @@ func VariantLabelInput(label *string) *huh.Group {
 			Value(label),
 	)
 }
+
+// BaseBranchPicker lets the user pick the base branch for a new issue branch.
+// defaultBase is pre-selected. branches is the full list of local git branch names.
+func BaseBranchPicker(defaultBase string, branches []string, selected *string) *huh.Group {
+	opts := make([]huh.Option[string], len(branches))
+	for i, name := range branches {
+		opts[i] = huh.NewOption(name, name)
+	}
+	*selected = defaultBase
+
+	return huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Base branch:").
+			Options(opts...).
+			Value(selected),
+	)
+}

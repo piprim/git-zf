@@ -12,6 +12,7 @@ import (
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	issuepkg "github.com/piprim/git-zf/issue"
+	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
 )
@@ -587,6 +588,96 @@ func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
 	t.Run("tracker received no UpdateIssueStatus calls", func(t *testing.T) {
 		if got := len(rig.tracker.RecordedUpdates); got != 0 {
 			t.Errorf("RecordedUpdates = %d, want 0 when tracker toggle declined", got)
+		}
+	})
+}
+
+// TestRunIssueStart_PickerSelectsParent verifies that when the user picks a
+// real git branch via PickBaseBranch (instead of passing --parent explicitly),
+// the new branch is created from that branch and the parent relation is recorded
+// in the store when the chosen branch is git-zf-tracked.
+func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+
+	// Create the parent integration branch in git and seed it in the store.
+	parentBranch := "X@feat@big-feature"
+	rig.runGit(t, "checkout", "-b", parentBranch)
+	if err := os.WriteFile(filepath.Join(rig.dir, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
+		t.Fatalf("write parent.txt: %v", err)
+	}
+	rig.runGit(t, "add", "parent.txt")
+	rig.runGit(t, "commit", "-m", "feat(X): parent integration branch")
+	rig.runGit(t, "checkout", "main")
+
+	// Seed the store so the parent branch appears as tracked.
+	s, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "X", Title: "big feature", StatusID: store.StatusIDInProgress},
+		&store.Branch{Name: parentBranch, Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		_ = s.Close()
+		t.Fatalf("InsertIssueWithBranch: %v", err)
+	}
+	_ = s.Close()
+
+	// The scripted prompter returns the parent branch name as the base.
+	pickedIssue := &issuepkg.Issue{
+		Type:  "feat",
+		Issue: tracker.Issue{ID: "X.1", Subject: "sub-task one"},
+	}
+	prompter := &scriptedStartPrompter{
+		IssueFromUser: pickedIssue,
+		BaseBranch:    parentBranch, // picker selects the parent branch
+		UseWorktree:   false,
+		ConfirmBranch: true,
+	}
+
+	flags := issuepkg.IssueStartFlags{TrackerFirst: false}
+	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+		t.Fatalf("RunIssueStart: %v", err)
+	}
+
+	wantBranch := "X.1@feat@sub-task-one"
+
+	t.Run("sub-task branch exists", func(t *testing.T) {
+		exists, err := rig.client.BranchExists(wantBranch)
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if !exists {
+			t.Errorf("branch %q was not created", wantBranch)
+		}
+	})
+
+	t.Run("sub-task branch is reachable from parent branch", func(t *testing.T) {
+		// The new branch must have the parent branch as ancestor.
+		isAnc, err := rig.client.IsAncestor(t.Context(), parentBranch, wantBranch)
+		if err != nil {
+			t.Fatalf("IsAncestor: %v", err)
+		}
+		if !isAnc {
+			t.Errorf("branch %q should have %q as ancestor", wantBranch, parentBranch)
+		}
+	})
+
+	t.Run("parent relation recorded in store", func(t *testing.T) {
+		s2, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		defer func() { _ = s2.Close() }()
+
+		parent, err := s2.GetParentIssue(t.Context(), "X.1")
+		if err != nil {
+			t.Fatalf("GetParentIssue: %v", err)
+		}
+		if parent != "X" {
+			t.Errorf("GetParentIssue(X.1) = %q, want %q", parent, "X")
 		}
 	})
 }

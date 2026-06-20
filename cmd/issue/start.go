@@ -22,10 +22,11 @@ import (
 // Production code builds it via BuildStartDeps; tests inject directly.
 // Exported because cmd/branch/branch.go's newRunE constructs one too.
 type StartDeps struct {
-	Client  *git.Client
-	Cfg     *config.AppConfig
-	Tracker tracker.Tracker // nil when cfg.IssueTracker.Type == ""
-	Flags   issue.IssueStartFlags
+	Client             *git.Client
+	Cfg                *config.AppConfig
+	Tracker            tracker.Tracker // nil when cfg.IssueTracker.Type == ""
+	Flags              issue.IssueStartFlags
+	BaseBranchOverride string // set by PickBaseBranch; skips store re-query in prepareBranch
 }
 
 // BuildStartDeps constructs the production StartDeps from a cobra command.
@@ -138,6 +139,38 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 		return nil
 	}
 
+	// When --parent was not explicitly set, offer a base branch picker so the
+	// user can create a sub-task without knowing the flag exists.
+	if deps.Flags.ParentIssueSlug == "" {
+		if gitBranches, brErr := deps.Client.LocalBranchNames(); brErr == nil && len(gitBranches) > 1 {
+			defaultBase, dbErr := resolveDefaultBase(deps)
+			if dbErr != nil {
+				return fmt.Errorf("resolve default base: %w", dbErr)
+			}
+			baseBranch, pbErr := prompter.PickBaseBranch(ctx, defaultBase, gitBranches)
+			if pbErr != nil {
+				return fmt.Errorf("pick base branch: %w", pbErr)
+			}
+			deps.BaseBranchOverride = baseBranch
+			// If the chosen branch is tracked by git-zf, record it as the parent (best-effort).
+			// Open the store via the client's git dir so this works in tests (temp dirs)
+			// as well as production (CWD is the repo).
+			if gitDir, gdErr := deps.Client.GitDir(); gdErr == nil {
+				if s, openErr := store.Open(ctx, gitDir); openErr == nil {
+					defer func() { _ = s.Close() }()
+					if rows, listErr := s.ListBranches(ctx, store.BranchStatusAll); listErr == nil {
+						for _, r := range rows {
+							if r.BranchName == baseBranch {
+								deps.Flags.ParentIssueSlug = r.IssueSlug
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	useWorktree, err := resolveUseWorktree(ctx, deps, prompter)
 	if err != nil {
 		return err
@@ -208,13 +241,19 @@ func resolveUseWorktree(ctx context.Context, deps StartDeps, prompter StartPromp
 
 func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
 	// Open a single store connection shared by prepareBranch (parent lookup)
-	// and persistParentRelation, avoiding two separate connections.
+	// and InsertIssueRelation, avoiding two separate connections.
+	// Use the client's git dir so this works in tests (temp dirs) as well as
+	// production (CWD is the repo).
 	var parentStore *store.Store
 	if deps.Flags.ParentIssueSlug != "" {
-		var err error
-		parentStore, err = store.OpenRepo(ctx)
-		if err != nil {
-			return fmt.Errorf("open store for parent lookup: %w", err)
+		gitDir, gdErr := deps.Client.GitDir()
+		if gdErr != nil {
+			return fmt.Errorf("resolve git dir for parent store: %w", gdErr)
+		}
+		var openErr error
+		parentStore, openErr = store.Open(ctx, gitDir)
+		if openErr != nil {
+			return fmt.Errorf("open store for parent lookup: %w", openErr)
 		}
 		defer func() { _ = parentStore.Close() }()
 	}
@@ -278,10 +317,14 @@ func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompte
 func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
 	var parentStore *store.Store
 	if deps.Flags.ParentIssueSlug != "" {
-		var err error
-		parentStore, err = store.OpenRepo(ctx)
-		if err != nil {
-			return fmt.Errorf("open store for parent lookup: %w", err)
+		gitDir, gdErr := deps.Client.GitDir()
+		if gdErr != nil {
+			return fmt.Errorf("resolve git dir for parent store: %w", gdErr)
+		}
+		var openErr error
+		parentStore, openErr = store.Open(ctx, gitDir)
+		if openErr != nil {
+			return fmt.Errorf("open store for parent lookup: %w", openErr)
 		}
 		defer func() { _ = parentStore.Close() }()
 	}
@@ -357,6 +400,15 @@ func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPromp
 	return nil
 }
 
+// resolveDefaultBase returns the configured base branch, falling back to the
+// repo's default (main/master) when not set.
+func resolveDefaultBase(deps StartDeps) (string, error) {
+	if deps.Cfg.Branch.Base != "" {
+		return deps.Cfg.Branch.Base, nil
+	}
+	return deps.Client.DefaultBaseBranch()
+}
+
 // prepareBranch assembles the branch and resolves the base branch. Shared by
 // createBranchFlow and createWorktreeFlow.
 //
@@ -368,7 +420,15 @@ func prepareBranch(ctx context.Context, deps StartDeps, picked *issue.Issue, par
 		return nil, "", fmt.Errorf("assemble branch name: %w", err)
 	}
 
-	if deps.Flags.ParentIssueSlug != "" && parentStore != nil {
+	if deps.Flags.ParentIssueSlug != "" {
+		if deps.BaseBranchOverride != "" {
+			// Already resolved by PickBaseBranch — use directly, no store query needed.
+			return b, deps.BaseBranchOverride, nil
+		}
+		// --parent set via flag; look up the branch from the provided store.
+		if parentStore == nil {
+			return nil, "", fmt.Errorf("no store available to resolve parent issue %q", deps.Flags.ParentIssueSlug)
+		}
 		branches, err := parentStore.ListBranches(ctx, store.BranchStatusInProgress)
 		if err != nil {
 			return nil, "", fmt.Errorf("list branches for parent %q: %w", deps.Flags.ParentIssueSlug, err)
