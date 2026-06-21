@@ -50,12 +50,9 @@ func runReviewRejectInteractive(ctx context.Context, deps reviewDeps, prompter R
 }
 
 func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	latest, err := deps.store.GetLatestReview(ctx, issueSlug)
+	latest, err := ensureReviewRecord(ctx, deps, issueSlug)
 	if err != nil {
-		return fmt.Errorf("get latest review: %w", err)
-	}
-	if latest == nil {
-		return fmt.Errorf("no review found for issue %q", issueSlug)
+		return err
 	}
 	if latest.Status != store.ReviewStatusInReview {
 		return fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, latest.Status)
@@ -98,10 +95,15 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug string) err
 		featureSHA = currentRef.FeatureSHA
 	}
 
+	reviewer := ""
+	if currentRef != nil {
+		reviewer = currentRef.Reviewer
+	}
 	newRef := git.ReviewRef{
 		Status:     string(store.ReviewStatusChangesRequested),
 		Round:      latest.Round,
 		FeatureSHA: featureSHA,
+		Reviewer:   reviewer,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -119,32 +121,46 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug string) err
 
 	// Handle review branch: keep if reviewer pushed commits, delete if empty.
 	if reviewBranchExists && !hasCommits {
-		if err := deps.client.DeleteLocalBranch(ctx, reviewBranch, true); err != nil {
+		if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
 			fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
 		}
-		_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
+		// Only push --delete when the branch actually exists on the remote.
+		if deps.client.RemoteBranchExists(ctx, reviewBranch) {
+			_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
+		}
+		// Use issueSlug as fallback when the feature branch is not in the local store.
+		branchLabel := featureBranch
+		if branchLabel == "" {
+			branchLabel = issueSlug
+		}
 		fmt.Fprintf(deps.client.IO().Out,
-			"Issue %q: changes requested (round %d). Branch %q unlocked.\n",
-			issueSlug, latest.Round, featureBranch)
+			"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
+			issueSlug, latest.Round, branchLabel)
 		return nil
+	}
+
+	// Use issueSlug as fallback when feature branch not in local store.
+	branchLabel := featureBranch
+	if branchLabel == "" {
+		branchLabel = issueSlug
 	}
 
 	if hasCommits {
 		n, _ := deps.client.CommitsAhead(ctx, reviewBranch, featureBranch)
 		fmt.Fprintf(deps.client.IO().Out,
-			"Issue %q: changes requested (round %d). Branch %q unlocked.\n"+
+			"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n"+
 				"%s has %d reviewer commit(s). Inspect with:\n"+
 				"  git log %s..%s\n"+
 				"Cherry-pick, adapt, or discard as needed, then:\n"+
-				"  git zf review request %s\n",
-			issueSlug, latest.Round, featureBranch,
-			reviewBranch, n, featureBranch, reviewBranch, issueSlug)
+				"  git zf review request\n",
+			issueSlug, latest.Round, branchLabel,
+			reviewBranch, n, branchLabel, reviewBranch)
 		return nil
 	}
 
 	fmt.Fprintf(deps.client.IO().Out,
-		"Issue %q: changes requested (round %d). Branch %q unlocked.\n",
-		issueSlug, latest.Round, featureBranch)
+		"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
+		issueSlug, latest.Round, branchLabel)
 
 	return nil
 }

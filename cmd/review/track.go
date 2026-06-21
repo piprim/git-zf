@@ -101,7 +101,7 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 
 	fmt.Fprintf(deps.client.IO().Out,
 		"Branch %q is now tracked (issue %s, type %s).\n"+
-			"Run: git zf review request\n",
+			"You can run 'git zf review request'\n",
 		branchName, b.IssueID(), b.Type())
 
 	return nil

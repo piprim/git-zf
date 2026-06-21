@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -469,6 +470,26 @@ func TestClose_ConflictAborts(t *testing.T) {
 	})
 }
 
+// seedReviewRef writes a git review ref so reviewPreflight (which reads the
+// ref as authoritative) can see the correct status in tests.
+func seedReviewRef(t *testing.T, rig *closeTestRig, issueSlug string, status store.ReviewStatus, round int) {
+	t.Helper()
+
+	out, err := exec.CommandContext(t.Context(), "git", "-C", rig.dir, "rev-parse", "ABC-1@feat@add-thing").Output()
+	if err != nil {
+		t.Fatalf("rev-parse feature branch: %v", err)
+	}
+	ref := git.ReviewRef{
+		Status:     string(status),
+		Round:      round,
+		FeatureSHA: strings.TrimSpace(string(out)),
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := rig.client.WriteReviewRef(t.Context(), issueSlug, ref, ""); err != nil {
+		t.Fatalf("WriteReviewRef: %v", err)
+	}
+}
+
 func TestClose_ReviewPreflight(t *testing.T) {
 	t.Parallel()
 
@@ -479,6 +500,7 @@ func TestClose_ReviewPreflight(t *testing.T) {
 		if _, err := rig.store.InsertReview(t.Context(), "ABC-1", "alice"); err != nil {
 			t.Fatalf("InsertReview: %v", err)
 		}
+		seedReviewRef(t, rig, "ABC-1", store.ReviewStatusInReview, 1)
 
 		p := &scriptedPrompter{Branch: rig.pickedBranchRow()}
 		err := runClose(t.Context(), rig.deps(), p)
@@ -506,6 +528,7 @@ func TestClose_ReviewPreflight(t *testing.T) {
 		if err := rig.store.UpdateReviewStatus(t.Context(), row.ID, store.ReviewStatusChangesRequested, false); err != nil {
 			t.Fatalf("UpdateReviewStatus: %v", err)
 		}
+		seedReviewRef(t, rig, "ABC-1", store.ReviewStatusChangesRequested, 1)
 
 		p := &scriptedPrompter{Branch: rig.pickedBranchRow()}
 		err = runClose(t.Context(), rig.deps(), p)
@@ -520,5 +543,565 @@ func TestClose_ReviewPreflight(t *testing.T) {
 				t.Errorf("expected ErrReviewChangesRequested, got: %v", err)
 			}
 		})
+	})
+}
+
+// TestClose_ReviewPreflight_IncorporatesRemoteOnlyReviewerCommits verifies
+// Phase 10: Dan pushed reviewer commits to origin/X.2@review but Bob never
+// checked out X.2@review locally. reviewPreflight must still detect the commits
+// (via the remote tracking ref) and fast-forward the feature branch.
+func TestClose_ReviewPreflight_IncorporatesRemoteOnlyReviewerCommits(t *testing.T) {
+	t.Parallel()
+
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+	bobDir := t.TempDir()
+
+	runIn := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+		}
+	}
+
+	// ----- origin -----
+	if err := os.MkdirAll(originDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	runIn(originDir, "init", "--bare", "--initial-branch=main")
+
+	seedDir := t.TempDir()
+	runIn(seedDir, "init", "--initial-branch=main")
+	runIn(seedDir, "config", "user.name", "Seed")
+	runIn(seedDir, "config", "user.email", "seed@example.com")
+	runIn(seedDir, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(seedDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	runIn(seedDir, "add", "base.txt")
+	runIn(seedDir, "commit", "-m", "chore: init")
+	runIn(seedDir, "remote", "add", "origin", originDir)
+	runIn(seedDir, "push", "origin", "main")
+
+	// Feature branch ABC-1@feat@thing
+	runIn(seedDir, "checkout", "-b", "ABC-1@feat@thing")
+	if err := os.WriteFile(filepath.Join(seedDir, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	runIn(seedDir, "add", "feature.txt")
+	runIn(seedDir, "commit", "-m", "feat: implement")
+	runIn(seedDir, "push", "origin", "ABC-1@feat@thing")
+
+	// Reviewer creates ABC-1@review and pushes a fix.
+	runIn(seedDir, "checkout", "-b", "ABC-1@review")
+	if err := os.WriteFile(filepath.Join(seedDir, "feature.txt"), []byte("feature\nreviewer fix\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	runIn(seedDir, "add", "feature.txt")
+	runIn(seedDir, "commit", "-m", "fix: reviewer fix")
+	runIn(seedDir, "push", "origin", "ABC-1@review")
+	runIn(seedDir, "checkout", "main")
+
+	// ----- Bob's clone: never checks out ABC-1@review locally -----
+	runIn(bobDir, "init", "--initial-branch=main")
+	runIn(bobDir, "config", "user.name", "Bob")
+	runIn(bobDir, "config", "user.email", "bob@example.com")
+	runIn(bobDir, "config", "commit.gpgsign", "false")
+	runIn(bobDir, "remote", "add", "origin", originDir)
+	runIn(bobDir, "fetch", "origin")
+	runIn(bobDir, "checkout", "main")
+	runIn(bobDir, "checkout", "-b", "ABC-1@feat@thing", "origin/ABC-1@feat@thing")
+	// ABC-1@review deliberately NOT checked out locally.
+
+	stdout := &bytes.Buffer{}
+	bobClient, err := git.NewClientAt(&pkg.IO{
+		In: bytes.NewReader(nil), Out: stdout, Err: &bytes.Buffer{},
+	}, bobDir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	bobStore, err := store.Open(t.Context(), filepath.Join(bobDir, ".git"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = bobStore.Close() })
+
+	if err := bobStore.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "ABC-1", Title: "thing", StatusID: store.StatusIDInProgress},
+		&store.Branch{Name: "ABC-1@feat@thing", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Write approved review ref and push it to origin — FetchReviewRefs uses
+	// --prune, so any ref not on the remote would be deleted before the close reads it.
+	featureSHA, _ := bobClient.ResolveRef("refs/heads/ABC-1@feat@thing")
+	reviewRef := git.ReviewRef{
+		Status: "approved", Round: 1,
+		FeatureSHA: featureSHA.String(),
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := bobClient.WriteReviewRef(t.Context(), "ABC-1", reviewRef, ""); err != nil {
+		t.Fatalf("WriteReviewRef: %v", err)
+	}
+	// Push the ref so --prune doesn't remove it from local on the next fetch.
+	runIn(bobDir, "push", "--force", "origin", "refs/zf/reviews/ABC-1")
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+	deps := closeDeps{client: bobClient, store: bobStore, cfg: cfg}
+
+	pickedRow := &store.BranchRow{
+		IssueID: 1, IssueSlug: "ABC-1",
+		BranchName: "ABC-1@feat@thing", Type: "feat",
+		Status: store.BranchStatusInProgress,
+	}
+	prompter := &scriptedPrompter{
+		Branch: pickedRow, Strategy: StrategySquash, Confirm: true,
+		Message: []byte("feat: close\n"), DeleteBranch: false,
+	}
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("reviewer fix incorporated into feature branch", func(t *testing.T) {
+		out, _ := exec.CommandContext(t.Context(), "git", "-C", bobDir,
+			"log", "--oneline", "ABC-1@feat@thing").Output()
+		if !strings.Contains(string(out), "reviewer fix") {
+			t.Errorf("reviewer commit not in feature branch history; log:\n%s", out)
+		}
+	})
+
+	t.Run("stdout says incorporating reviewer commits", func(t *testing.T) {
+		if !strings.Contains(stdout.String(), "Incorporating") {
+			t.Errorf("stdout = %q — expected 'Incorporating' message", stdout.String())
+		}
+	})
+}
+
+// TestClose_SubtaskDryRunFallsBackToRemoteBase verifies that the initial
+// merge dry-run in doMerge succeeds when the base branch (a parent integration
+// branch) exists only as a remote tracking ref (origin/<base>) and was never
+// checked out locally. This is the failure mode from Phase 10 of the review
+// E2E scenario: Bob closes X.2 but never checked out X@feat@big locally.
+func TestClose_SubtaskDryRunFallsBackToRemoteBase(t *testing.T) {
+	t.Parallel()
+
+	originDir := t.TempDir()
+	bobDir := t.TempDir()
+
+	runIn := func(dir string, args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// ----- origin repo -----
+	runIn(originDir, "init", "-q", "-b", "main")
+	runIn(originDir, "config", "user.name", "Alice")
+	runIn(originDir, "config", "user.email", "alice@example.com")
+	runIn(originDir, "config", "commit.gpgsign", "false")
+
+	if err := os.WriteFile(filepath.Join(originDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base.txt: %v", err)
+	}
+	runIn(originDir, "add", "base.txt")
+	runIn(originDir, "commit", "-m", "chore: init")
+
+	// X@feat@big — parent integration branch.
+	runIn(originDir, "checkout", "-b", "X@feat@big")
+	if err := os.WriteFile(filepath.Join(originDir, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
+		t.Fatalf("write parent.txt: %v", err)
+	}
+	runIn(originDir, "add", "parent.txt")
+	runIn(originDir, "commit", "-m", "feat(X): parent")
+
+	// X.2@feat@two — sub-task branched from X@feat@big.
+	runIn(originDir, "checkout", "-b", "X.2@feat@two")
+	if err := os.WriteFile(filepath.Join(originDir, "subtask.txt"), []byte("subtask\n"), 0o644); err != nil {
+		t.Fatalf("write subtask.txt: %v", err)
+	}
+	runIn(originDir, "add", "subtask.txt")
+	runIn(originDir, "commit", "-m", "feat(X.2): subtask")
+	runIn(originDir, "checkout", "main")
+
+	// ----- Bob's repo: init, add remote, fetch, check out only the subtask -----
+	runIn(bobDir, "init", "-q", "-b", "main")
+	runIn(bobDir, "config", "user.name", "Bob")
+	runIn(bobDir, "config", "user.email", "bob@example.com")
+	runIn(bobDir, "config", "commit.gpgsign", "false")
+	runIn(bobDir, "remote", "add", "origin", originDir)
+	runIn(bobDir, "fetch", "origin")
+	// DWIM: creates local main tracking origin/main.
+	runIn(bobDir, "checkout", "main")
+	// DWIM: creates local X.2@feat@two tracking origin/X.2@feat@two.
+	runIn(bobDir, "checkout", "-b", "X.2@feat@two", "origin/X.2@feat@two")
+	// Return to main; X@feat@big is intentionally NOT checked out locally.
+	runIn(bobDir, "checkout", "main")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	ioStreams := &pkg.IO{In: bytes.NewReader(nil), Out: stdout, Err: stderr}
+
+	client, err := git.NewClientAt(ioStreams, bobDir)
+	if err != nil {
+		t.Fatalf("git.NewClientAt: %v", err)
+	}
+
+	// Write branch refs locally so parentSlug resolves without a remote fetch.
+	parentBR := git.BranchRef{
+		IssueSlug:  "X",
+		BranchName: "X@feat@big",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := client.WriteBranchRef(t.Context(), "X", parentBR); err != nil {
+		t.Fatalf("WriteBranchRef X: %v", err)
+	}
+	childBR := git.BranchRef{
+		IssueSlug:  "X.2",
+		BranchName: "X.2@feat@two",
+		ParentSlug: "X",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := client.WriteBranchRef(t.Context(), "X.2", childBR); err != nil {
+		t.Fatalf("WriteBranchRef X.2: %v", err)
+	}
+
+	s, err := store.Open(t.Context(), bobDir)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "X.2", Title: "part-two", StatusID: store.StatusIDInProgress},
+		&store.Branch{Name: "X.2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed branch: %v", err)
+	}
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+	deps := closeDeps{client: client, store: s, cfg: cfg}
+
+	pickedRow := &store.BranchRow{
+		IssueID:    1,
+		IssueSlug:  "X.2",
+		Title:      "part-two",
+		BranchName: "X.2@feat@two",
+		Type:       "feat",
+		Status:     store.BranchStatusInProgress,
+	}
+
+	prompter := &scriptedPrompter{
+		Branch:       pickedRow,
+		Strategy:     StrategySquash,
+		Confirm:      true,
+		Message:      []byte("feat(X.2): close\n"),
+		DeleteBranch: true,
+	}
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("squash commit landed on parent integration branch", func(t *testing.T) {
+		// X@feat@big is created locally by git checkout DWIM during MergeSquash.
+		assertHeadSubject(t, bobDir, "X@feat@big", "feat(X.2): close")
+	})
+
+	t.Run("main is unchanged", func(t *testing.T) {
+		assertHeadSubject(t, bobDir, "main", "chore: init")
+	})
+}
+
+// TestClose_CrossMachine_UsesParentBranchRef verifies that close correctly
+// merges a sub-task into its parent integration branch even when the local
+// SQLite store has no parent-child relation record (cross-machine scenario:
+// a developer who fetched and checked out the branch without running issue start).
+func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
+	t.Parallel()
+
+	// Build a repo that looks like Bob's machine:
+	//   - main branch with one commit
+	//   - X@feat@big-feature (parent integration branch), one commit ahead of main
+	//   - X.1@feat@part-one (sub-task), one commit ahead of X@feat@big-feature
+	//   - refs/zf/branches/X    → {branch_name: "X@feat@big-feature"}
+	//   - refs/zf/branches/X.1  → {branch_name: "X.1@feat@part-one", parent_slug: "X"}
+	//   - SQLite store: only X.1 branch row (no issue_relations record)
+
+	dir := t.TempDir()
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.name", "Bob")
+	runGit("config", "user.email", "bob@example.com")
+	runGit("config", "commit.gpgsign", "false")
+
+	// main commit
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base.txt: %v", err)
+	}
+	runGit("add", "base.txt")
+	runGit("commit", "-m", "chore: init")
+
+	// X@feat@big-feature
+	runGit("checkout", "-b", "X@feat@big-feature")
+	if err := os.WriteFile(filepath.Join(dir, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
+		t.Fatalf("write parent.txt: %v", err)
+	}
+	runGit("add", "parent.txt")
+	runGit("commit", "-m", "feat(X): parent commit")
+
+	// X.1@feat@part-one (branched from X@feat@big-feature)
+	runGit("checkout", "-b", "X.1@feat@part-one")
+	if err := os.WriteFile(filepath.Join(dir, "subtask.txt"), []byte("subtask\n"), 0o644); err != nil {
+		t.Fatalf("write subtask.txt: %v", err)
+	}
+	runGit("add", "subtask.txt")
+	runGit("commit", "-m", "feat(X.1): subtask commit")
+
+	runGit("checkout", "main")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	ioStreams := &pkg.IO{In: bytes.NewReader(nil), Out: stdout, Err: stderr}
+
+	client, err := git.NewClientAt(ioStreams, dir)
+	if err != nil {
+		t.Fatalf("git.NewClientAt: %v", err)
+	}
+
+	// Write branch refs (as Alice would have pushed them; Bob fetched them).
+	parentRef := git.BranchRef{
+		IssueSlug:  "X",
+		BranchName: "X@feat@big-feature",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := client.WriteBranchRef(t.Context(), "X", parentRef); err != nil {
+		t.Fatalf("WriteBranchRef X: %v", err)
+	}
+
+	childRef := git.BranchRef{
+		IssueSlug:  "X.1",
+		BranchName: "X.1@feat@part-one",
+		ParentSlug: "X",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := client.WriteBranchRef(t.Context(), "X.1", childRef); err != nil {
+		t.Fatalf("WriteBranchRef X.1: %v", err)
+	}
+
+	// Store: only X.1 branch row; no issue_relations.
+	s, err := store.Open(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "X.1", Title: "part-one", StatusID: store.StatusIDInProgress},
+		&store.Branch{Name: "X.1@feat@part-one", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed branch: %v", err)
+	}
+
+	// Seed review ref so reviewPreflight passes (approved, no reviewer commits).
+	reviewRef := git.ReviewRef{
+		Status: "approved",
+		Round:  1,
+		// FeatureSHA is not checked by reviewPreflight for approved status
+		// when no X.1@review branch exists.
+		FeatureSHA: "ignored",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := client.WriteReviewRef(t.Context(), "X.1", reviewRef, ""); err != nil {
+		t.Fatalf("WriteReviewRef: %v", err)
+	}
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+
+	deps := closeDeps{client: client, store: s, cfg: cfg}
+
+	pickedRow := &store.BranchRow{
+		IssueID:    1,
+		IssueSlug:  "X.1",
+		Title:      "part-one",
+		BranchName: "X.1@feat@part-one",
+		Type:       "feat",
+		Status:     store.BranchStatusInProgress,
+	}
+
+	prompter := &scriptedPrompter{
+		Branch:       pickedRow,
+		Strategy:     StrategySquash,
+		Confirm:      true,
+		Message:      []byte("feat(X.1): close\n"),
+		DeleteBranch: true,
+	}
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("merged into parent branch not main", func(t *testing.T) {
+		// X@feat@big-feature should carry the squash commit; main should not.
+		cmd := exec.CommandContext(t.Context(), "git", "log", "-1", "--format=%s", "X@feat@big-feature")
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git log X@feat@big-feature: %v", err)
+		}
+		got := strings.TrimSpace(string(out))
+		if got != "feat(X.1): close" {
+			t.Errorf("X@feat@big-feature HEAD subject = %q, want %q", got, "feat(X.1): close")
+		}
+	})
+
+	t.Run("main is unchanged", func(t *testing.T) {
+		cmd := exec.CommandContext(t.Context(), "git", "log", "-1", "--format=%s", "main")
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git log main: %v", err)
+		}
+		got := strings.TrimSpace(string(out))
+		if got != "chore: init" {
+			t.Errorf("main HEAD = %q, expected it to be unchanged (%q)", got, "chore: init")
+		}
+	})
+}
+
+// TestClose_ParentClose_ReconcilesMergedChildFromRef covers Phase 12 of the
+// demo: Alice tries to close parent X, but her local store still has X.2 as
+// in_progress (Bob closed it in his clone). The branch ref for X.2 has
+// Merged=true (written by Bob's close). reconcileChildrenFromRefs should
+// update Alice's store so ChildrenAllMerged passes.
+func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t) // main + ABC-1@feat@add-thing
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = rig.dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Rename the seeded branch to simulate the parent integration branch X.
+	// Create child X.1 already merged, and child X.2 in_progress (sibling's close
+	// not yet reflected in this store).
+	runGit("checkout", "-b", "X@feat@big")
+	if err := os.WriteFile(filepath.Join(rig.dir, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
+		t.Fatalf("write parent.txt: %v", err)
+	}
+	runGit("add", "parent.txt")
+	runGit("commit", "-m", "feat(X): parent")
+	runGit("checkout", "main")
+
+	// Re-seed store: parent X, and two children X.1 (merged) and X.2 (in_progress).
+	trackerType := "fake"
+	if err := rig.store.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "X", Title: "big", StatusID: store.StatusIDInProgress, TrackerType: &trackerType},
+		&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed X: %v", err)
+	}
+	now := time.Now()
+	if err := rig.store.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "X.1", Title: "one", StatusID: store.StatusIDMerged},
+		&store.Branch{Name: "X.1@feat@one", Type: "feat", StatusID: store.StatusIDMerged, MergedAt: &now},
+	); err != nil {
+		t.Fatalf("seed X.1: %v", err)
+	}
+	if err := rig.store.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "X.2", Title: "two", StatusID: store.StatusIDInProgress},
+		&store.Branch{Name: "X.2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed X.2: %v", err)
+	}
+	// Record parent-child relations.
+	if err := rig.store.InsertIssueRelation(t.Context(), "X", "X.1"); err != nil {
+		t.Fatalf("relation X→X.1: %v", err)
+	}
+	if err := rig.store.InsertIssueRelation(t.Context(), "X", "X.2"); err != nil {
+		t.Fatalf("relation X→X.2: %v", err)
+	}
+
+	// Simulate Bob having closed X.2 in his clone: write a branch ref with Merged=true.
+	mergedRef := git.BranchRef{
+		IssueSlug:  "X.2",
+		BranchName: "X.2@feat@two",
+		ParentSlug: "X",
+		CreatedAt:  now.UTC().Format(time.RFC3339),
+		Merged:     true,
+	}
+	if _, err := rig.client.WriteBranchRef(t.Context(), "X.2", mergedRef); err != nil {
+		t.Fatalf("WriteBranchRef X.2: %v", err)
+	}
+
+	// Update the store config: X@feat@big should merge into main.
+	rig.cfg.Branch.Base = "main"
+
+	xRow := &store.BranchRow{
+		IssueID:    2, // second InsertIssueWithBranch call
+		IssueSlug:  "X",
+		Title:      "big",
+		BranchName: "X@feat@big",
+		Type:       "feat",
+		Status:     store.BranchStatusInProgress,
+	}
+
+	prompter := &scriptedPrompter{
+		Branch:        xRow,
+		Strategy:      StrategySquash,
+		Confirm:       true,
+		Message:       []byte("feat(X): close into main\n"),
+		TrackerStatus: "Closed",
+		DeleteBranch:  false,
+	}
+
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("parent X merged into main", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "feat(X): close into main")
+	})
+
+	t.Run("X.2 reconciled as merged in store", func(t *testing.T) {
+		merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+		if err != nil {
+			t.Fatalf("ListBranches: %v", err)
+		}
+		var found bool
+		for _, b := range merged {
+			if b.BranchName == "X.2@feat@two" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("X.2@feat@two not reconciled as merged in store")
+		}
 	})
 }

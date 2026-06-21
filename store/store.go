@@ -602,6 +602,14 @@ func (s *Store) UpdateReviewerIdentity(ctx context.Context, id int64, reviewer s
 	return nil
 }
 
+// SetReviewRound updates the round field for a specific review record.
+// Used by ensureReviewRecord to sync the round when the store is empty
+// but the ref is at a later round (cross-machine fresh-clone scenario).
+func (s *Store) SetReviewRound(ctx context.Context, id int64, round int) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE reviews SET round = ? WHERE id = ?`, round, id)
+	return err
+}
+
 // ListReviews returns all review rounds for issueSlug, newest first.
 func (s *Store) ListReviews(ctx context.Context, issueSlug string) ([]ReviewRow, error) {
 	rows, err := s.db.QueryContext(ctx,

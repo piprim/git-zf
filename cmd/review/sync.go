@@ -86,7 +86,15 @@ func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error
 		return fmt.Errorf("no branch found for parent issue %q", parentSlug)
 	}
 
-	behind, err := deps.client.CommitsAhead(ctx, parentBranch, childBranch)
+	// Use origin/<parent> so we detect commits pushed by teammates (e.g. a
+	// sibling sub-task close) that arrived via git fetch but have not yet
+	// been fast-forwarded to the local branch.
+	effectiveParent := parentBranch
+	if remote, _ := deps.client.Remote(); remote != "" {
+		effectiveParent = remote + "/" + parentBranch
+	}
+
+	behind, err := deps.client.CommitsAhead(ctx, effectiveParent, childBranch)
 	if err != nil {
 		return fmt.Errorf("check drift: %w", err)
 	}
@@ -99,7 +107,7 @@ func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error
 	fmt.Fprintf(deps.client.IO().Out, "Merging %q (%d new commit(s)) into %q...\n",
 		parentBranch, behind, childBranch)
 
-	if err := deps.client.MergeForward(ctx, parentBranch, childBranch); err != nil {
+	if err := deps.client.MergeForward(ctx, effectiveParent, childBranch); err != nil {
 		_ = deps.client.AbortMerge(ctx)
 		return fmt.Errorf("merge %s into %s failed (conflicts detected — merge aborted): %w",
 			parentBranch, childBranch, err)

@@ -221,6 +221,28 @@ func (c *Client) ResolveRef(name string) (plumbing.Hash, error) {
 	return ref.Hash(), nil
 }
 
+// ResolveBranchRef resolves a branch short name to its commit hash. It tries
+// refs/heads/<name> first, then falls back to refs/remotes/<remote>/<name> so
+// that sub-task closes work when the parent integration branch was never
+// checked out locally (exists only as a remote tracking ref).
+func (c *Client) ResolveBranchRef(name string) (plumbing.Hash, error) {
+	if h, err := c.ResolveRef("refs/heads/" + name); err == nil {
+		return h, nil
+	}
+
+	remote, err := c.Remote()
+	if err != nil || remote == "" {
+		return plumbing.ZeroHash, fmt.Errorf("resolve branch %q: reference not found", name)
+	}
+
+	h, err := c.ResolveRef("refs/remotes/" + remote + "/" + name)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("resolve branch %q: %w", name, err)
+	}
+
+	return h, nil
+}
+
 // CurrentBranch returns the short name of the branch HEAD points to.
 // On a detached HEAD the returned name will not parse as an issue branch,
 // so callers can simply ignore it.
@@ -524,6 +546,46 @@ func (c *Client) DeleteRemoteBranch(ctx context.Context, branchName string) erro
 	}
 
 	return nil
+}
+
+// RemoteBranchExists reports whether branchName exists on the configured remote.
+// Uses git ls-remote so no fetch is required. Returns false on any error or
+// when no remote is configured.
+func (c *Client) RemoteBranchExists(ctx context.Context, branchName string) bool {
+	remote, err := c.Remote()
+	if err != nil || remote == "" {
+		return false
+	}
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", root,
+		"ls-remote", "--exit-code", "--heads", remote, branchName)
+	return cmd.Run() == nil
+}
+
+// DeleteLocalBranchSafe deletes branchName locally, switching to the
+// configured base branch first when the current branch IS branchName
+// (git refuses to delete the currently checked-out branch).
+// cfgBase is used as the switch target; when empty the repo's default
+// base branch (main/master) is auto-detected.
+// On any checkout failure the function returns the error immediately.
+func (c *Client) DeleteLocalBranchSafe(ctx context.Context, branchName string, force bool, cfgBase string) error {
+	if cur, curErr := c.CurrentBranch(); curErr == nil && cur == branchName {
+		base := cfgBase
+		if base == "" {
+			var dbErr error
+			base, dbErr = c.DefaultBaseBranch()
+			if dbErr != nil {
+				return fmt.Errorf("detect default base before delete: %w", dbErr)
+			}
+		}
+		if err := c.Checkout(ctx, base); err != nil {
+			return fmt.Errorf("checkout %s before delete: %w", base, err)
+		}
+	}
+	return c.DeleteLocalBranch(ctx, branchName, force)
 }
 
 // RunGitAt runs an arbitrary git command in dir with the client's IO streams.

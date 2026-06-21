@@ -16,6 +16,7 @@ type ReviewRef struct {
 	Status     string `json:"status"`
 	Round      int    `json:"round"`
 	FeatureSHA string `json:"feature_sha"`
+	Reviewer   string `json:"reviewer,omitempty"`
 	CreatedAt  string `json:"created_at"` // RFC3339
 }
 
@@ -108,12 +109,35 @@ func (c *Client) FetchReviewRefs(ctx context.Context) error {
 		return fmt.Errorf("working tree root: %w", err)
 	}
 
+	// --prune removes local refs/zf/reviews/* that no longer exist on the
+	// remote (e.g. deleted when a sibling developer closed their issue).
 	refspec := reviewRefPrefix + "*:" + reviewRefPrefix + "*"
-	if err := c.runInteractive(ctx, root, "fetch", remote, refspec); err != nil {
+	if err := c.runInteractive(ctx, root, "fetch", "--prune", remote, refspec); err != nil {
 		return fmt.Errorf("fetch review refs: %w", err)
 	}
 
 	return nil
+}
+
+// FetchReviewRef fetches refs/zf/reviews/<issueID> from the remote into the
+// local ref namespace. Silent — designed for use in pre-push hooks where
+// interactive output would be confusing. No-op when no remote is configured.
+// Errors are silently ignored (fail-open: the caller falls back to the local ref).
+func (c *Client) FetchReviewRef(ctx context.Context, issueID string) {
+	remote, err := c.Remote()
+	if err != nil || remote == "" {
+		return
+	}
+
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return
+	}
+
+	refName := reviewRefPrefix + issueID
+	cmd := exec.CommandContext(ctx, "git", "-C", root,
+		"fetch", "--quiet", remote, refName+":"+refName)
+	_ = cmd.Run()
 }
 
 // PushReviewRef pushes refs/zf/reviews/<issueID> to the remote using

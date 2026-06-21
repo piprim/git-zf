@@ -55,7 +55,11 @@ func runReviewGuard(ctx context.Context, deps reviewDeps, branchName string) err
 		return nil // not a tracked branch — allow
 	}
 
-	// Check review ref locally (fast, no network).
+	// Fetch the latest decision for this issue before checking — the reviewer
+	// may have approved or rejected after the developer last fetched. Silent
+	// best-effort: if the fetch fails we fall back to the local ref.
+	deps.client.FetchReviewRef(ctx, issueSlug)
+
 	ref, _, err := deps.client.ReadReviewRef(ctx, issueSlug)
 	if err != nil || ref == nil {
 		return nil

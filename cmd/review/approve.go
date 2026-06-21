@@ -50,12 +50,9 @@ func runReviewApproveInteractive(ctx context.Context, deps reviewDeps, prompter 
 }
 
 func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	latest, err := deps.store.GetLatestReview(ctx, issueSlug)
+	latest, err := ensureReviewRecord(ctx, deps, issueSlug)
 	if err != nil {
-		return fmt.Errorf("get latest review: %w", err)
-	}
-	if latest == nil {
-		return fmt.Errorf("no review found for issue %q", issueSlug)
+		return err
 	}
 	if latest.Status != store.ReviewStatusInReview {
 		return fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, latest.Status)
@@ -94,10 +91,15 @@ func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) er
 		featureSHA = currentRef.FeatureSHA
 	}
 
+	reviewer := ""
+	if currentRef != nil {
+		reviewer = currentRef.Reviewer
+	}
 	newRef := git.ReviewRef{
 		Status:     string(store.ReviewStatusApproved),
 		Round:      latest.Round,
 		FeatureSHA: featureSHA,
+		Reviewer:   reviewer,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -120,7 +122,7 @@ func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) er
 		msg += fmt.Sprintf(" Reviewer pushed commits to %s — they will be incorporated on close.", reviewBranch)
 	}
 	fmt.Fprintln(deps.client.IO().Out, msg)
-	fmt.Fprintf(deps.client.IO().Out, "Developer can now run: git zf issue close\n")
+	fmt.Fprintf(deps.client.IO().Out, "Issue %q is ready to close. Developer can now run: git zf issue close\n", issueSlug)
 
 	return nil
 }

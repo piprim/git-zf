@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mitchellh/go-homedir"
@@ -305,6 +306,10 @@ func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompte
 		}
 	}
 
+	if err := writePushBranchRef(ctx, deps, b.IssueID(), branchName); err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: write branch ref: %v\n", err)
+	}
+
 	fmt.Fprintf(deps.Client.IO().Out, "Switched to new branch %q (based on %q)\n", branchName, base)
 
 	if picked.TrackerType != "" {
@@ -386,6 +391,10 @@ func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPromp
 		if err := parentStore.InsertIssueRelation(ctx, deps.Flags.ParentIssueSlug, b.IssueID()); err != nil {
 			fmt.Fprintf(deps.Client.IO().Err, "warning: record parent relation: %v\n", err)
 		}
+	}
+
+	if err := writePushBranchRef(ctx, deps, b.IssueID(), branchName); err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: write branch ref: %v\n", err)
 	}
 
 	fmt.Fprintf(deps.Client.IO().Out, "Created worktree %q at %q (based on %q)\n", branchName, path, base)
@@ -511,4 +520,20 @@ func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
 	}
 
 	return filepath.Join(base, repoName+"--"+branchName)
+}
+
+// writePushBranchRef writes a BranchRef to refs/zf/branches/<issueSlug> and
+// pushes it to the remote (best-effort). Called after every successful branch
+// or worktree creation so the parent-child relationship is available cross-machine.
+func writePushBranchRef(ctx context.Context, deps StartDeps, issueSlug, branchName string) error {
+	ref := git.BranchRef{
+		IssueSlug:  issueSlug,
+		BranchName: branchName,
+		ParentSlug: deps.Flags.ParentIssueSlug,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, err := deps.Client.WriteBranchRef(ctx, issueSlug, ref); err != nil {
+		return err
+	}
+	return deps.Client.PushBranchRef(ctx, issueSlug)
 }

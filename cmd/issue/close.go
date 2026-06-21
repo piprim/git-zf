@@ -155,20 +155,47 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	// Sub-task: redirect merge target to parent integration branch.
-	if parentSlug, err := deps.store.GetParentIssue(ctx, picked.IssueSlug); err != nil {
+	// The store is checked first; on a cross-machine clone where the store has
+	// no relation record, the refs/zf/branches/<slug> git ref is the fallback.
+	parentSlug, err := deps.store.GetParentIssue(ctx, picked.IssueSlug)
+	if err != nil {
 		return fmt.Errorf("check parent issue: %w", err)
-	} else if parentSlug != "" {
-		parentBranches, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
-		if err != nil {
-			return fmt.Errorf("list branches for parent %q: %w", parentSlug, err)
+	}
+	if parentSlug == "" {
+		// One fetch retrieves all refs/zf/branches/* atomically — both child
+		// and parent branch refs arrive together, so no second fetch is needed.
+		_ = deps.client.FetchBranchRefs(ctx)
+		if br, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug); br != nil {
+			parentSlug = br.ParentSlug
 		}
+	}
+	if parentSlug != "" {
+		// Try store first for the parent branch name.
+		parentBranches, listErr := deps.store.ListBranches(ctx, store.BranchStatusAll)
+		if listErr != nil {
+			return fmt.Errorf("list branches for parent %q: %w", parentSlug, listErr)
+		}
+		found := false
 		for _, b := range parentBranches {
 			if b.IssueSlug == parentSlug {
 				base = b.BranchName
+				found = true
 				break
 			}
 		}
+		// Store miss — read the parent's branch ref for the branch name.
+		if !found {
+			if parentBR, _ := deps.client.ReadBranchRef(ctx, parentSlug); parentBR != nil {
+				base = parentBR.BranchName
+			}
+		}
 	}
+
+	// Reconcile child statuses from branch refs so closes done in sibling clones
+	// (e.g. Bob closed X.2 in his repo) are visible before the guard runs.
+	// Branch refs are already fetched above (FetchBranchRefs is called when
+	// parentSlug is empty, which is always the case for a top-level parent issue).
+	reconcileChildrenFromRefs(ctx, deps, picked.IssueSlug)
 
 	// Parent issue: block close until all children are merged.
 	if allDone, err := deps.store.ChildrenAllMerged(ctx, picked.IssueSlug); err != nil {
@@ -221,47 +248,87 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 // error if close should be refused. When status is approved and the review
 // branch has reviewer commits, it fast-forwards the feature branch to
 // incorporate them and cleans up the review branch and ref.
+//
+// The git ref (refs/zf/reviews/<IssueID>) is the source of truth. The local
+// store is a cache that may lag behind the reviewer's machine. reviewPreflight
+// always fetches and reads the ref first so the developer never has to run a
+// manual git fetch before closing.
 func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRow) error {
-	latest, err := deps.store.GetLatestReview(ctx, picked.IssueSlug)
-	if err != nil {
-		return fmt.Errorf("check review status: %w", err)
+	// Fetch review refs (best-effort) so we see the reviewer's latest decision
+	// even if the developer has not fetched since submitting for review.
+	_ = deps.client.FetchReviewRefs(ctx)
+
+	// Read the ref — authoritative source of truth.
+	ref, _, refErr := deps.client.ReadReviewRef(ctx, picked.IssueSlug)
+	if refErr != nil {
+		return fmt.Errorf("read review ref: %w", refErr)
 	}
 
-	if latest == nil {
-		return nil // no review record — proceed
+	if ref == nil {
+		// No active review ref — either no review was submitted, or it was
+		// already cleaned up after a previous close. Proceed.
+		return nil
 	}
 
-	switch latest.Status {
+	// Reconcile local store from ref so downstream store reads are consistent.
+	if latest, _ := deps.store.GetLatestReview(ctx, picked.IssueSlug); latest != nil {
+		if store.ReviewStatus(ref.Status) != latest.Status {
+			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
+		}
+	}
+
+	switch store.ReviewStatus(ref.Status) {
 	case store.ReviewStatusInReview:
 		return fmt.Errorf(
 			"branch %q is locked for review (issue %q, round %d) — awaiting reviewer decision.\n"+
 				"Run `git zf review list` to check review status: %w",
-			picked.BranchName, picked.IssueSlug, latest.Round, ErrBranchLockedForReview)
+			picked.BranchName, picked.IssueSlug, ref.Round, ErrBranchLockedForReview)
 
 	case store.ReviewStatusChangesRequested:
 		return fmt.Errorf(
 			"reviewer requested changes on issue %q (round %d).\n"+
-				"Address feedback and run `git zf review request %s` for round %d: %w",
-			picked.IssueSlug, latest.Round, picked.IssueSlug, latest.Round+1, ErrReviewChangesRequested)
+				"Address feedback and run `git zf review request` for round %d: %w",
+			picked.IssueSlug, ref.Round, ref.Round+1, ErrReviewChangesRequested)
 
 	case store.ReviewStatusApproved:
 		reviewBranch := picked.IssueSlug + "@review"
-		if exists, _ := deps.client.BranchExists(reviewBranch); exists {
-			n, countErr := deps.client.CommitsAhead(ctx, reviewBranch, picked.BranchName)
+
+		// Resolve the effective review branch ref for CommitsAhead and
+		// FastForwardOnly. The reviewer may have pushed their review branch to
+		// origin without the developer ever checking it out locally; in that case
+		// use the remote tracking ref (origin/<reviewBranch>) so the incorporation
+		// is not silently skipped.
+		localExists, _ := deps.client.BranchExists(reviewBranch)
+		effectiveReview := reviewBranch
+		if !localExists {
+			if remote, _ := deps.client.Remote(); remote != "" {
+				candidate := remote + "/" + reviewBranch
+				if _, err := deps.client.ResolveRef("refs/remotes/" + candidate); err == nil {
+					effectiveReview = candidate
+				}
+			}
+		}
+
+		if localExists || effectiveReview != reviewBranch {
+			n, countErr := deps.client.CommitsAhead(ctx, effectiveReview, picked.BranchName)
 			if countErr == nil && n > 0 {
 				fmt.Fprintf(deps.client.IO().Out,
 					"Incorporating %d reviewer commit(s) from %s into %s...\n",
 					n, reviewBranch, picked.BranchName)
-				if err := deps.client.FastForwardOnly(ctx, reviewBranch, picked.BranchName); err != nil {
+				if err := deps.client.FastForwardOnly(ctx, effectiveReview, picked.BranchName); err != nil {
 					return fmt.Errorf("fast-forward %s to %s: %w", picked.BranchName, reviewBranch, err)
 				}
 			}
-			if err := deps.client.DeleteLocalBranch(ctx, reviewBranch, true); err != nil {
-				fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
+			if localExists {
+				if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
+					fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
+				}
 			}
 			_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
-			_ = deps.client.DeleteReviewRef(ctx, picked.IssueSlug)
 		}
+		// Always clean up the review ref (local + remote) on close, regardless
+		// of whether a review branch existed.
+		_ = deps.client.DeleteReviewRef(ctx, picked.IssueSlug)
 		return nil
 	}
 
@@ -304,7 +371,16 @@ func doMerge(
 	ctx context.Context,
 	mc mergeContext,
 	prompter ClosePrompter) (strategy MergeStrategy, aborted bool, err error) {
-	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, mc.baseBranch)
+	// The base branch may not exist locally (e.g. a parent integration branch
+	// that Bob never checked out). Fall back to origin/<base> so merge-tree
+	// can resolve it from the remote tracking ref.
+	dryRunBase := mc.baseBranch
+	if exists, _ := mc.client.BranchExists(mc.baseBranch); !exists {
+		if remote, _ := mc.client.Remote(); remote != "" {
+			dryRunBase = remote + "/" + mc.baseBranch
+		}
+	}
+	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, dryRunBase)
 	if err != nil {
 		return "", false, fmt.Errorf("merge dry-run: %w", err)
 	}
@@ -367,7 +443,15 @@ func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter
 		return fmt.Errorf("resolve branch %q: %w", mc.pickedBranch.BranchName, err)
 	}
 
-	baseHash, err := mc.client.ResolveRef("refs/heads/" + mc.baseBranch)
+	// Fast-forward local base to origin/<base> before squashing so the squash
+	// commit lands on the current remote tip. Without this, a teammate's push
+	// to the integration branch (e.g. Bob closing X.2) leaves the local base
+	// stale; the squash would diverge from origin and the post-close push fails.
+	if remote, _ := mc.client.Remote(); remote != "" {
+		_ = mc.client.FastForwardOnly(ctx, remote+"/"+mc.baseBranch, mc.baseBranch)
+	}
+
+	baseHash, err := mc.client.ResolveBranchRef(mc.baseBranch)
 	if err != nil {
 		return fmt.Errorf("resolve base %q: %w", mc.baseBranch, err)
 	}
@@ -394,6 +478,16 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.Branc
 
 	if err := deps.store.UpdateIssueStatus(ctx, picked.IssueID, store.StatusIDMerged); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: update issue status: %v\n", err)
+	}
+
+	// Stamp the branch ref as merged and push so sibling developers on other
+	// clones can detect this close without querying each other's stores.
+	if existing, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug); existing != nil {
+		merged := *existing
+		merged.Merged = true
+		if _, err := deps.client.WriteBranchRef(ctx, picked.IssueSlug, merged); err == nil {
+			_ = deps.client.PushBranchRef(ctx, picked.IssueSlug)
+		}
 	}
 
 	if deps.tracker == nil {
@@ -662,6 +756,37 @@ func mergeDryRun(ctx context.Context, mc mergeContext, remoteBase string) error 
 	}
 
 	return nil
+}
+
+// reconcileChildrenFromRefs reads refs/zf/branches/<childSlug> for every
+// in-progress child of parentSlug. When a ref has Merged=true (written by the
+// child's close in another clone), the local store is updated to merged so the
+// ChildrenAllMerged guard doesn't block the parent close.
+func reconcileChildrenFromRefs(ctx context.Context, deps closeDeps, parentSlug string) {
+	children, err := deps.store.ListChildIssues(ctx, parentSlug)
+	if err != nil || len(children) == 0 {
+		return
+	}
+
+	branches, err := deps.store.ListBranches(ctx, store.BranchStatusInProgress)
+	if err != nil {
+		return
+	}
+
+	now := time.Now()
+	for _, childSlug := range children {
+		ref, _ := deps.client.ReadBranchRef(ctx, childSlug)
+		if ref == nil || !ref.Merged {
+			continue
+		}
+		for _, b := range branches {
+			if b.IssueSlug != childSlug {
+				continue
+			}
+			_ = deps.store.UpdateBranchStatus(ctx, b.BranchName, store.StatusIDMerged, &now)
+			_ = deps.store.UpdateIssueStatus(ctx, b.IssueID, store.StatusIDMerged)
+		}
+	}
 }
 
 // composeAndCommit builds the prefill from issue context + a strategy subject,

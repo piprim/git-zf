@@ -41,6 +41,16 @@ func runGitIn(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// runGitInRig invokes `git` in the rig's working tree and t.Fatals on failure.
+func runGitInRig(t *testing.T, rig *startTestRig, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = rig.dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
 func newStartRig(t *testing.T) *startTestRig {
 	t.Helper()
 
@@ -678,6 +688,111 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 		}
 		if parent != "X" {
 			t.Errorf("GetParentIssue(X.1) = %q, want %q", parent, "X")
+		}
+	})
+}
+
+func TestRunIssueStart_WritesBranchRef(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+
+	prompter := &scriptedStartPrompter{
+		IssueFromUser: &issuepkg.Issue{
+			Type: "feat",
+			Issue: tracker.Issue{
+				ID:      "X",
+				Subject: "big-feature",
+			},
+		},
+		UseWorktree:   false,
+		ConfirmBranch: true,
+	}
+
+	deps := StartDeps{
+		Client: rig.client,
+		Cfg:    rig.cfg,
+		Flags:  issuepkg.IssueStartFlags{},
+	}
+
+	if err := RunIssueStart(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("RunIssueStart: %v", err)
+	}
+
+	t.Run("BranchRef written for root branch", func(t *testing.T) {
+		ref, err := rig.client.ReadBranchRef(t.Context(), "X")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if ref == nil {
+			t.Fatal("expected BranchRef to be written, got nil")
+		}
+		if ref.BranchName != "X@feat@big-feature" {
+			t.Errorf("BranchName: got %q, want %q", ref.BranchName, "X@feat@big-feature")
+		}
+		if ref.ParentSlug != "" {
+			t.Errorf("ParentSlug: got %q, want empty", ref.ParentSlug)
+		}
+	})
+}
+
+func TestRunIssueStart_WritesBranchRef_WithParent(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+
+	// Seed parent branch in store so --parent X can resolve.
+	s, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "X", Title: "big-feature", StatusID: store.StatusIDInProgress},
+		&store.Branch{Name: "X@feat@big-feature", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		_ = s.Close()
+		t.Fatalf("InsertIssueWithBranch: %v", err)
+	}
+	_ = s.Close()
+	// Create parent branch in git.
+	runGitInRig(t, rig, "checkout", "-b", "X@feat@big-feature")
+	runGitInRig(t, rig, "checkout", "main")
+
+	prompter := &scriptedStartPrompter{
+		IssueFromUser: &issuepkg.Issue{
+			Type: "feat",
+			Issue: tracker.Issue{
+				ID:      "X.1",
+				Subject: "part-one",
+			},
+		},
+		UseWorktree:   false,
+		ConfirmBranch: true,
+	}
+
+	deps := StartDeps{
+		Client: rig.client,
+		Cfg:    rig.cfg,
+		Flags:  issuepkg.IssueStartFlags{ParentIssueSlug: "X"},
+	}
+
+	if err := RunIssueStart(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("RunIssueStart: %v", err)
+	}
+
+	t.Run("BranchRef written with parent slug", func(t *testing.T) {
+		ref, err := rig.client.ReadBranchRef(t.Context(), "X.1")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if ref == nil {
+			t.Fatal("expected BranchRef, got nil")
+		}
+		if ref.BranchName != "X.1@feat@part-one" {
+			t.Errorf("BranchName: got %q, want %q", ref.BranchName, "X.1@feat@part-one")
+		}
+		if ref.ParentSlug != "X" {
+			t.Errorf("ParentSlug: got %q, want %q", ref.ParentSlug, "X")
 		}
 	})
 }

@@ -76,6 +76,20 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 		return nil
 	}
 
+	// Reconcile the latest row from the ref (authoritative source).
+	// This catches status changes (e.g. rejection) made on another machine.
+	if ref, _, _ := deps.client.ReadReviewRef(ctx, issueSlug); ref != nil {
+		latest := &rows[len(rows)-1]
+		if store.ReviewStatus(ref.Status) != latest.Status {
+			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
+			latest.Status = store.ReviewStatus(ref.Status)
+		}
+		if ref.Reviewer != "" && latest.Reviewer == "" {
+			_ = deps.store.UpdateReviewerIdentity(ctx, latest.ID, ref.Reviewer)
+			latest.Reviewer = ref.Reviewer
+		}
+	}
+
 	fmt.Fprintf(deps.client.IO().Out, "Review history for issue %q:\n", issueSlug)
 	for _, row := range rows {
 		resolved := "pending"
@@ -86,8 +100,12 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 		if row.HasCommits {
 			commits = " [reviewer pushed commits]"
 		}
+		reviewer := row.Reviewer
+		if reviewer == "" {
+			reviewer = "(awaiting)"
+		}
 		fmt.Fprintf(deps.client.IO().Out, "  Round %-2d  %-20s  reviewer: %-30s  opened: %s  resolved: %s%s\n",
-			row.Round, row.Status, row.Reviewer,
+			row.Round, row.Status, reviewer,
 			row.CreatedAt.Format("2006-01-02 15:04"), resolved, commits)
 	}
 

@@ -64,7 +64,7 @@ func runReviewStartInteractive(ctx context.Context, deps reviewDeps, prompter Re
 // runReviewStart creates the review branch for issueSlug. The caller is
 // responsible for fetching review refs before calling this function.
 func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	ref, _, err := deps.client.ReadReviewRef(ctx, issueSlug)
+	ref, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
 	if err != nil {
 		return fmt.Errorf("read review ref: %w", err)
 	}
@@ -85,6 +85,13 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 		return fmt.Errorf("working tree root: %w", err)
 	}
 
+	// Fetch from the remote so the feature branch commits are present locally.
+	// review start only fetched refs/zf/reviews/* earlier; the reviewer's clone
+	// may not have the actual commit objects yet (e.g. a round-2 fix).
+	if remote, _ := deps.client.Remote(); remote != "" {
+		_ = deps.client.RunGitAt(ctx, root, "fetch", remote)
+	}
+
 	// Create review branch at the exact feature HEAD captured at lock time.
 	if err := deps.client.RunGitAt(ctx, root, "checkout", "-b", reviewBranch, ref.FeatureSHA); err != nil {
 		short := ref.FeatureSHA
@@ -94,8 +101,19 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 		return fmt.Errorf("create review branch at %s: %w", short, err)
 	}
 
-	// Record reviewer identity in local store (best-effort).
+	// Record reviewer identity in the ref (source of truth, visible cross-machine)
+	// and in the local store (cache).
 	if reviewer, _ := deps.client.ConfigUser(ctx); reviewer != "" {
+		if ref.Reviewer == "" {
+			updatedRef := *ref
+			updatedRef.Reviewer = reviewer
+			if _, writeErr := deps.client.WriteReviewRef(ctx, issueSlug, updatedRef, currentSHA); writeErr == nil {
+				// Push so the developer can see who started the review.
+				if pushErr := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); pushErr != nil {
+					fmt.Fprintf(deps.client.IO().Err, "warning: push reviewer identity: %v\n", pushErr)
+				}
+			}
+		}
 		if latest, err := deps.store.GetLatestReview(ctx, issueSlug); err == nil && latest != nil && latest.Reviewer == "" {
 			_ = deps.store.UpdateReviewerIdentity(ctx, latest.ID, reviewer)
 		}

@@ -33,14 +33,32 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
-	if len(branches) == 0 {
+
+	// Filter out branches whose review ref is already in_review (locked) or
+	// approved (developer should close, not re-request). Fetch first so the
+	// local ref namespace reflects the current remote state.
+	_ = deps.client.FetchReviewRefs(ctx)
+	allRefs, _ := deps.client.ListReviewRefs(ctx)
+	var submittable []store.BranchRow
+	for _, b := range branches {
+		ref := allRefs[b.IssueSlug]
+		if ref != nil {
+			switch store.ReviewStatus(ref.Status) {
+			case store.ReviewStatusInReview, store.ReviewStatusApproved:
+				continue
+			}
+		}
+		submittable = append(submittable, b)
+	}
+
+	if len(submittable) == 0 {
 		fmt.Fprintln(deps.client.IO().Out, "No in-progress branches to submit for review.")
 		fmt.Fprintln(deps.client.IO().Out, "Tip: run 'git zf issue track'.")
 
 		return nil
 	}
 
-	picked, err := prompter.PickBranch(ctx, "Select branch to submit for review:", branches, currentIssueSlug(deps.client))
+	picked, err := prompter.PickBranch(ctx, "Select branch to submit for review:", submittable, currentIssueSlug(deps.client))
 	if err != nil {
 		return fmt.Errorf("branch picker: %w", err)
 	}
@@ -52,13 +70,23 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 }
 
 func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	// Guard: refuse if already in_review.
-	latest, err := deps.store.GetLatestReview(ctx, issueSlug)
+	// Fetch first so ReadReviewRef reflects the current remote state.
+	// This is required for the CAS lease on subsequent review rounds.
+	_ = deps.client.FetchReviewRefs(ctx)
+
+	// Read the existing ref to get the current SHA (used as CAS lease) and to
+	// guard against resubmitting when the reviewer has not yet decided.
+	// Reading the ref (not the store) avoids stale-cache false positives.
+	existingRef, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
 	if err != nil {
-		return fmt.Errorf("get latest review: %w", err)
+		return fmt.Errorf("read review ref: %w", err)
 	}
-	if latest != nil && latest.Status == store.ReviewStatusInReview {
-		return fmt.Errorf("issue %q is already in review (round %d) — awaiting reviewer decision", issueSlug, latest.Round)
+	if existingRef != nil && existingRef.Status == string(store.ReviewStatusInReview) {
+		round := 1
+		if latest, _ := deps.store.GetLatestReview(ctx, issueSlug); latest != nil {
+			round = latest.Round
+		}
+		return fmt.Errorf("issue %q is already in review (round %d) — awaiting reviewer decision", issueSlug, round)
 	}
 
 	// Find the feature branch for this issue.
@@ -99,28 +127,28 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 	}
 
 	// Write and push review ref (ref is the source of truth).
-	ref := git.ReviewRef{
+	// currentSHA is "" on the first-ever request (no prior ref), or the SHA of
+	// the previous rejected/approved ref on subsequent rounds. Passing it to
+	// both WriteReviewRef and PushReviewRef ensures CAS correctness: the local
+	// write and the remote push both fail if something changed concurrently.
+	newRef := git.ReviewRef{
 		Status:     string(store.ReviewStatusInReview),
 		Round:      reviewRow.Round,
 		FeatureSHA: featureSHA.String(),
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// First write: currentSHA is "" (no prior remote value). Pass "" to use the
-	// unqualified lease form, which allows the push only if the remote has no
-	// ref yet (preventing a second concurrent request from overwriting).
-	if _, err := deps.client.WriteReviewRef(ctx, issueSlug, ref, ""); err != nil {
+	if _, err := deps.client.WriteReviewRef(ctx, issueSlug, newRef, currentSHA); err != nil {
 		return fmt.Errorf("write review ref: %w", err)
 	}
 
-	if err := deps.client.PushReviewRef(ctx, issueSlug, ""); err != nil {
+	if err := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
 	}
 
 	fmt.Fprintf(deps.client.IO().Out,
 		"Issue %q is now in review (round %d). Branch %q is locked.\n"+
-			"Share with your reviewer: git fetch && git zf review start\n"+
-			"Tip: run 'git zf init' in every repo to install the push-lock guard.\n",
+			"Share with your reviewer: git fetch && git zf review start\n",
 		issueSlug, reviewRow.Round, featureBranch)
 
 	return nil
