@@ -3,14 +3,12 @@ package config
 import (
 	_ "embed"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/mitchellh/go-homedir"
 	"github.com/mitchellh/mapstructure"
 	toml "github.com/pelletier/go-toml"
-	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/gitdir"
 	"github.com/spf13/viper"
 )
 
@@ -167,52 +165,15 @@ func HomeDir() (string, error) {
 	return home, nil
 }
 
-// RepoDir returns the repository's git directory path.
-// For normal repos this is <worktree>/.git; for submodules and linked worktrees
-// the real directory is resolved from the gitfile at <worktree>/.git.
+// RepoDir returns the repository's git directory path. Resolves gitfiles,
+// submodules, and linked worktrees via git rev-parse. Returns "" on error.
 func RepoDir() string {
-	client, err := git.NewClient(nil)
+	d, err := gitdir.Get()
 	if err != nil {
 		return ""
 	}
 
-	root, err := client.WorkingTreeRoot()
-	if err != nil || root == "" {
-		return ""
-	}
-
-	dotGit := filepath.Join(root, ".git")
-	fi, err := os.Stat(dotGit)
-	if err != nil {
-		return ""
-	}
-
-	if fi.IsDir() {
-		return dotGit
-	}
-
-	// In submodules and linked worktrees .git is a gitfile, not a directory.
-	return resolveGitFile(dotGit, root)
-}
-
-// resolveGitFile parses a gitfile ("gitdir: <path>") and returns the absolute
-// path to the real git directory. Returns "" if parsing fails.
-func resolveGitFile(path, root string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-
-	target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
-	if !ok {
-		return ""
-	}
-
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(root, target)
-	}
-
-	return filepath.Clean(target)
+	return d
 }
 
 // HomePath returns the configuration file path in the user home directory.

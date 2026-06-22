@@ -6,10 +6,10 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	commitpkg "github.com/piprim/git-zf/commit"
+	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/convert"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
@@ -73,13 +73,9 @@ func (c Commit) GetRootCmd() *cobra.Command {
 }
 
 func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
-	client, err := git.NewClient(&pkg.IO{
-		In:  cmd.InOrStdin(),
-		Out: cmd.OutOrStdout(),
-		Err: cmd.ErrOrStderr(),
-	})
+	client, err := cmdutil.NewClientForCmd(cmd, c.appConfig)
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
+		return err
 	}
 
 	authors, err := client.Authors(cmd.Context())

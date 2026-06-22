@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
@@ -103,13 +105,13 @@ func newStartRig(t *testing.T) *startTestRig {
 
 // deps returns a StartDeps wired with the rig's client + fake tracker.
 // flags lets the test choose Variant / TrackerFirst per case.
-func (r *startTestRig) deps(flags issuepkg.IssueStartFlags) StartDeps {
-	return StartDeps{Client: r.client, Cfg: r.cfg, Tracker: r.tracker, Flags: flags}
+func (r *startTestRig) deps(flags issuepkg.IssueStartFlags) issueflow.StartDeps {
+	return issueflow.StartDeps{Client: r.client, Cfg: r.cfg, Tracker: r.tracker, Flags: flags}
 }
 
 // noTrackerDeps returns a StartDeps with deps.Tracker = nil (manual-only path).
-func (r *startTestRig) noTrackerDeps(flags issuepkg.IssueStartFlags) StartDeps {
-	return StartDeps{Client: r.client, Cfg: r.cfg, Tracker: nil, Flags: flags}
+func (r *startTestRig) noTrackerDeps(flags issuepkg.IssueStartFlags) issueflow.StartDeps {
+	return issueflow.StartDeps{Client: r.client, Cfg: r.cfg, Tracker: nil, Flags: flags}
 }
 
 // runGit invokes `git` inside the rig's working tree and t.Fatals on failure.
@@ -140,7 +142,7 @@ func TestRunIssueStart_BranchHappyPath_NoTracker(t *testing.T) {
 		ConfirmBranch: true,
 	}
 
-	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -198,7 +200,7 @@ func TestRunIssueStart_BranchHappyPath_WithTracker(t *testing.T) {
 		TrackerStatus:    "In Progress",
 	}
 
-	if err := RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -248,7 +250,7 @@ func TestRunIssueStart_WorktreeHappyPath(t *testing.T) {
 		ConfirmWorktree: true,
 	}
 
-	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -299,7 +301,7 @@ func TestRunIssueStart_BranchUserAbortsAtConfirm(t *testing.T) {
 		ConfirmBranch: false, // operator declines
 	}
 
-	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -334,9 +336,9 @@ func TestRunIssueStart_VariantOnCollision(t *testing.T) {
 		Issue: tracker.Issue{ID: "ABC-6", Subject: "Add search"},
 	}
 
-	variantBranch, err := rebuildVariantBranch(picked, "spike")
+	variantBranch, err := branch.New(picked.ID, picked.Type, picked.Subject, "spike")
 	if err != nil {
-		t.Fatalf("rebuildVariantBranch: %v", err)
+		t.Fatalf("branch.New spike variant: %v", err)
 	}
 
 	prompter := &scriptedStartPrompter{
@@ -346,7 +348,7 @@ func TestRunIssueStart_VariantOnCollision(t *testing.T) {
 		ConfirmBranch:  true,
 	}
 
-	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -391,7 +393,7 @@ func TestRunIssueStart_AbortOnCollision(t *testing.T) {
 		ConflictAbort: true,
 	}
 
-	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -433,7 +435,7 @@ func TestRunIssueStart_TrackerListErrorFallsBackToManual(t *testing.T) {
 		ConfirmBranch: true,
 	}
 
-	if err := RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -482,7 +484,7 @@ func TestRunIssueStart_NoTrackerStatusUpdate(t *testing.T) {
 		TrackerStatus:    "", // empty = skip
 	}
 
-	if err := RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -532,7 +534,7 @@ func TestRunIssueStart_UseWorktreeConfigOverride(t *testing.T) {
 		ConfirmWorktree: true,
 	}
 
-	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -581,7 +583,7 @@ func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
 		ConfirmBranch:       true,
 	}
 
-	if err := RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -648,7 +650,7 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 	}
 
 	flags := issuepkg.IssueStartFlags{TrackerFirst: false}
-	if err := RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -709,13 +711,13 @@ func TestRunIssueStart_WritesBranchRef(t *testing.T) {
 		ConfirmBranch: true,
 	}
 
-	deps := StartDeps{
+	deps := issueflow.StartDeps{
 		Client: rig.client,
 		Cfg:    rig.cfg,
 		Flags:  issuepkg.IssueStartFlags{},
 	}
 
-	if err := RunIssueStart(t.Context(), deps, prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), deps, prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 
@@ -770,13 +772,13 @@ func TestRunIssueStart_WritesBranchRef_WithParent(t *testing.T) {
 		ConfirmBranch: true,
 	}
 
-	deps := StartDeps{
+	deps := issueflow.StartDeps{
 		Client: rig.client,
 		Cfg:    rig.cfg,
 		Flags:  issuepkg.IssueStartFlags{ParentIssueSlug: "X"},
 	}
 
-	if err := RunIssueStart(t.Context(), deps, prompter); err != nil {
+	if err := issueflow.RunIssueStart(t.Context(), deps, prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
 

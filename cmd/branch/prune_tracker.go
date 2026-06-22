@@ -10,8 +10,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
@@ -266,17 +266,9 @@ func (b Branch) pruneTrackerRunE(cmd *cobra.Command, flags pruneTrackerFlags) er
 	}
 	defer func() { _ = s.Close() }()
 
-	c, err := git.NewClient(&pkg.IO{
-		In:  cmd.InOrStdin(),
-		Out: cmd.OutOrStdout(),
-		Err: cmd.ErrOrStderr(),
-	})
+	c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
-
-	if b.appConfig.Branch.Remote != "" {
-		c.SetRemote(b.appConfig.Branch.Remote)
+		return err
 	}
 
 	tr, err := tracker.New(b.appConfig.IssueTracker)

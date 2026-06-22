@@ -19,27 +19,27 @@ duplication row means high churn/yield, not danger.
 
 | # | Smell | Location(s) | Severity |
 |---|-------|-------------|----------|
-| 1 | `git.NewClient(&pkg.IO{In/Out/Err})` + `SetRemote` preamble copy-pasted | `cmd/issue/start.go:41-53`, `cmd/issue/close.go:41-54`, `cmd/branch/branch.go:264-275`, `cmd/branch/prune_tracker.go:271-282`; `cmd/commit/commit.go:75` (NewClient only — no SetRemote) | High |
-| 2 | `git.CommitOptions{All, Amend, …}` field-by-field map from `tui.CommitOption` | `cmd/issue/close.go:299-307, 435-443, 530-538` | High |
-| 3 | `IssueHint{…}` + `Prefill()` + `prefill["subject"] = fmt.Sprintf(...)` block | `cmd/issue/close.go:286-292, 422-428, 517-523` | Medium |
-| 4 | Compose-message-then-commit tail (identical 8 lines) | end of `doSquashCommit`, `doRebaseClose`, `doClassicClose` | Medium |
-| 5 | "fetch statuses → pick → update, all non-fatal" tracker routine | `cmd/issue/close.go:331-351` vs `cmd/issue/start.go:335-361` | Medium |
-| 6 | `createBranchFlow` vs `createWorktreeFlow` — same prepare→resolve→confirm→persist→tracker shape | `cmd/issue/start.go:196-245` vs `247-311` | Medium |
-| 7 | Row-scan loop (`Scan` + `parseSQLiteTime` + append) + near-identical SELECT | `store/store.go:237-264` vs `295-320` (+ query at `216-219`/`275-280`) | Medium |
-| 8 | `includeProj := len(m.projects) > 1; m.table.SetRows(applyFilters(...))` repeated | `tui/issue.go:396-397, 423-424, 436-437, 447-448` (+ `tui/issue.go:208`, the same shape outside `Update`) | Medium |
+| ~~1~~ | ~~`git.NewClient(&pkg.IO{In/Out/Err})` + `SetRemote` preamble copy-pasted~~ | ~~`cmd/cmdutil/git.go` (new)~~ | ~~High~~ **Fixed (R1)** |
+| ~~2~~ | ~~`git.CommitOptions{All, Amend, …}` field-by-field map from `tui.CommitOption`~~ | ~~`cmd/issue/close.go`~~ | ~~High~~ **Fixed (R2)** |
+| ~~3~~ | ~~`IssueHint{…}` + `Prefill()` + `prefill["subject"] = fmt.Sprintf(...)` block~~ | ~~`cmd/issue/close.go`~~ | ~~Medium~~ **Fixed (R3)** |
+| ~~4~~ | ~~Compose-message-then-commit tail (identical 8 lines)~~ | ~~end of `doSquashCommit`, `doRebaseClose`, `doClassicClose`~~ | ~~Medium~~ **Fixed (R3)** |
+| ~~5~~ | ~~"fetch statuses → pick → update, all non-fatal" tracker routine~~ | ~~`cmd/issue/tracker.go` (new)~~ | ~~Medium~~ **Fixed (R4)** |
+| ~~6~~ | ~~`createBranchFlow` vs `createWorktreeFlow` — same prepare→resolve→confirm→persist→tracker shape~~ | ~~`cmd/issue/start.go`~~ | ~~Medium~~ **Fixed (R8)** |
+| ~~7~~ | ~~Row-scan loop (`Scan` + `parseSQLiteTime` + append) + near-identical SELECT~~ | ~~`store/store.go`~~ | ~~Medium~~ **Fixed (R5)** |
+| ~~8~~ | ~~`includeProj := len(m.projects) > 1; m.table.SetRows(applyFilters(...))` repeated~~ | ~~`tui/issue.go`~~ | ~~Medium~~ **Fixed (R6)** |
 
 #### Other smells
 
 | # | Smell | Location | Severity |
 |---|-------|----------|----------|
-| 9 | Magic constant `2` instead of `store.StatusIDMerged` | `cmd/branch/branch.go:394` | High (latent bug) |
-| 10 | `git.Client` god object — ~30 methods, file split by file not concern | `git/git.go` (556 ln) + `merge.go` + `system.go` | Low–Med |
-| 11 | Long method `issueTableModel.Update` — nested modal state machine, 90+ lines | `tui/issue.go:384-477` | Medium |
-| 12 | cmd→cmd coupling: `cmd/branch` imports `cmd/issue` for `BuildStartDeps`/`RunIssueStart` | `cmd/branch/branch.go:14` | Medium (architectural) |
-| 13 | Repeated `//nolint:wrapcheck // prompter error already wrapped` on every prompter return | `close.go` ×6, throughout | Low (convention worth a doc, not 6 inline comments) |
-| 14 | config/store reach into `git` for repo discovery — `config.RepoDir/RepoPath` and `store.OpenRepo` build a full `git.Client`, making go-git a transitive dependency of nearly the whole tree | `config/config.go:163-164, 219`; `store/store.go:360-361` | Medium (architectural) |
-| 15 | Domain/transport leakage — `issue.Issue` embeds `tracker.Issue`, and the issue domain package also defines the `Prompter` interface + `GetFromUser/GetFromTracker`. Three Issue shapes (`tracker.Issue`, `issue.Issue`, `store.Issue`) + `store.IssueRow`, with undocumented mapping | `issue/issue.go:31`; `tracker/tracker.go:13`; `store/store.go:27` | Medium (architectural) |
-| 16 | Global Viper singleton — `cmd/root` mutates the package-global viper and `config.Load()` reads it; load order-dependent and hard to exercise in isolation (vs. `viper.New()` per load) | `cmd/root.go:117-137`; `config/config.go:98+` | Low–Med (testability) |
+| ~~9~~ | ~~Magic constant `2` instead of `store.StatusIDMerged`~~ | ~~`cmd/branch/branch.go:394`~~ | ~~High (latent bug)~~ **Fixed (R7)** |
+| 10 | `git.Client` god object — ~30 methods, file split by file not concern | `git/git.go` (695 ln) + `merge.go` + `system.go` | Low–Med |
+| ~~11~~ | ~~Long method `issueTableModel.Update` — nested modal state machine, 90+ lines~~ | ~~`tui/issue.go`~~ | ~~Medium~~ **Fixed (R6 phase 2)** |
+| ~~12~~ | ~~cmd→cmd coupling: `cmd/branch` imports `cmd/issue` for `BuildStartDeps`/`RunIssueStart`~~ | ~~`cmd/issueflow/` (new)~~ | ~~Medium (architectural)~~ **Fixed** |
+| 13 | Repeated `//nolint:wrapcheck // prompter error already wrapped` on every prompter return | `close.go` ×5, throughout | Low (convention worth a doc, not 5 inline comments) |
+| ~~14~~ | ~~config/store reach into `git` for repo discovery — `config.RepoDir/RepoPath` and `store.OpenRepo` build a full `git.Client`, making go-git a transitive dependency of nearly the whole tree~~ | ~~`internal/gitdir/` (new)~~ | ~~Medium (architectural)~~ **Fixed** |
+| 15 | Domain/transport leakage — `issue.Issue` embeds `tracker.Issue`, and the issue domain package also defines the `Prompter` interface + `GetFromUser/GetFromTracker`. Three Issue shapes (`tracker.Issue`, `issue.Issue`, `store.Issue`) + `store.IssueRow`, with undocumented mapping | `issue/issue.go:32,34`; `tracker/tracker.go:13`; `store/store.go:28` | Medium (architectural) |
+| 16 | Global Viper singleton — `cmd/root` mutates the package-global viper and `config.Load()` reads it; load order-dependent and hard to exercise in isolation (vs. `viper.New()` per load) | `cmd/root.go:115+`; `config/config.go:89+` | Low–Med (testability) |
 
 ### RECOMMENDATIONS
 
@@ -214,7 +214,7 @@ Then split Update into `updatePicking` / `updateFiltering` / `updateNormal` key 
 
 `cmd/branch/branch.go:394`: `s.UpdateBranchStatus(ctx, ..., 2, &now)` → `store.StatusIDMerged`. One-line, removes a correctness hazard if IDs ever change. Do this first.
 
-#### R8 — Merge createBranchFlow/createWorktreeFlow (smell #6)
+#### R8 — Merge createBranchFlow/createWorktreeFlow (smell #6) [DONE]
 
 Both follow prepare→resolve-conflict→(confirm)→create→persist→tracker.
 Extract the shared head (prepare + resolve + nil-guard + branchName) and tail (persist + tracker), leaving only the create-vs-worktree confirm/exec middle.
@@ -228,7 +228,7 @@ Slightly more involved than R1–R7 because the confirm message and success outp
 4. R4 — `applyTrackerStatus` — removes the second cross-file duplication.
 5. R5 — `scanBranchRow` — guards against column drift.
 6. R6 — `refreshRows` + split Update — readability of the TUI state machine.
-7. R8 — merge create flows — higher effort, lower urgency.
+7. ~~R8 — merge create flows — higher effort, lower urgency.~~ [DONE]
 8. (Architectural, separate effort) ROADMAP rec #1/#2 (smells #12, #14): lift `RunIssueStart/close` use-cases into an
    `app/` package to break the `cmd/branch` → `cmd/issue` import, and introduce a narrow `GitDir()` discovery
    helper so config/store stop pulling in go-git transitively. Smells #15 (Issue-type leakage, rec #6) and

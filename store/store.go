@@ -12,7 +12,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/gitdir"
 	_ "modernc.org/sqlite" // Import for side-effect: registers sqlite driver
 )
 
@@ -231,14 +231,18 @@ func (s *Store) UpdateIssueStatus(ctx context.Context, issueID, statusID int64) 
 	return nil
 }
 
-// ListBranches returns all branches joined with their issue and status,
-// ordered by created_at DESC. BranchStatusAll returns every row.
-func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]BranchRow, error) {
-	q := `
+// branchSelectBase is the shared SELECT + FROM/JOIN fragment for branch queries.
+// Column order must match scanBranchRow.
+const branchSelectBase = `
 		SELECT i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
 		FROM branches b
 		JOIN issues i ON b.issue_id = i.id
 		JOIN statuses st ON b.status_id = st.id`
+
+// ListBranches returns all branches joined with their issue and status,
+// ordered by created_at DESC. BranchStatusAll returns every row.
+func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]BranchRow, error) {
+	q := branchSelectBase
 
 	var args []any
 	if status != BranchStatusAll {
@@ -257,21 +261,11 @@ func (s *Store) ListBranches(ctx context.Context, status BranchStatus) ([]Branch
 	var result []BranchRow
 
 	for rows.Next() {
-		var r BranchRow
-		var createdAtStr string
-
-		if err := rows.Scan(
-			&r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
-		); err != nil {
-			return nil, fmt.Errorf("scan branch row: %w", err)
+		r, err := scanBranchRow(rows)
+		if err != nil {
+			return nil, err
 		}
 
-		t, parseErr := parseSQLiteTime(createdAtStr)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse branch created_at %q: %w", createdAtStr, parseErr)
-		}
-
-		r.CreatedAt = t
 		result = append(result, r)
 	}
 
@@ -293,11 +287,7 @@ func (s *Store) ListBranchesByIssueSlugs(ctx context.Context, slugs []string) (m
 		return make(map[string]BranchRow), nil
 	}
 
-	q := `
-SELECT i.id, i.id_slug, i.title, b.name, b.type, st.name, b.created_at
-FROM branches b
-JOIN issues i ON b.issue_id = i.id
-JOIN statuses st ON b.status_id = st.id
+	q := branchSelectBase + `
 WHERE i.id_slug IN (SELECT value FROM json_each(?))
 ORDER BY b.created_at DESC`
 
@@ -315,21 +305,11 @@ ORDER BY b.created_at DESC`
 	result := make(map[string]BranchRow)
 
 	for rows.Next() {
-		var r BranchRow
-		var createdAtStr string
-
-		if err := rows.Scan(
-			&r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
-		); err != nil {
-			return nil, fmt.Errorf("scan branch row: %w", err)
+		r, err := scanBranchRow(rows)
+		if err != nil {
+			return nil, err
 		}
 
-		t, parseErr := parseSQLiteTime(createdAtStr)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse branch created_at %q: %w", createdAtStr, parseErr)
-		}
-
-		r.CreatedAt = t
 		if _, exists := result[r.IssueSlug]; !exists {
 			result[r.IssueSlug] = r
 		}
@@ -340,6 +320,28 @@ ORDER BY b.created_at DESC`
 	}
 
 	return result, nil
+}
+
+// scanBranchRow scans one row from a branch query. Column order must match
+// branchSelectBase: id, id_slug, title, name, type, status, created_at.
+func scanBranchRow(rows *sql.Rows) (BranchRow, error) {
+	var r BranchRow
+	var createdAtStr string
+
+	if err := rows.Scan(
+		&r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
+	); err != nil {
+		return r, fmt.Errorf("scan branch row: %w", err)
+	}
+
+	t, parseErr := parseSQLiteTime(createdAtStr)
+	if parseErr != nil {
+		return r, fmt.Errorf("parse branch created_at %q: %w", createdAtStr, parseErr)
+	}
+
+	r.CreatedAt = t
+
+	return r, nil
 }
 
 // DeleteBranch removes the branch record identified by name.
@@ -380,17 +382,12 @@ func parseSQLiteTime(s string) (time.Time, error) {
 // regular repos, submodules (where <worktree>/.git is a gitlink file), and
 // linked worktrees alike.
 func OpenRepo(ctx context.Context) (*Store, error) {
-	client, err := git.NewClient(nil)
+	d, err := gitdir.Get()
 	if err != nil {
 		return nil, fmt.Errorf("not a git repository: %w", err)
 	}
 
-	gitDir, err := client.GitDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve git dir: %w", err)
-	}
-
-	s, err := Open(ctx, gitDir)
+	s, err := Open(ctx, d)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}

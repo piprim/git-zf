@@ -1,4 +1,4 @@
-package issue
+package issueflow
 
 import (
 	"context"
@@ -84,8 +84,6 @@ var _ StartPrompter = (*HuhStartPrompter)(nil)
 type HuhStartPrompter struct{}
 
 // NewHuhStartPrompter constructs the production huh-driven StartPrompter.
-// Exported so cmd/branch/branch.go can build one when delegating to
-// RunIssueStart.
 func NewHuhStartPrompter() *HuhStartPrompter {
 	return &HuhStartPrompter{}
 }

@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -26,18 +26,10 @@ func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppCon
 		return reviewDeps{}, fmt.Errorf("open store: %w", err)
 	}
 
-	client, err := git.NewClient(&pkg.IO{
-		In:  cmd.InOrStdin(),
-		Out: cmd.OutOrStdout(),
-		Err: cmd.ErrOrStderr(),
-	})
+	client, err := cmdutil.NewClientForCmd(cmd, cfg)
 	if err != nil {
 		_ = s.Close()
-		return reviewDeps{}, fmt.Errorf("not a git repository: %w", err)
-	}
-
-	if cfg.Branch.Remote != "" {
-		client.SetRemote(cfg.Branch.Remote)
+		return reviewDeps{}, err
 	}
 
 	return reviewDeps{client: client, store: s, cfg: cfg}, nil

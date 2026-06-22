@@ -8,10 +8,11 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	commitpkg "github.com/piprim/git-zf/commit"
+	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/convert"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
@@ -39,19 +40,11 @@ func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConf
 		return closeDeps{}, fmt.Errorf("failed to get store: %w", err)
 	}
 
-	client, err := git.NewClient(&pkg.IO{
-		In:  cmd.InOrStdin(),
-		Out: cmd.OutOrStdout(),
-		Err: cmd.ErrOrStderr(),
-	})
+	client, err := cmdutil.NewClientForCmd(cmd, cfg)
 	if err != nil {
 		_ = s.Close()
 
-		return closeDeps{}, fmt.Errorf("not a git repository: %w", err)
-	}
-
-	if cfg.Branch.Remote != "" {
-		client.SetRemote(cfg.Branch.Remote)
+		return closeDeps{}, err
 	}
 
 	deps := closeDeps{client: client, store: s, cfg: cfg}
@@ -490,31 +483,7 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.Branc
 		}
 	}
 
-	if deps.tracker == nil {
-		return
-	}
-
-	statuses, err := deps.tracker.ListStatuses(ctx)
-	if err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: could not fetch tracker statuses: %v\n", err)
-
-		return
-	}
-
-	selected, err := prompter.PickTrackerStatus(ctx, picked.IssueSlug, deps.cfg.IssueTracker.Type, statuses)
-	if err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: status picker: %v\n", err)
-
-		return
-	}
-
-	if selected == "" {
-		return
-	}
-
-	if err := deps.tracker.UpdateIssueStatus(ctx, picked.IssueSlug, selected); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: update tracker status: %v\n", err)
-	}
+	issueflow.ApplyTrackerStatus(ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug, deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
 }
 
 func doDeleteBranch(

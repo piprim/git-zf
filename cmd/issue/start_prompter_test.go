@@ -4,12 +4,13 @@ import (
 	"context"
 
 	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
 )
 
 // Compile-time check: scriptedStartPrompter must satisfy StartPrompter.
-var _ StartPrompter = (*scriptedStartPrompter)(nil)
+var _ issueflow.StartPrompter = (*scriptedStartPrompter)(nil)
 
 // scriptedStartPrompter is the canned-response prompter used by
 // start_e2e_test.go. Each field corresponds to one StartPrompter method's
@@ -128,7 +129,7 @@ func (s *scriptedStartPrompter) PickTrackerStatus(_ context.Context, _, _ string
 //	ConflictAbort   → return (nil, nil)
 //	ConflictBranch  → return (ConflictBranch, nil)
 //	default         → return the branch passed in, unchanged (no-collision path)
-func (s *scriptedStartPrompter) ResolveBranchConflict(_ context.Context, _ BranchClient, b *branch.Branch, _ *issuepkg.Issue) (*branch.Branch, error) {
+func (s *scriptedStartPrompter) ResolveBranchConflict(_ context.Context, _ issueflow.BranchClient, b *branch.Branch, _ *issuepkg.Issue) (*branch.Branch, error) {
 	if s.ConflictErr != nil {
 		return nil, s.ConflictErr
 	}

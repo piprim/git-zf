@@ -381,99 +381,112 @@ type issueTableModel struct {
 
 func (*issueTableModel) Init() tea.Cmd { return nil }
 
+func (m *issueTableModel) refreshRows() {
+	includeProj := len(m.projects) > 1
+	m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
+}
+
 func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if m.picking {
-			opts := projectPickerOptions(m.projects)
-			switch key.String() {
-			case "esc":
-				m.picking = false
-
-				return m, nil
-			case "enter":
-				m.picking = false
-				m.projectFilter = opts[m.pickCursor]
-				includeProj := len(m.projects) > 1
-				m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
-
-				return m, nil
-			case "up", "k":
-				if m.pickCursor > 0 {
-					m.pickCursor--
-				}
-
-				return m, nil
-			case "down", "j":
-				if m.pickCursor < len(opts)-1 {
-					m.pickCursor++
-				}
-
-				return m, nil
-			}
-
-			return m, nil
+			return m.updatePicking(key)
 		}
-
 		if m.filtering {
-			switch key.String() {
-			case "esc":
-				m.filtering = false
-				m.filter.Blur()
-				m.filter.Reset()
-				includeProj := len(m.projects) > 1
-				m.table.SetRows(applyFilters(m.allRows, m.statusFilter, "", m.projectFilter, includeProj))
+			return m.updateFiltering(msg, key)
+		}
+		if model, cmd, handled := m.updateNormal(key); handled {
+			return model, cmd
+		}
+	}
+	var cmd tea.Cmd
+	m.table, cmd = m.table.Update(msg)
+	return m, cmd
+}
 
-				return m, nil
-			case "enter":
-				m.filtering = false
-				m.filter.Blur()
+func (m *issueTableModel) updatePicking(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	opts := projectPickerOptions(m.projects)
+	switch key.String() {
+	case "esc":
+		m.picking = false
 
-				return m, nil
-			}
+		return m, nil
+	case "enter":
+		m.picking = false
+		m.projectFilter = opts[m.pickCursor]
+		m.refreshRows()
 
-			var cmd tea.Cmd
-			m.filter, cmd = m.filter.Update(msg)
-			includeProj := len(m.projects) > 1
-			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
-
-			return m, cmd
+		return m, nil
+	case "up", "k":
+		if m.pickCursor > 0 {
+			m.pickCursor--
 		}
 
-		switch key.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "tab":
-			m.statusFilter = nextStatus(m.statusFilter)
-			includeProj := len(m.projects) > 1
-			m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
-
-			return m, nil
-		case "p":
-			if len(m.projects) > 0 {
-				m.picking = true
-				opts := projectPickerOptions(m.projects)
-				m.pickCursor = 0
-				for i, o := range opts {
-					if o == m.projectFilter {
-						m.pickCursor = i
-
-						break
-					}
-				}
-			}
-
-			return m, nil
-		case "/":
-			m.filtering = true
-
-			return m, m.filter.Focus()
+		return m, nil
+	case "down", "j":
+		if m.pickCursor < len(opts)-1 {
+			m.pickCursor++
 		}
+
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m *issueTableModel) updateFiltering(msg tea.Msg, key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.filtering = false
+		m.filter.Blur()
+		m.filter.Reset()
+		m.refreshRows()
+
+		return m, nil
+	case "enter":
+		m.filtering = false
+		m.filter.Blur()
+
+		return m, nil
 	}
 
 	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
+	m.filter, cmd = m.filter.Update(msg)
+	m.refreshRows()
 
 	return m, cmd
+}
+
+func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch key.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit, true
+	case "tab":
+		m.statusFilter = nextStatus(m.statusFilter)
+		m.refreshRows()
+
+		return m, nil, true
+	case "p":
+		if len(m.projects) > 0 {
+			m.picking = true
+			opts := projectPickerOptions(m.projects)
+			m.pickCursor = 0
+			for i, o := range opts {
+				if o == m.projectFilter {
+					m.pickCursor = i
+
+					break
+				}
+			}
+		}
+
+		return m, nil, true
+	case "/":
+		m.filtering = true
+
+		return m, m.filter.Focus(), true
+	}
+
+	return m, nil, false
 }
 
 func renderStatusTabs(current string) string {

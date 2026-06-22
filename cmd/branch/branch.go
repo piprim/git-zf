@@ -11,10 +11,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	issuecmd "github.com/piprim/git-zf/cmd/issue"
+	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
-	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tty"
@@ -207,12 +206,12 @@ func (b Branch) newCmd() *cobra.Command {
 // passes "" because the branch root command defines no such flag.
 func (b Branch) newRunE(cmd *cobra.Command, variant string) error {
 	flags := issue.IssueStartFlags{TrackerFirst: false, Variant: variant}
-	deps, err := issuecmd.BuildStartDeps(cmd, b.appConfig, flags)
+	deps, err := issueflow.BuildStartDeps(cmd, b.appConfig, flags)
 	if err != nil {
 		return fmt.Errorf("build start deps: %w", err)
 	}
 
-	if err := issuecmd.RunIssueStart(cmd.Context(), deps, issuecmd.NewHuhStartPrompter()); err != nil {
+	if err := issueflow.RunIssueStart(cmd.Context(), deps, issueflow.NewHuhStartPrompter()); err != nil {
 		return fmt.Errorf("run issue start: %w", err)
 	}
 
@@ -269,17 +268,9 @@ func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	c, err := git.NewClient(&pkg.IO{
-		In:  cmd.InOrStdin(),
-		Out: cmd.OutOrStdout(),
-		Err: cmd.ErrOrStderr(),
-	})
+	c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
 	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
-
-	if b.appConfig.Branch.Remote != "" {
-		c.SetRemote(b.appConfig.Branch.Remote)
+		return err
 	}
 
 	var prompter PrunePrompter = newHuhPrunePrompter()
