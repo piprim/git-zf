@@ -6,7 +6,6 @@ import (
 
 	appconfig "github.com/piprim/git-zf/config"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 type issueTrackerOutput struct {
@@ -31,7 +30,7 @@ func (c Config) getShowCmd() *cobra.Command {
 }
 
 func (c Config) showRunE(cmd *cobra.Command, _ []string) error {
-	path := viper.ConfigFileUsed()
+	path := c.appConfig.ConfigFile
 	if path == "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "Config file: no config file found (built-in defaults apply)")
 	} else {

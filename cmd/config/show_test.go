@@ -73,7 +73,8 @@ func TestShowRunE_printsConfigFileLine(t *testing.T) {
 	}
 
 	out := buf.String()
-	// viper.ConfigFileUsed() returns "" in tests — expect the "no config file" line.
+	// appConfig.ConfigFile is empty here (cfg built without it) — expect the
+	// "no config file" line.
 	if !strings.Contains(out, "no config file found") {
 		t.Errorf("expected 'no config file found' in output, got:\n%s", out)
 	}

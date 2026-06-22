@@ -21,8 +21,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// const configFileExt = "toml"
-
 // Version and Name are injected at build time via -ldflags.
 var (
 	Version = "none"
@@ -88,25 +86,27 @@ func GetRootCmd() (*cobra.Command, error) {
 }
 
 // initConfig loads the .git-zf.toml config file via Viper, then parses the full
-// AppConfig. Not being inside a git repo is not a fatal error —
-// git zf version/install must work anywhere.
+// AppConfig. A fresh viper instance is created per call and threaded through the
+// load explicitly, so there is no hidden dependency on package-global viper
+// state and no load-order coupling between commands. Not being inside a git repo
+// is not a fatal error — git zf version/install must work anywhere.
 func initConfig() error {
-	// viper.SetConfigType(configFileExt)
+	v := viper.New()
 
 	// Phase 1: load global config from home directory.
-	err := loadGlobalConfig()
-	if err != nil {
+	if err := loadGlobalConfig(v); err != nil {
 		return err
 	}
 
 	// Phase 2: merge repo-local config on top (repo values win).
 	if repoPath := config.RepoPath(); repoPath != "" {
-		if err := loadRepoConfig(repoPath); err != nil {
+		if err := loadRepoConfig(v, repoPath); err != nil {
 			return err
 		}
 	}
 
-	appConfig, err = config.Load()
+	var err error
+	appConfig, err = config.Load(v)
 	if err != nil {
 		return fmt.Errorf("failed to load app config: %w", err)
 	}
@@ -114,15 +114,15 @@ func initConfig() error {
 	return nil
 }
 
-func loadGlobalConfig() error {
+func loadGlobalConfig(v *viper.Viper) error {
 	homePath, err := config.HomePath()
 	if err != nil {
 		return fmt.Errorf("get home config path: %w", err)
 	}
 
-	viper.SetConfigFile(homePath)
+	v.SetConfigFile(homePath)
 
-	if err := viper.ReadInConfig(); err != nil {
+	if err := v.ReadInConfig(); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("could not read global config %s: %w", homePath, err)
 		}
@@ -137,10 +137,10 @@ func loadGlobalConfig() error {
 	return nil
 }
 
-func loadRepoConfig(repoPath string) error {
-	viper.SetConfigFile(repoPath)
+func loadRepoConfig(v *viper.Viper, repoPath string) error {
+	v.SetConfigFile(repoPath)
 
-	if err := viper.MergeInConfig(); err != nil {
+	if err := v.MergeInConfig(); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("could not merge repo config %s: %w", repoPath, err)
 		}

@@ -8,7 +8,6 @@
 - `git zf review reject` should permit to add a md file or a comment for explanation
 - **Reviewer-initiated close**: allow a reviewer (or any team member) to close an issue they didn't start. Currently `issue close` requires the branch to be in the local store; a reviewer's clone has no entry unless they run `git zf issue track` first. The fix is to fall back to `refs/zf/branches/*` (already fetched by the close flow) when the store has no matching in-progress row — the same cross-machine fallback already used for parent-slug resolution.
 
-- **Use `viper.New()` per config load** instead of the package-global viper (`cmd/root.go:115+`, `config/config.go:89+`) — removes hidden load-order dependency and makes config fully unit-testable.
 
 ### Open: `git zf branch merge`
 

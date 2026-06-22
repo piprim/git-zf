@@ -75,6 +75,7 @@ type IssueTrackerConfig struct {
 // AppConfig is the top-level configuration for the application.
 type AppConfig struct {
 	ProgName      string              `json:"-" toml:"-" mapstructure:"-"`
+	ConfigFile    string              `json:"-" toml:"-" mapstructure:"-"` // path the values were loaded from; "" when none
 	CommitTypes   []CommitTypeOption  `json:"commit-types"   toml:"commit-types"   mapstructure:"commit-types"`
 	CommitMessage CommitMessageConfig `json:"commit-message" toml:"commit-message" mapstructure:"commit-message"`
 	Branch        BranchConfig        `json:"branch"         toml:"branch"         mapstructure:"branch"`
@@ -82,10 +83,13 @@ type AppConfig struct {
 }
 
 // Load parses the embedded default.toml then overlays any values present in the
-// global viper instance. Each config section is handled individually so that a
-// partial override (e.g. only commit-message.items) preserves unset defaults.
-// viper.Sub is avoided because it silently returns nil for array-typed keys.
-func Load() (*AppConfig, error) {
+// supplied viper instance. The viper is passed in (rather than read from the
+// package global) so the load has no hidden dependency on prior package state
+// and can be exercised in isolation from a unit test. Each config section is
+// handled individually so that a partial override (e.g. only
+// commit-message.items) preserves unset defaults. viper.Sub is avoided because
+// it silently returns nil for array-typed keys.
+func Load(v *viper.Viper) (*AppConfig, error) {
 	var cfg AppConfig
 	if err := toml.Unmarshal(defaultTOML, &cfg); err != nil {
 		return nil, fmt.Errorf("parse default config: %w", err)
@@ -95,56 +99,57 @@ func Load() (*AppConfig, error) {
 	// fully replaces the default instead of being appended to it.
 	zeroSlice := func(dc *mapstructure.DecoderConfig) { dc.ZeroFields = true }
 
-	if viper.IsSet("commit-types") {
-		if err := viper.UnmarshalKey("commit-types", &cfg.CommitTypes, zeroSlice); err != nil {
+	if v.IsSet("commit-types") {
+		if err := v.UnmarshalKey("commit-types", &cfg.CommitTypes, zeroSlice); err != nil {
 			return nil, fmt.Errorf("unmarshal commit-types: %w", err)
 		}
 	}
 
-	if viper.IsSet("commit-message.items") {
-		if err := viper.UnmarshalKey("commit-message.items", &cfg.CommitMessage.Items, zeroSlice); err != nil {
+	if v.IsSet("commit-message.items") {
+		if err := v.UnmarshalKey("commit-message.items", &cfg.CommitMessage.Items, zeroSlice); err != nil {
 			return nil, fmt.Errorf("unmarshal commit-message.items: %w", err)
 		}
 	}
 
-	if viper.IsSet("commit-message.template") {
-		cfg.CommitMessage.Template = viper.GetString("commit-message.template")
+	if v.IsSet("commit-message.template") {
+		cfg.CommitMessage.Template = v.GetString("commit-message.template")
 	}
 
-	if viper.IsSet("commit-message.ref-format") {
-		cfg.CommitMessage.RefFormat = viper.GetString("commit-message.ref-format")
+	if v.IsSet("commit-message.ref-format") {
+		cfg.CommitMessage.RefFormat = v.GetString("commit-message.ref-format")
 	}
 
-	if viper.IsSet("commit-message.close-format") {
-		cfg.CommitMessage.CloseFormat = viper.GetString("commit-message.close-format")
+	if v.IsSet("commit-message.close-format") {
+		cfg.CommitMessage.CloseFormat = v.GetString("commit-message.close-format")
 	}
 
-	if viper.IsSet("branch.base") {
-		cfg.Branch.Base = viper.GetString("branch.base")
+	if v.IsSet("branch.base") {
+		cfg.Branch.Base = v.GetString("branch.base")
 	}
 
-	if viper.IsSet("branch.remote") {
-		cfg.Branch.Remote = viper.GetString("branch.remote")
+	if v.IsSet("branch.remote") {
+		cfg.Branch.Remote = v.GetString("branch.remote")
 	}
 
-	if viper.IsSet("branch.use-worktree") {
-		v := viper.GetBool("branch.use-worktree")
-		cfg.Branch.UseWorktree = &v
+	if v.IsSet("branch.use-worktree") {
+		b := v.GetBool("branch.use-worktree")
+		cfg.Branch.UseWorktree = &b
 	}
 
-	if viper.IsSet("branch.worktree-dir") {
-		cfg.Branch.WorktreeDir = viper.GetString("branch.worktree-dir")
+	if v.IsSet("branch.worktree-dir") {
+		cfg.Branch.WorktreeDir = v.GetString("branch.worktree-dir")
 	}
 
 	// issue-tracker is decoded without zeroSlice: Projects defaults to nil, so
 	// a user-supplied slice fully replaces it without merge ambiguity.
-	if viper.IsSet("issue-tracker") {
-		if err := viper.UnmarshalKey("issue-tracker", &cfg.IssueTracker); err != nil {
+	if v.IsSet("issue-tracker") {
+		if err := v.UnmarshalKey("issue-tracker", &cfg.IssueTracker); err != nil {
 			return nil, fmt.Errorf("unmarshal issue-tracker: %w", err)
 		}
 	}
 
 	cfg.ProgName = ProgName
+	cfg.ConfigFile = v.ConfigFileUsed()
 
 	return &cfg, nil
 }

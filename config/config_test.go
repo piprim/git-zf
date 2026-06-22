@@ -13,13 +13,12 @@ import (
 )
 
 func TestLoad(t *testing.T) {
-	// Not parallel — subtests modify global viper state.
+	t.Parallel()
 
 	t.Run("returns built-in defaults when no viper keys are set", func(t *testing.T) {
-		viper.Reset()
-		defer viper.Reset()
+		t.Parallel()
 
-		cfg, err := config.Load()
+		cfg, err := config.Load(viper.New())
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -48,17 +47,20 @@ func TestLoad(t *testing.T) {
 		if cfg.Branch.Remote != "" {
 			t.Errorf("Branch.Remote default = %q, want empty string", cfg.Branch.Remote)
 		}
+		if cfg.ConfigFile != "" {
+			t.Errorf("ConfigFile = %q, want empty when no file is read", cfg.ConfigFile)
+		}
 	})
 
 	t.Run("overrides commit types when viper key is set", func(t *testing.T) {
-		viper.Reset()
-		defer viper.Reset()
+		t.Parallel()
 
-		viper.Set("commit-types", []map[string]any{
+		v := viper.New()
+		v.Set("commit-types", []map[string]any{
 			{"name": "custom", "desc": "Custom type"},
 		})
 
-		cfg, err := config.Load()
+		cfg, err := config.Load(v)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -76,15 +78,15 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("preserves template when only items is overridden", func(t *testing.T) {
-		viper.Reset()
-		defer viper.Reset()
+		t.Parallel()
 
 		// Override only items (not template); template must be preserved from defaults.
-		viper.Set("commit-message.items", []map[string]any{
+		v := viper.New()
+		v.Set("commit-message.items", []map[string]any{
 			{"name": "subject", "desc": "Custom subject:", "form": "input", "required": true},
 		})
 
-		cfg, err := config.Load()
+		cfg, err := config.Load(v)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -99,6 +101,8 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("reads projects list from a TOML config file", func(t *testing.T) {
+		t.Parallel()
+
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, ".git-zf.toml")
 
@@ -120,14 +124,7 @@ projects = ["a/b", "c/d"]
 			t.Fatalf("read cfg: %v", err)
 		}
 
-		// Swap the global viper used by config.Load() with our local instance.
-		viper.Reset()
-		defer viper.Reset()
-		for _, k := range v.AllKeys() {
-			viper.Set(k, v.Get(k))
-		}
-
-		cfg, err := config.Load()
+		cfg, err := config.Load(v)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -136,11 +133,16 @@ projects = ["a/b", "c/d"]
 		if !slices.Equal(cfg.IssueTracker.Projects, want) {
 			t.Errorf("Projects = %v, want %v", cfg.IssueTracker.Projects, want)
 		}
+
+		t.Run("records the source path in ConfigFile", func(t *testing.T) {
+			if cfg.ConfigFile != cfgPath {
+				t.Errorf("ConfigFile = %q, want %q", cfg.ConfigFile, cfgPath)
+			}
+		})
 	})
 
 	t.Run("merges global and local TOML files", func(t *testing.T) {
-		viper.Reset()
-		defer viper.Reset()
+		t.Parallel()
 
 		globalTOML := []byte(`
 [[commit-types]]
@@ -166,20 +168,21 @@ token = "tok"
 			t.Fatalf("write local: %v", err)
 		}
 
-		viper.SetConfigType("toml")
-		viper.SetConfigFile(globalPath)
+		v := viper.New()
+		v.SetConfigType("toml")
+		v.SetConfigFile(globalPath)
 
-		if err := viper.ReadInConfig(); err != nil {
+		if err := v.ReadInConfig(); err != nil {
 			t.Fatalf("ReadInConfig global: %v", err)
 		}
 
-		viper.SetConfigFile(localPath)
+		v.SetConfigFile(localPath)
 
-		if err := viper.MergeInConfig(); err != nil {
+		if err := v.MergeInConfig(); err != nil {
 			t.Fatalf("MergeInConfig local: %v", err)
 		}
 
-		cfg, err := config.Load()
+		cfg, err := config.Load(v)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -209,13 +212,13 @@ token = "tok"
 	})
 
 	t.Run("ref-format and close-format are loaded when viper keys are set", func(t *testing.T) {
-		viper.Reset()
-		defer viper.Reset()
+		t.Parallel()
 
-		viper.Set("commit-message.ref-format", "Refs: %s")
-		viper.Set("commit-message.close-format", "Closes #%s")
+		v := viper.New()
+		v.Set("commit-message.ref-format", "Refs: %s")
+		v.Set("commit-message.close-format", "Closes #%s")
 
-		cfg, err := config.Load()
+		cfg, err := config.Load(v)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -233,12 +236,12 @@ token = "tok"
 	})
 
 	t.Run("branch.remote is loaded when viper key is set", func(t *testing.T) {
-		viper.Reset()
-		defer viper.Reset()
+		t.Parallel()
 
-		viper.Set("branch.remote", "upstream")
+		v := viper.New()
+		v.Set("branch.remote", "upstream")
 
-		cfg, err := config.Load()
+		cfg, err := config.Load(v)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
