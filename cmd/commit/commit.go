@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -14,6 +15,22 @@ import (
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
+
+// Committer is the subset of *git.Client the commit command consumes: load the
+// author list for the form, detect the current branch for the issue-hint
+// prefill, and write the commit. Declared here (the consuming package) rather
+// than in package git so the command owns its git surface and tests can
+// substitute a fake — mirrors the pruner / BranchClient pattern elsewhere in
+// cmd/.
+type Committer interface {
+	Authors(ctx context.Context) ([]string, error)
+	Commit(ctx context.Context, msg []byte, opts git.CommitOptions) error
+	CurrentBranch() (string, error)
+}
+
+// Compile-time check that the production client satisfies the role. Catches
+// accidental signature drift on *git.Client.
+var _ Committer = (*git.Client)(nil)
 
 type Commit struct {
 	appConfig *config.AppConfig
@@ -112,7 +129,9 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 // issueHintFromClient detects whether the current branch is an issue branch
 // and returns the corresponding IssueHint. All failure modes (detached HEAD,
 // non-issue branch name) collapse to the zero value, leaving the form unchanged.
-func issueHintFromClient(c *git.Client) commitpkg.IssueHint {
+// It accepts the Committer role (it reads CurrentBranch) so it can be unit-tested
+// with a fake.
+func issueHintFromClient(c Committer) commitpkg.IssueHint {
 	name, err := c.CurrentBranch()
 	if err != nil {
 		return commitpkg.IssueHint{}

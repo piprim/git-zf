@@ -14,11 +14,27 @@ import (
 )
 
 // reviewDeps bundles the long-lived dependencies shared by all review subcommands.
+//
+// client stays the concrete *git.Client: the review subcommands collectively
+// touch ~27 of its methods (merge, ref read/write, remote, branch ops), so a
+// role interface here would be a near-clone of the whole client — ceremony
+// without decoupling. Where a single helper needs only a slice of the surface,
+// it takes a narrow interface instead (see currentBrancher).
 type reviewDeps struct {
 	client *git.Client
 	store  *store.Store
 	cfg    *config.AppConfig
 }
+
+// currentBrancher is the one-method slice of *git.Client that currentIssueSlug
+// needs. Declared as a tiny interface so slug derivation is unit-testable
+// without a real git repository — mirrors the pruner / BranchClient pattern.
+type currentBrancher interface {
+	CurrentBranch() (string, error)
+}
+
+// Compile-time check that the production client satisfies the role.
+var _ currentBrancher = (*git.Client)(nil)
 
 func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConfig) (reviewDeps, error) {
 	s, err := store.OpenRepo(ctx)
@@ -131,7 +147,7 @@ func ensureReviewRecord(ctx context.Context, deps reviewDeps, issueSlug string) 
 // currentIssueSlug returns the IssueID of the current git branch, or "" if it
 // cannot be determined. Works for both feature branches (42@feat@title → "42")
 // and review branches (42@review → "42").
-func currentIssueSlug(client *git.Client) string {
+func currentIssueSlug(client currentBrancher) string {
 	name, err := client.CurrentBranch()
 	if err != nil || name == "" {
 		return ""
