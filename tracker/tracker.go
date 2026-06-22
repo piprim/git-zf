@@ -9,7 +9,11 @@ import (
 	"github.com/piprim/git-zf/config"
 )
 
-// Issue is the tracker-agnostic representation of a work item.
+// Issue is the tracker-agnostic wire shape of a work item: every field is a
+// string exactly as a tracker backend reports it. It is the external/source
+// representation, the first of three "Issue" shapes — it is embedded into the
+// in-flow domain entity issue.Issue, which is in turn persisted as store.Issue.
+// See the doc on issue.Issue for the full picture.
 type Issue struct {
 	TrackerType string
 	ID          string

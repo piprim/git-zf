@@ -568,7 +568,7 @@ func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
 
 	// Tracker is configured (rig.cfg.IssueTracker.Type = "fake") but the
 	// operator declines the toggle. pickIssue should fall through to
-	// issue.GetFromUser → prompter.PickIssueFromUser.
+	// getFromUser → prompter.PickIssueFromUser.
 	manualPicked := &issuepkg.Issue{
 		Type:  "feat",
 		Issue: tracker.Issue{ID: "ABC-11", Subject: "Manual choice"},
@@ -577,7 +577,7 @@ func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
 	prompter := &scriptedStartPrompter{
 		UseTracker:    false, // operator declines the tracker toggle
 		IssueFromUser: manualPicked,
-		// Tripwire: if pickIssue mis-routes to GetFromTracker, this error fires.
+		// Tripwire: if pickIssue mis-routes to getFromTracker, this error fires.
 		IssueFromTrackerErr: errors.New("PickIssueFromTracker should not be called when UseTracker=false"),
 		UseWorktree:         false,
 		ConfirmBranch:       true,

@@ -22,6 +22,24 @@ type BranchClient interface {
 	IO() *pkg.IO
 }
 
+// Prompter resolves the issue-input forms: manual entry, the tracker picker,
+// and the tracker-error note. It is the slice of StartPrompter that getFromUser
+// and getFromTracker drive, kept as its own interface so those helpers can be
+// unit-tested without the rest of the start flow. It lives here in the
+// application layer (not the issue domain package) because every method is a
+// UI-form concern.
+type Prompter interface {
+	// PickIssueFromUser opens the manual issue-input form (issue ID, subject, type).
+	PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error)
+
+	// PickIssueFromTracker opens the picker over a pre-fetched issues list.
+	PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error)
+
+	// NotifyTrackerError shows a one-line error note when the tracker errors
+	// out or returns no open issues. Returning a non-nil error aborts the flow.
+	NotifyTrackerError(ctx context.Context, message string) error
+}
+
 // StartPrompter resolves every user-facing decision in the issue-start flow.
 // The production implementation drives huh forms; the test implementation in
 // start_prompter_test.go returns canned values.
@@ -33,8 +51,8 @@ type BranchClient interface {
 // for every UI element.
 type StartPrompter interface {
 	// Prompter contributes the three issue-input methods used by
-	// issuepkg.GetFromUser and issuepkg.GetFromTracker.
-	issuepkg.Prompter
+	// getFromUser and getFromTracker.
+	Prompter
 
 	// PickUseTracker drives the "fetch from tracker?" toggle. Called only when
 	// cfg.IssueTracker.Type != "". trackerFirst controls the pre-selected

@@ -143,7 +143,7 @@ func pickIssue(
 	allowedBranchTypes []string,
 ) (*issue.Issue, error) {
 	if deps.Tracker == nil {
-		got, err := issue.GetFromUser(ctx, prompter, allowedBranchTypes)
+		got, err := getFromUser(ctx, prompter, allowedBranchTypes)
 		if err != nil {
 			return nil, fmt.Errorf("issue from user: %w", err)
 		}
@@ -157,7 +157,7 @@ func pickIssue(
 	}
 
 	if !useTracker {
-		got, err := issue.GetFromUser(ctx, prompter, allowedBranchTypes)
+		got, err := getFromUser(ctx, prompter, allowedBranchTypes)
 		if err != nil {
 			return nil, fmt.Errorf("issue from user: %w", err)
 		}
@@ -165,12 +165,54 @@ func pickIssue(
 		return got, nil
 	}
 
-	got, err := issue.GetFromTracker(ctx, prompter, deps.Tracker, allowedBranchTypes)
+	got, err := getFromTracker(ctx, prompter, deps.Tracker, allowedBranchTypes)
 	if err != nil {
 		return nil, fmt.Errorf("issue from tracker: %w", err)
 	}
 
 	return got, nil
+}
+
+// getFromUser drives the manual issue-input flow via p.PickIssueFromUser.
+// Moved here from the issue domain package: it is application-layer
+// orchestration over the UI prompter, not entity logic.
+func getFromUser(ctx context.Context, p Prompter, allowedTypes []string) (*issue.Issue, error) {
+	out, err := p.PickIssueFromUser(ctx, allowedTypes)
+	if err != nil {
+		return nil, fmt.Errorf("issue input: %w", err)
+	}
+
+	return out, nil
+}
+
+// getFromTracker fetches issues via t.ListIssues, then either falls back to
+// the manual path (PickIssueFromUser) on error/empty-list, or drives the
+// tracker picker (PickIssueFromTracker). All form opening is delegated to p.
+func getFromTracker(ctx context.Context, p Prompter, t tracker.Tracker, allowedTypes []string) (*issue.Issue, error) {
+	errMsg := ""
+	issues, listErr := t.ListIssues(ctx)
+	if listErr != nil {
+		errMsg = listErr.Error()
+	}
+
+	if listErr == nil && len(issues) == 0 {
+		errMsg = "no open issues assigned to you"
+	}
+
+	if errMsg != "" {
+		if err := p.NotifyTrackerError(ctx, errMsg); err != nil {
+			return nil, fmt.Errorf("notify tracker error: %w", err)
+		}
+
+		return getFromUser(ctx, p, allowedTypes)
+	}
+
+	out, err := p.PickIssueFromTracker(ctx, issues, allowedTypes)
+	if err != nil {
+		return nil, fmt.Errorf("tracker picker: %w", err)
+	}
+
+	return out, nil
 }
 
 // resolveUseWorktree consults the config override; falls back to the prompter

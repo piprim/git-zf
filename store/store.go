@@ -24,7 +24,13 @@ type Store struct {
 	db *sql.DB
 }
 
-// Issue represents a tracked issue record.
+// Issue is the SQLite persistence row for a work item — the durable record
+// written once a branch exists. It is the last of three "Issue" shapes: a
+// tracker.Issue (wire shape) becomes an issue.Issue (in-flow entity) and is
+// finally persisted here. Unlike those, this carries a synthesised int64 PK, a
+// normalised StatusID foreign key (not a status string), and a nil-able
+// TrackerType to mark manual entries. See the doc on issue.Issue for the
+// end-to-end flow.
 type Issue struct {
 	ID int64
 	// tracker string ID: "ABC-42", "42", …
