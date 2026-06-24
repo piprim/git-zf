@@ -92,6 +92,18 @@ func newCloseRig(t *testing.T) *closeTestRig {
 		t.Fatalf("seed branch: %v", err)
 	}
 
+	// Seed a tracker-born BranchRef so the close-flow origin gate treats ABC-1
+	// as created from the tracker (mirrors what `issue start` writes). The git
+	// object is the cross-machine source of truth for the tracker-status prompt.
+	if _, err := client.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
+		IssueSlug:   "ABC-1",
+		BranchName:  "ABC-1@feat@add-thing",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		TrackerType: "fake",
+	}); err != nil {
+		t.Fatalf("seed branch ref: %v", err)
+	}
+
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 	cfg.IssueTracker.Type = "fake"
@@ -297,6 +309,46 @@ func TestClose_ClassicHappyPath(t *testing.T) {
 	t.Run("tracker recorded one UpdateIssueStatus call", func(t *testing.T) {
 		if len(rig.tracker.RecordedUpdates) != 1 {
 			t.Errorf("RecordedUpdates len = %d, want 1", len(rig.tracker.RecordedUpdates))
+		}
+	})
+}
+
+// TestClose_ManualIssue_NoTrackerPrompt guards the gating bug where closing a
+// manually-created issue prompted for a tracker status update purely because a
+// tracker was configured. The origin signal lives in BranchRef.TrackerType: an
+// empty value means "manual" and must suppress the prompt.
+func TestClose_ManualIssue_NoTrackerPrompt(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+
+	// Overwrite ABC-1's ref so it carries no tracker origin (manual issue). A
+	// tracker is still configured (rig.tracker != nil), but close must not prompt.
+	if _, err := rig.client.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
+		IssueSlug:  "ABC-1",
+		BranchName: "ABC-1@feat@add-thing",
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		// TrackerType intentionally empty → manual.
+	}); err != nil {
+		t.Fatalf("WriteBranchRef: %v", err)
+	}
+
+	prompter := &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      StrategyRebase,
+		Confirm:       true,
+		Message:       []byte("feat(thing): close ABC-1\n"),
+		TrackerStatus: "Closed", // would be recorded if the prompt wrongly fired
+		DeleteBranch:  true,
+	}
+
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("no tracker update recorded for a manual issue", func(t *testing.T) {
+		if got := len(rig.tracker.RecordedUpdates); got != 0 {
+			t.Errorf("RecordedUpdates len = %d, want 0; got %+v", got, rig.tracker.RecordedUpdates)
 		}
 	})
 }

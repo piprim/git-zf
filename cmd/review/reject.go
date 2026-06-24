@@ -46,7 +46,11 @@ func runReviewRejectInteractive(ctx context.Context, deps reviewDeps, prompter R
 		return nil
 	}
 
-	return runReviewReject(ctx, deps, picked.IssueSlug)
+	if err := runReviewReject(ctx, deps, picked.IssueSlug); err != nil {
+		return err
+	}
+	maybeUpdateTrackerStatus(ctx, deps, prompter, picked.IssueSlug)
+	return nil
 }
 
 func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug string) error {

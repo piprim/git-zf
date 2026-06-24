@@ -292,9 +292,17 @@ func createFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, pic
 		return nil
 	}
 
-	var tt *string
+	// trackerType is the originating tracker ("" = manual). It is recorded both
+	// in the local store (as a cache) and in the BranchRef git object (the
+	// cross-machine source of truth read back by the review commands).
+	trackerType := ""
 	if picked.TrackerType != "" {
-		tt = &deps.Cfg.IssueTracker.Type
+		trackerType = deps.Cfg.IssueTracker.Type
+	}
+
+	var tt *string
+	if trackerType != "" {
+		tt = &trackerType
 	}
 
 	if err := persist(ctx, b, picked.Subject, tt); err != nil {
@@ -307,7 +315,7 @@ func createFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, pic
 		}
 	}
 
-	if err := writePushBranchRef(ctx, deps, b.IssueID(), branchName); err != nil {
+	if err := writePushBranchRef(ctx, deps, b.IssueID(), branchName, trackerType); err != nil {
 		fmt.Fprintf(deps.Client.IO().Err, "warning: write branch ref: %v\n", err)
 	}
 
@@ -469,12 +477,13 @@ func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
 // writePushBranchRef writes a BranchRef to refs/zf/branches/<issueSlug> and
 // pushes it to the remote (best-effort). Called after every successful branch
 // or worktree creation so the parent-child relationship is available cross-machine.
-func writePushBranchRef(ctx context.Context, deps StartDeps, issueSlug, branchName string) error {
+func writePushBranchRef(ctx context.Context, deps StartDeps, issueSlug, branchName, trackerType string) error {
 	ref := git.BranchRef{
-		IssueSlug:  issueSlug,
-		BranchName: branchName,
-		ParentSlug: deps.Flags.ParentIssueSlug,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		IssueSlug:   issueSlug,
+		BranchName:  branchName,
+		ParentSlug:  deps.Flags.ParentIssueSlug,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		TrackerType: trackerType,
 	}
 	if _, err := deps.Client.WriteBranchRef(ctx, issueSlug, ref); err != nil {
 		return err

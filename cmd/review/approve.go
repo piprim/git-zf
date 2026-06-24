@@ -46,7 +46,11 @@ func runReviewApproveInteractive(ctx context.Context, deps reviewDeps, prompter 
 		return nil
 	}
 
-	return runReviewApprove(ctx, deps, picked.IssueSlug)
+	if err := runReviewApprove(ctx, deps, picked.IssueSlug); err != nil {
+		return err
+	}
+	maybeUpdateTrackerStatus(ctx, deps, prompter, picked.IssueSlug)
+	return nil
 }
 
 func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) error {

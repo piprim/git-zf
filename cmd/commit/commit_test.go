@@ -67,6 +67,28 @@ func TestIssueHintFromClient(t *testing.T) {
 		}
 	})
 
+	t.Run("extracts issue ID from a review branch", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		initRepoOnDisk(t, dir)
+		gitCheckoutNewBranch(t, t.Context(), dir, testIssueID+"@review")
+
+		client, err := git.NewClientAt(nil, dir)
+		if err != nil {
+			t.Fatalf("NewClientAt: %v", err)
+		}
+
+		hint := issueHintFromClient(client)
+		if hint.IssueID != testIssueID {
+			t.Errorf("IssueID = %q, want %q", hint.IssueID, testIssueID)
+		}
+		// A review branch carries no commit type; the reviewer picks it.
+		if hint.BranchType != "" {
+			t.Errorf("BranchType = %q, want empty on a review branch", hint.BranchType)
+		}
+	})
+
 	t.Run("returns zero hint on a plain non-issue branch", func(t *testing.T) {
 		t.Parallel()
 

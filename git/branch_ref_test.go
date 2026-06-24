@@ -81,6 +81,46 @@ func TestBranchRef_ReadWrite(t *testing.T) {
 		}
 	})
 
+	t.Run("TrackerType round-trips through write and read", func(t *testing.T) {
+		trackerRef := BranchRef{
+			IssueSlug:   "T.1",
+			BranchName:  "T.1@feat@from-tracker",
+			CreatedAt:   "2026-06-21T10:00:00Z",
+			TrackerType: "fake",
+		}
+		if _, err := client.WriteBranchRef(t.Context(), "T.1", trackerRef); err != nil {
+			t.Fatalf("WriteBranchRef: %v", err)
+		}
+		got, err := client.ReadBranchRef(t.Context(), "T.1")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if got == nil {
+			t.Fatal("expected ref, got nil")
+		}
+		if got.TrackerType != "fake" {
+			t.Errorf("TrackerType: got %q, want %q", got.TrackerType, "fake")
+		}
+	})
+
+	t.Run("absent TrackerType reads back as empty", func(t *testing.T) {
+		manualRef := BranchRef{
+			IssueSlug:  "M.1",
+			BranchName: "M.1@feat@manual",
+			CreatedAt:  "2026-06-21T10:00:00Z",
+		}
+		if _, err := client.WriteBranchRef(t.Context(), "M.1", manualRef); err != nil {
+			t.Fatalf("WriteBranchRef: %v", err)
+		}
+		got, err := client.ReadBranchRef(t.Context(), "M.1")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if got.TrackerType != "" {
+			t.Errorf("TrackerType: got %q, want empty", got.TrackerType)
+		}
+	})
+
 	t.Run("ref without parent slug is valid", func(t *testing.T) {
 		rootRef := BranchRef{
 			IssueSlug:  "X",

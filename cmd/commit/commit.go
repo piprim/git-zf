@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/piprim/git-zf/branch"
-	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/convert"
@@ -127,14 +128,21 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 }
 
 // issueHintFromClient detects whether the current branch is an issue branch
-// and returns the corresponding IssueHint. All failure modes (detached HEAD,
-// non-issue branch name) collapse to the zero value, leaving the form unchanged.
-// It accepts the Committer role (it reads CurrentBranch) so it can be unit-tested
-// with a fake.
+// (feature "<id>@<type>@<slug>" or review "<id>@review") and returns the
+// corresponding IssueHint. All other cases (detached HEAD, non-issue branch
+// name) collapse to the zero value, leaving the form unchanged. It accepts the
+// Committer role (it reads CurrentBranch) so it can be unit-tested with a fake.
 func issueHintFromClient(c Committer) commitpkg.IssueHint {
 	name, err := c.CurrentBranch()
 	if err != nil {
 		return commitpkg.IssueHint{}
+	}
+
+	// Review branches ("<issueSlug>@review") are not feature-branch shaped, so
+	// branch.Parse rejects them. Recognise the suffix and prefill the issue ID
+	// from the slug; the reviewer chooses the commit type themselves.
+	if slug, ok := strings.CutSuffix(name, "@review"); ok {
+		return commitpkg.IssueHint{IssueID: slug}
 	}
 
 	b, err := branch.Parse(name)

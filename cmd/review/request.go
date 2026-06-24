@@ -66,7 +66,11 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 		return nil
 	}
 
-	return runReviewRequest(ctx, deps, picked.IssueSlug)
+	if err := runReviewRequest(ctx, deps, picked.IssueSlug); err != nil {
+		return err
+	}
+	maybeUpdateTrackerStatus(ctx, deps, prompter, picked.IssueSlug)
+	return nil
 }
 
 func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) error {

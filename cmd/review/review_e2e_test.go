@@ -15,19 +15,28 @@ import (
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/tracker/fake"
 )
 
 type reviewE2ERig struct {
-	dir    string
-	client *git.Client
-	store  *store.Store
-	cfg    *config.AppConfig
-	stdout *bytes.Buffer
-	stderr *bytes.Buffer
+	dir     string
+	client  *git.Client
+	store   *store.Store
+	cfg     *config.AppConfig
+	tracker *fake.Tracker // nil unless a test opts in via withFakeTracker
+	stdout  *bytes.Buffer
+	stderr  *bytes.Buffer
 }
 
 func (r *reviewE2ERig) deps() reviewDeps {
-	return reviewDeps{client: r.client, store: r.store, cfg: r.cfg}
+	d := reviewDeps{client: r.client, store: r.store, cfg: r.cfg}
+	// Only populate the tracker interface when a concrete fake is attached;
+	// assigning a nil *fake.Tracker would yield a non-nil interface and defeat
+	// the deps.tracker == nil guard in maybeUpdateTrackerStatus.
+	if r.tracker != nil {
+		d.tracker = r.tracker
+	}
+	return d
 }
 
 func newReviewE2ERig(t *testing.T) *reviewE2ERig {
@@ -895,8 +904,8 @@ func TestReviewSync_UsesRemoteParentBase(t *testing.T) {
 	run(aliceDir, "config", "commit.gpgsign", "false")
 	run(aliceDir, "remote", "add", "origin", originDir)
 	run(aliceDir, "fetch", "origin")
-	run(aliceDir, "checkout", "main")                                           // DWIM local main
-	run(aliceDir, "checkout", "-b", "X.1@feat@one", "origin/X.1@feat@one")     // local subtask branch
+	run(aliceDir, "checkout", "main")                                      // DWIM local main
+	run(aliceDir, "checkout", "-b", "X.1@feat@one", "origin/X.1@feat@one") // local subtask branch
 
 	// Alice knows about X@feat@big via store + branch ref, but has NOT
 	// checked it out as a local branch — only origin/X@feat@big exists.

@@ -10,6 +10,7 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +25,10 @@ type reviewDeps struct {
 	client *git.Client
 	store  *store.Store
 	cfg    *config.AppConfig
+	// tracker is the originating issue tracker, or nil when none is configured
+	// (or it failed to initialise). A nil tracker disables the status-update
+	// prompt — see maybeUpdateTrackerStatus.
+	tracker tracker.Tracker
 }
 
 // currentBrancher is the one-method slice of *git.Client that currentIssueSlug
@@ -48,7 +53,21 @@ func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppCon
 		return reviewDeps{}, err
 	}
 
-	return reviewDeps{client: client, store: s, cfg: cfg}, nil
+	deps := reviewDeps{client: client, store: s, cfg: cfg}
+
+	// Build the tracker so the review-lifecycle commands can offer to update the
+	// originating issue status (mirrors buildCloseDeps). Non-fatal: warn and
+	// continue with a nil tracker, which disables the prompt.
+	if cfg.IssueTracker.Type != "" {
+		t, err := tracker.New(cfg.IssueTracker)
+		if err != nil {
+			fmt.Fprintf(client.IO().Err, "warning: init tracker: %v\n", err)
+		} else {
+			deps.tracker = t
+		}
+	}
+
+	return deps, nil
 }
 
 // inReviewBranches returns synthetic BranchRows for issues currently in_review,

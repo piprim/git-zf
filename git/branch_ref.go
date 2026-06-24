@@ -20,6 +20,13 @@ type BranchRef struct {
 	ParentSlug string `json:"parent_slug,omitempty"`
 	CreatedAt  string `json:"created_at"` // RFC3339
 	Merged     bool   `json:"merged,omitempty"`
+	// TrackerType records the tracker that created the issue ("" = manual). It
+	// is the cross-machine source of truth for whether an issue is tracker-born:
+	// stored in the git object (this blob) and fetched by every clone, so a
+	// reviewer with an empty local store can still tell whether to offer a
+	// tracker status update. omitempty keeps pre-existing refs backward-
+	// compatible — an absent field unmarshals to "" (treated as "manual").
+	TrackerType string `json:"tracker_type,omitempty"`
 }
 
 // WriteBranchRef writes a BranchRef as a git blob and updates the local ref

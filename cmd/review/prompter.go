@@ -20,6 +20,11 @@ type ReviewPrompter interface {
 	// PickIssueToStart presents a list of issue slugs available to start reviewing.
 	// Used by the start subcommand.
 	PickIssueToStart(ctx context.Context, slugs []string) (string, error)
+
+	// PickTrackerStatus presents the tracker's status list and returns the chosen
+	// status name (or "" to skip). Used by request/approve/reject to update the
+	// originating tracker, mirroring issue close.
+	PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error)
 }
 
 // Compile-time check.
@@ -45,12 +50,22 @@ func (p *huhReviewPrompter) PickIssueToStart(ctx context.Context, slugs []string
 	return picked, nil
 }
 
+func (p *huhReviewPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
+	var selected string
+	if err := huh.NewForm(tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("status picker form: %w", err)
+	}
+	return selected, nil
+}
+
 // scriptedReviewPrompter is the canned-response prompter used by review E2E tests.
 type scriptedReviewPrompter struct {
-	Branch      *store.BranchRow
-	IssueSlug   string
-	BranchErr   error
-	IssueErr    error
+	Branch           *store.BranchRow
+	IssueSlug        string
+	TrackerStatus    string
+	BranchErr        error
+	IssueErr         error
+	TrackerStatusErr error
 }
 
 var _ ReviewPrompter = (*scriptedReviewPrompter)(nil)
@@ -67,4 +82,11 @@ func (s *scriptedReviewPrompter) PickIssueToStart(_ context.Context, _ []string)
 		return "", s.IssueErr
 	}
 	return s.IssueSlug, nil
+}
+
+func (s *scriptedReviewPrompter) PickTrackerStatus(_ context.Context, _, _ string, _ []string) (string, error) {
+	if s.TrackerStatusErr != nil {
+		return "", s.TrackerStatusErr
+	}
+	return s.TrackerStatus, nil
 }

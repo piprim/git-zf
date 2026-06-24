@@ -228,6 +228,19 @@ func TestRunIssueStart_BranchHappyPath_WithTracker(t *testing.T) {
 			t.Errorf("RecordedUpdates[0] = %+v, want %+v", got, want)
 		}
 	})
+
+	t.Run("branch ref records the originating tracker type", func(t *testing.T) {
+		ref, err := rig.client.ReadBranchRef(t.Context(), "ABC-3")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if ref == nil {
+			t.Fatal("expected BranchRef, got nil")
+		}
+		if ref.TrackerType != "fake" {
+			t.Errorf("TrackerType: got %q, want %q", ref.TrackerType, "fake")
+		}
+	})
 }
 
 func TestRunIssueStart_WorktreeHappyPath(t *testing.T) {
@@ -734,6 +747,9 @@ func TestRunIssueStart_WritesBranchRef(t *testing.T) {
 		}
 		if ref.ParentSlug != "" {
 			t.Errorf("ParentSlug: got %q, want empty", ref.ParentSlug)
+		}
+		if ref.TrackerType != "" {
+			t.Errorf("TrackerType: got %q, want empty for a manual issue", ref.TrackerType)
 		}
 	})
 }

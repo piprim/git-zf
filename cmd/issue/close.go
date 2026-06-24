@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
-	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
+	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/convert"
@@ -474,13 +474,24 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.Branc
 	}
 
 	// Stamp the branch ref as merged and push so sibling developers on other
-	// clones can detect this close without querying each other's stores.
-	if existing, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug); existing != nil {
+	// clones can detect this close without querying each other's stores. The
+	// same ref also carries the tracker-origin signal used to gate the prompt
+	// below, so read it once here.
+	existing, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug)
+	if existing != nil {
 		merged := *existing
 		merged.Merged = true
 		if _, err := deps.client.WriteBranchRef(ctx, picked.IssueSlug, merged); err == nil {
 			_ = deps.client.PushBranchRef(ctx, picked.IssueSlug)
 		}
+	}
+
+	// Only offer a tracker status update for tracker-born issues. The origin
+	// lives in the git object (BranchRef.TrackerType), not the local store, so
+	// this is correct on a reviewer's clone too. A manual issue (ref absent or
+	// TrackerType == "") must not prompt even when a tracker is configured.
+	if existing == nil || existing.TrackerType == "" {
+		return
 	}
 
 	issueflow.ApplyTrackerStatus(ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug, deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
