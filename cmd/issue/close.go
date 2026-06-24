@@ -28,6 +28,11 @@ type closeDeps struct {
 	store   *store.Store
 	cfg     *config.AppConfig
 	tracker tracker.Tracker // nil ⇒ no tracker update will be attempted
+
+	// baseOverride is the --base flag value (empty ⇒ smart default + picker).
+	// Set per-invocation by closeRunE; left empty by the E2E tests that drive
+	// the default/picker paths.
+	baseOverride string
 }
 
 // buildCloseDeps constructs the production closeDeps from a cobra command.
@@ -94,23 +99,35 @@ type mergeContext struct {
 }
 
 func (i Issue) getCloseCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "close",
 		Short: "Close an issue (merge branch, update store and tracker)",
 		Long: `Pick an in-progress branch, merge it into the base branch (rebase, squash, or classic),
 update the local store, update the remote tracker, then optionally delete the local branch.`,
 		RunE: i.closeRunE,
 	}
+
+	cmd.Flags().String("base", "",
+		"merge target branch (default: parent integration branch or base, with an interactive picker)")
+
+	return cmd
 }
 
 func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+
+	baseOverride, err := cmd.Flags().GetString("base")
+	if err != nil {
+		return fmt.Errorf("read --base flag: %w", err)
+	}
 
 	deps, err := buildCloseDeps(ctx, cmd, i.appConfig)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = deps.store.Close() }()
+
+	deps.baseOverride = baseOverride
 
 	return runClose(ctx, deps, newHuhPrompter(deps.client, deps.store, i.appConfig))
 }
@@ -139,49 +156,14 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return err
 	}
 
-	base := deps.cfg.Branch.Base
-	if base == "" {
-		base, err = deps.client.DefaultBaseBranch()
-		if err != nil {
-			return fmt.Errorf("detect base branch: %w", err)
-		}
+	base, err := resolveDefaultBase(ctx, deps, picked)
+	if err != nil {
+		return err
 	}
 
-	// Sub-task: redirect merge target to parent integration branch.
-	// The store is checked first; on a cross-machine clone where the store has
-	// no relation record, the refs/zf/branches/<slug> git ref is the fallback.
-	parentSlug, err := deps.store.GetParentIssue(ctx, picked.IssueSlug)
+	base, err = chooseMergeTarget(ctx, deps, picked, base, prompter)
 	if err != nil {
-		return fmt.Errorf("check parent issue: %w", err)
-	}
-	if parentSlug == "" {
-		// One fetch retrieves all refs/zf/branches/* atomically — both child
-		// and parent branch refs arrive together, so no second fetch is needed.
-		_ = deps.client.FetchBranchRefs(ctx)
-		if br, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug); br != nil {
-			parentSlug = br.ParentSlug
-		}
-	}
-	if parentSlug != "" {
-		// Try store first for the parent branch name.
-		parentBranches, listErr := deps.store.ListBranches(ctx, store.BranchStatusAll)
-		if listErr != nil {
-			return fmt.Errorf("list branches for parent %q: %w", parentSlug, listErr)
-		}
-		found := false
-		for _, b := range parentBranches {
-			if b.IssueSlug == parentSlug {
-				base = b.BranchName
-				found = true
-				break
-			}
-		}
-		// Store miss — read the parent's branch ref for the branch name.
-		if !found {
-			if parentBR, _ := deps.client.ReadBranchRef(ctx, parentSlug); parentBR != nil {
-				base = parentBR.BranchName
-			}
-		}
+		return err
 	}
 
 	// Reconcile child statuses from branch refs so closes done in sibling clones
@@ -235,6 +217,149 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
 
 	return nil
+}
+
+// resolveDefaultBase computes the smart-default merge target: the configured
+// base (or DefaultBaseBranch) redirected to the parent integration branch when
+// the picked issue has a parent. This is the value pre-selected in the picker.
+//
+// The store is checked first for the parent relation; on a cross-machine clone
+// where the store has no record, the refs/zf/branches/<slug> git ref is the
+// fallback. FetchBranchRefs runs here (best-effort) for the top-level case so a
+// later reconcileChildrenFromRefs sees fresh refs.
+func resolveDefaultBase(ctx context.Context, deps closeDeps, picked *store.BranchRow) (string, error) {
+	base := deps.cfg.Branch.Base
+	if base == "" {
+		detected, err := deps.client.DefaultBaseBranch()
+		if err != nil {
+			return "", fmt.Errorf("detect base branch: %w", err)
+		}
+		base = detected
+	}
+
+	parentSlug, err := deps.store.GetParentIssue(ctx, picked.IssueSlug)
+	if err != nil {
+		return "", fmt.Errorf("check parent issue: %w", err)
+	}
+	if parentSlug == "" {
+		// One fetch retrieves all refs/zf/branches/* atomically.
+		_ = deps.client.FetchBranchRefs(ctx)
+		if br, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug); br != nil {
+			parentSlug = br.ParentSlug
+		}
+	}
+	if parentSlug == "" {
+		return base, nil
+	}
+
+	// Try store first for the parent branch name.
+	parentBranches, listErr := deps.store.ListBranches(ctx, store.BranchStatusAll)
+	if listErr != nil {
+		return "", fmt.Errorf("list branches for parent %q: %w", parentSlug, listErr)
+	}
+	for _, b := range parentBranches {
+		if b.IssueSlug == parentSlug {
+			return b.BranchName, nil
+		}
+	}
+	// Store miss — read the parent's branch ref for the branch name.
+	if parentBR, _ := deps.client.ReadBranchRef(ctx, parentSlug); parentBR != nil {
+		return parentBR.BranchName, nil
+	}
+
+	return base, nil
+}
+
+// chooseMergeTarget refines the smart-default base into the final merge target.
+// When deps.baseOverride is set (from --base) it is validated and used directly.
+// Otherwise, when more than one candidate branch exists, the picker is shown
+// with defaultBase pre-selected; with a single candidate the default is used
+// unchanged. The branch being closed is never a candidate.
+func chooseMergeTarget(
+	ctx context.Context,
+	deps closeDeps,
+	picked *store.BranchRow,
+	defaultBase string,
+	prompter ClosePrompter) (string, error) {
+	if deps.baseOverride != "" {
+		if deps.baseOverride == picked.BranchName {
+			return "", fmt.Errorf("--base %q is the branch being closed; choose a different merge target", deps.baseOverride)
+		}
+
+		ok, err := baseBranchResolves(deps.client, deps.baseOverride)
+		if err != nil {
+			return "", fmt.Errorf("validate --base %q: %w", deps.baseOverride, err)
+		}
+		if !ok {
+			return "", fmt.Errorf("--base %q does not resolve to a local or remote branch", deps.baseOverride)
+		}
+
+		return deps.baseOverride, nil
+	}
+
+	locals, err := deps.client.LocalBranchNames()
+	if err != nil {
+		return "", fmt.Errorf("list local branches: %w", err)
+	}
+
+	candidates := mergeTargetCandidates(locals, picked.BranchName, defaultBase)
+	if len(candidates) <= 1 {
+		return defaultBase, nil
+	}
+
+	chosen, err := prompter.PickBaseBranch(ctx, defaultBase, candidates)
+	if err != nil {
+		return "", err //nolint:wrapcheck // prompter error already wrapped
+	}
+
+	return chosen, nil
+}
+
+// mergeTargetCandidates returns the branches offerable as merge targets: every
+// local branch except the one being closed, with defaultBase guaranteed present
+// (it may be a remote-only parent integration branch absent from locals).
+// defaultBase is placed first so it leads the picker list.
+func mergeTargetCandidates(locals []string, closing, defaultBase string) []string {
+	out := make([]string, 0, len(locals)+1)
+	seen := make(map[string]bool)
+	add := func(name string) {
+		if name == "" || name == closing || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+
+	add(defaultBase)
+	for _, name := range locals {
+		add(name)
+	}
+
+	return out
+}
+
+// baseBranchResolves reports whether name is a usable merge target: a local
+// branch, or <remote>/<name> when a remote is configured.
+func baseBranchResolves(c *git.Client, name string) (bool, error) {
+	exists, err := c.BranchExists(name)
+	if err != nil {
+		return false, fmt.Errorf("branch exists %q: %w", name, err)
+	}
+	if exists {
+		return true, nil
+	}
+
+	remote, err := c.Remote()
+	if err != nil {
+		return false, fmt.Errorf("resolve remote: %w", err)
+	}
+	if remote != "" {
+		if _, err := c.ResolveRef("refs/remotes/" + remote + "/" + name); err == nil {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // reviewPreflight checks whether the issue has an active review. Returns an
@@ -333,6 +458,12 @@ func getPickedBranch(
 	ctx context.Context,
 	s *store.Store,
 	client *git.Client, prompter ClosePrompter) (*store.BranchRow, error) {
+	// A branch closed in a sibling clone carries Merged=true on its
+	// refs/zf/branches/<slug> ref (pushed by updateClosedStatus) but may still
+	// show in_progress in this clone's store. Reconcile from the refs first so
+	// the picker never offers a branch that was already closed elsewhere.
+	issueflow.ReconcileMergedFromRefs(ctx, s, client)
+
 	branches, err := s.ListBranches(ctx, store.BranchStatusInProgress)
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
@@ -753,18 +884,15 @@ func reconcileChildrenFromRefs(ctx context.Context, deps closeDeps, parentSlug s
 		return
 	}
 
-	now := time.Now()
+	isChild := make(map[string]bool, len(children))
 	for _, childSlug := range children {
-		ref, _ := deps.client.ReadBranchRef(ctx, childSlug)
-		if ref == nil || !ref.Merged {
-			continue
-		}
-		for _, b := range branches {
-			if b.IssueSlug != childSlug {
-				continue
-			}
-			_ = deps.store.UpdateBranchStatus(ctx, b.BranchName, store.StatusIDMerged, &now)
-			_ = deps.store.UpdateIssueStatus(ctx, b.IssueID, store.StatusIDMerged)
+		isChild[childSlug] = true
+	}
+
+	now := time.Now()
+	for _, b := range branches {
+		if isChild[b.IssueSlug] {
+			issueflow.MarkMergedFromRef(ctx, deps.store, deps.client, b, now)
 		}
 	}
 }

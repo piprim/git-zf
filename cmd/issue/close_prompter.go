@@ -45,6 +45,11 @@ type ClosePrompter interface {
 
 	// ConfirmDeleteBranch runs after a successful merge.
 	ConfirmDeleteBranch(ctx context.Context, branchName string) (delete bool, err error)
+
+	// PickBaseBranch lets the operator choose the merge target. It is called
+	// only when no --base override was given AND more than one candidate branch
+	// exists. defaultBase is pre-selected; branches is the candidate list.
+	PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error)
 }
 
 // Compile-time check.
@@ -145,4 +150,13 @@ func (p *huhPrompter) ConfirmDeleteBranch(ctx context.Context, branchName string
 	}
 
 	return shouldDelete, nil
+}
+
+func (p *huhPrompter) PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error) {
+	var picked string
+	if err := huh.NewForm(tui.BaseBranchPicker(defaultBase, branches, &picked)).RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("base branch picker: %w", err)
+	}
+
+	return picked, nil
 }

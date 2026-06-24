@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,11 @@ func (r Review) getSyncCmd() *cobra.Command {
 }
 
 func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
+	// A sub-task closed in a sibling clone carries Merged=true on its branch ref
+	// but may still show in_progress in this clone's store. Reconcile first so
+	// the picker never offers an already-closed sub-task.
+	issueflow.ReconcileMergedFromRefs(ctx, deps.store, deps.client)
+
 	all, err := deps.store.ListBranches(ctx, store.BranchStatusInProgress)
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)

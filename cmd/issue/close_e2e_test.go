@@ -140,6 +140,18 @@ func (r *closeTestRig) pickedBranchRow() *store.BranchRow {
 	}
 }
 
+// addBranch creates a local branch off main (no extra commits) so tests can
+// exercise the multi-candidate merge-target picker.
+func (r *closeTestRig) addBranch(t *testing.T, name string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", "branch", name, "main")
+	cmd.Dir = r.dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch %s: %v\n%s", name, err, out)
+	}
+}
+
 // assertHeadSubject asserts the subject line of HEAD on branch matches want.
 func assertHeadSubject(t *testing.T, dir, branch, want string) {
 	t.Helper()
@@ -1154,6 +1166,261 @@ func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
 		}
 		if !found {
 			t.Error("X.2@feat@two not reconciled as merged in store")
+		}
+	})
+}
+
+func TestClose_BaseOverrideMergesIntoChosenBranch(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+	rig.addBranch(t, "release-1.0")
+
+	prompter := &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      StrategyClassic,
+		Confirm:       true,
+		Message:       []byte("Merge ABC-1 into release-1.0\n"),
+		TrackerStatus: "Closed",
+		DeleteBranch:  false,
+	}
+
+	deps := rig.deps()
+	deps.baseOverride = "release-1.0"
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("release-1.0 HEAD carries the merge commit", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "release-1.0", "Merge ABC-1 into release-1.0")
+	})
+
+	t.Run("picker is bypassed by the flag", func(t *testing.T) {
+		if prompter.BaseCalled {
+			t.Error("PickBaseBranch was called; --base must bypass the picker")
+		}
+	})
+
+	t.Run("main is untouched", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "chore: init")
+	})
+}
+
+func TestClose_BaseOverrideRejectsUnknownBranch(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+
+	prompter := &scriptedPrompter{
+		Branch:  rig.pickedBranchRow(),
+		Confirm: true,
+	}
+
+	deps := rig.deps()
+	deps.baseOverride = "no-such-branch"
+
+	err := runClose(t.Context(), deps, prompter)
+
+	t.Run("returns an error", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("expected error for unknown --base branch, got nil")
+		}
+	})
+
+	t.Run("error names the bad branch", func(t *testing.T) {
+		if err != nil && !strings.Contains(err.Error(), "no-such-branch") {
+			t.Errorf("error %q does not mention the bad branch", err)
+		}
+	})
+
+	t.Run("main is untouched", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "chore: init")
+	})
+}
+
+func TestClose_PickerOffersMergeTargetWhenMultipleCandidates(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+	rig.addBranch(t, "release-1.0")
+
+	prompter := &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      StrategyClassic,
+		Confirm:       true,
+		Base:          "release-1.0",
+		Message:       []byte("Merge ABC-1 into release-1.0\n"),
+		TrackerStatus: "Closed",
+		DeleteBranch:  false,
+	}
+
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("picker was shown", func(t *testing.T) {
+		if !prompter.BaseCalled {
+			t.Error("PickBaseBranch was not called despite >1 candidate")
+		}
+	})
+
+	t.Run("merge landed on the picked branch", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "release-1.0", "Merge ABC-1 into release-1.0")
+	})
+}
+
+func TestClose_PickerSkippedWhenSingleCandidate(t *testing.T) {
+	t.Parallel()
+
+	// Default rig has main + the feature branch; the feature branch is excluded
+	// as a target, leaving only main => single candidate => no picker.
+	rig := newCloseRig(t)
+
+	prompter := &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      StrategyClassic,
+		Confirm:       true,
+		Base:          "should-not-be-used",
+		Message:       []byte("Merge ABC-1 into main\n"),
+		TrackerStatus: "Closed",
+		DeleteBranch:  false,
+	}
+
+	if err := runClose(t.Context(), rig.deps(), prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("picker was not shown", func(t *testing.T) {
+		if prompter.BaseCalled {
+			t.Error("PickBaseBranch was called with only one candidate")
+		}
+	})
+
+	t.Run("merge landed on the smart default (main)", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "Merge ABC-1 into main")
+	})
+}
+
+func TestClose_BaseOverrideRejectsClosingBranch(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+
+	prompter := &scriptedPrompter{
+		Branch:  rig.pickedBranchRow(),
+		Confirm: true,
+	}
+
+	deps := rig.deps()
+	deps.baseOverride = "ABC-1@feat@add-thing" // the branch being closed
+
+	err := runClose(t.Context(), deps, prompter)
+
+	t.Run("returns an error", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("expected error when --base is the branch being closed, got nil")
+		}
+	})
+
+	t.Run("error explains it is the closing branch", func(t *testing.T) {
+		if err != nil && !strings.Contains(err.Error(), "being closed") {
+			t.Errorf("error %q should explain the target is the branch being closed", err)
+		}
+	})
+
+	t.Run("main is untouched", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "chore: init")
+	})
+}
+
+func TestCloseCmd_RegistersBaseFlag(t *testing.T) {
+	t.Parallel()
+
+	cmd := New(&config.AppConfig{}).getCloseCmd()
+
+	t.Run("--base flag is registered", func(t *testing.T) {
+		if cmd.Flags().Lookup("base") == nil {
+			t.Fatal("expected --base flag on `issue close`")
+		}
+	})
+
+	t.Run("--base flag defaults to empty", func(t *testing.T) {
+		f := cmd.Flags().Lookup("base")
+		if f == nil {
+			t.Fatal("expected --base flag on `issue close`")
+		}
+		if f.DefValue != "" {
+			t.Errorf("--base DefValue = %q, want empty (empty preserves smart-default + picker)", f.DefValue)
+		}
+	})
+}
+
+func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+
+	// Simulate a sibling clone having closed DEF-2: this clone's store still
+	// shows it in_progress, but its branch ref carries Merged=true — the
+	// cross-machine source of truth that updateClosedStatus writes + pushes on
+	// close. The picker must not offer it.
+	trackerType := "fake"
+	if err := rig.store.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "DEF-2", Title: "two", StatusID: store.StatusIDInProgress, TrackerType: &trackerType},
+		&store.Branch{Name: "DEF-2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed DEF-2: %v", err)
+	}
+	if _, err := rig.client.WriteBranchRef(t.Context(), "DEF-2", git.BranchRef{
+		IssueSlug:   "DEF-2",
+		BranchName:  "DEF-2@feat@two",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		TrackerType: "fake",
+		Merged:      true,
+	}); err != nil {
+		t.Fatalf("seed DEF-2 merged ref: %v", err)
+	}
+
+	prompter := &scriptedPrompter{Branch: rig.pickedBranchRow()}
+
+	if _, err := getPickedBranch(t.Context(), rig.store, rig.client, prompter); err != nil {
+		t.Fatalf("getPickedBranch: %v", err)
+	}
+
+	t.Run("picker is not offered the sibling-merged branch", func(t *testing.T) {
+		for _, b := range prompter.PickBranchSeen {
+			if b.IssueSlug == "DEF-2" {
+				t.Errorf("picker was offered DEF-2 (merged in a sibling clone); offered: %+v", prompter.PickBranchSeen)
+			}
+		}
+	})
+
+	t.Run("the still-open branch is still offered", func(t *testing.T) {
+		found := false
+		for _, b := range prompter.PickBranchSeen {
+			if b.IssueSlug == "ABC-1" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("picker should still offer the open ABC-1; offered: %+v", prompter.PickBranchSeen)
+		}
+	})
+
+	t.Run("store reconciles the sibling-merged branch to merged", func(t *testing.T) {
+		merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+		if err != nil {
+			t.Fatalf("ListBranches merged: %v", err)
+		}
+		found := false
+		for _, b := range merged {
+			if b.BranchName == "DEF-2@feat@two" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected DEF-2@feat@two reconciled to merged in store; merged rows: %+v", merged)
 		}
 	})
 }

@@ -382,3 +382,6 @@ printf "    X.2  1 review round   (approved, active reviewer commits incorporate
 printf "    X    1 integration review\n"
 printf "\n"
 printf "  Workspace left at: %s%s\n\n" "$DEMO_DIR" "$RESET"
+
+cd "$DEMO_DIR" || exit 1
+tree -I origin.git

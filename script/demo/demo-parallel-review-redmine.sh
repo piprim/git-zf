@@ -117,7 +117,7 @@ pe "git zf init"
 wait
 
 # ─────────────────────────────────────────────────────────────────────────────
-phase 2 "create parent issue X and two sub-tasks"
+phase 2 "Alice creates parent issue X and start one sub-tasks"
 # ─────────────────────────────────────────────────────────────────────────────
 
 role "Alice" "starts the parent integration branch for issue X"
@@ -134,34 +134,27 @@ pe "git zf issue start --parent 1149829"
 # → creates 1149830@feat@one from X@feat@big
 wait
 
-role "Alice" "starts sub-task X.2 (Bob will work on this)"
-hint "id → 1149831   title → two   type → feat   base → 1149829@feat@big"
-pe "git zf issue start"
-pe "git push origin 1149829@feat@big 1149830@feat@one 1149831@feat@two"
-wait
-
-# ─────────────────────────────────────────────────────────────────────────────
-phase 3 "parallel development — Alice on X.1, Bob on X.2"
-# ─────────────────────────────────────────────────────────────────────────────
-
 role "Alice" "implements part one"
-cd "$DEMO_DIR/dev-alice" || exit 1
-pe "git checkout 1149830@feat@one"
-
 # silent: actually write the file so git has something to commit
 printf "one implementation\n" >"$DEMO_DIR/dev-alice/one.txt"
 
 pe "echo 'one implementation' > one.txt"
-pe "git add one.txt && git commit -m 'feat(1149830): implement part one'"
+pe "git add one.txt && git zf commit"
 pe "git push origin 1149830@feat@one"
 wait
 
-role "Bob" "implements part two"
+# ─────────────────────────────────────────────────────────────────────────────
+phase 2 "Bob start one sub-tasks of X"
+# ─────────────────────────────────────────────────────────────────────────────
+
+role "Bob" "Create sub-tacks X.2 from X"
 cd "$DEMO_DIR/dev-bob" || exit 1
 pe "cd ../dev-bob"
 pe "git fetch origin"
-pe "git checkout -b 1149831@feat@two origin/1149831@feat@two"
+hint "id → 1149831   title → two   type → feat   base → 1149829@feat@big"
+pe "git zf issue start"
 
+role "Bob" "implements part two"
 printf "two implementation\n" >"$DEMO_DIR/dev-bob/two.txt"
 
 pe "echo 'two implementation' > two.txt"
@@ -185,9 +178,6 @@ wait
 role "Bob" "submits 1149831"
 cd "$DEMO_DIR/dev-bob" || exit 1
 pe "cd ../dev-bob && git checkout 1149831@feat@two"
-# first request fails (branch not tracked yet) → track → retry
-pe "git zf review request"
-pe "git zf review track"
 hint "pick: 1149831@feat@two  (pre-selected — press Enter)"
 pe "git zf review request"
 wait
@@ -309,20 +299,13 @@ pe "git push origin 1149829@feat@big"
 wait
 
 # ─────────────────────────────────────────────────────────────────────────────
-phase 11 "Alice syncs 1149830 (1149831 landed in parent) then closes"
+phase 11 "Alice closes 1149830"
 # ─────────────────────────────────────────────────────────────────────────────
 
-role "Alice" "1149831 landed in parent — 1149830 has drifted, sync first (optionnal process)"
+role "Alice" "closes 1149830 — merges into parent integration branch"
 cd "$DEMO_DIR/dev-alice" || exit 1
 pe "cd ../dev-alice"
 pe "git fetch origin"
-hint "pick: 1149830@feat@one"
-pe "git zf review sync"
-# → merges origin/1149829@feat@big into 1149830@feat@one
-pe "git push origin 1149830@feat@one"
-wait
-
-role "Alice" "closes 1149830 — merges into parent integration branch"
 hint "① branch: 1149830@feat@one   ② strategy: rebase   ③ confirm: Enter   ④ commit form: Enter"
 pe "git zf issue close"
 # preflight: approved, no reviewer commits → proceeds directly
@@ -381,4 +364,6 @@ printf "    1149831  1 review round   (approved, active reviewer commits incorpo
 printf "    1149829  1 integration review\n"
 printf "\n"
 printf "  Workspace left at: %s%s\n\n" "$DEMO_DIR" "$RESET"
+
+cd "$DEMO_DIR" || exit 1
 tree -I origin.git

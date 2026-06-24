@@ -24,6 +24,9 @@ type scriptedPrompter struct {
 	MessageOpts   tui.CommitOption
 	TrackerStatus string
 	DeleteBranch  bool
+	Base          string
+	BaseErr       error
+	BaseCalled    bool
 
 	// Failure injection — when non-nil, that method returns this error
 	// immediately. Useful for cancellation-style tests.
@@ -37,9 +40,15 @@ type scriptedPrompter struct {
 	// CapturedPrefill holds the last prefill map received by ComposeMessage.
 	// Tests can assert on it after runClose returns.
 	CapturedPrefill map[string]any
+
+	// PickBranchSeen holds the branch list PickBranch was last offered. Tests
+	// assert on it to verify which branches the picker would have shown.
+	PickBranchSeen []store.BranchRow
 }
 
-func (s *scriptedPrompter) PickBranch(_ context.Context, _ []store.BranchRow, _ string) (*store.BranchRow, error) {
+func (s *scriptedPrompter) PickBranch(_ context.Context, branches []store.BranchRow, _ string) (*store.BranchRow, error) {
+	s.PickBranchSeen = branches
+
 	if s.BranchErr != nil {
 		return nil, s.BranchErr
 	}
@@ -87,4 +96,16 @@ func (s *scriptedPrompter) ConfirmDeleteBranch(_ context.Context, _ string) (boo
 	}
 
 	return s.DeleteBranch, nil
+}
+
+func (s *scriptedPrompter) PickBaseBranch(_ context.Context, defaultBase string, _ []string) (string, error) {
+	s.BaseCalled = true
+	if s.BaseErr != nil {
+		return "", s.BaseErr
+	}
+	if s.Base == "" {
+		return defaultBase, nil
+	}
+
+	return s.Base, nil
 }
