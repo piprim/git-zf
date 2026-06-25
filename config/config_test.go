@@ -252,6 +252,34 @@ token = "tok"
 	})
 }
 
+func TestLoadPushPropose(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults to true", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := config.Load(viper.New())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.Push.Propose {
+			t.Fatalf("Push.Propose = false, want true (default)")
+		}
+	})
+
+	t.Run("can be overridden to false", func(t *testing.T) {
+		t.Parallel()
+		v := viper.New()
+		v.Set("push.propose", false)
+		cfg, err := config.Load(v)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Push.Propose {
+			t.Fatalf("Push.Propose = true, want false (override)")
+		}
+	})
+}
+
 func TestDefaultTOML_isValidTOML(t *testing.T) {
 	t.Parallel()
 

@@ -63,6 +63,13 @@ type BranchConfig struct {
 	WorktreeDir string `json:"worktree-dir"  toml:"worktree-dir"  mapstructure:"worktree-dir"`
 }
 
+// PushConfig holds settings for the post-action push proposal.
+// Propose is the master switch (default true); when false the propose-to-push
+// step is skipped everywhere.
+type PushConfig struct {
+	Propose bool `json:"propose" toml:"propose" mapstructure:"propose"`
+}
+
 // IssueTrackerConfig holds connection parameters for one tracker instance.
 // Never log values of this type — Token is a secret.
 type IssueTrackerConfig struct {
@@ -79,6 +86,7 @@ type AppConfig struct {
 	CommitTypes   []CommitTypeOption  `json:"commit-types"   toml:"commit-types"   mapstructure:"commit-types"`
 	CommitMessage CommitMessageConfig `json:"commit-message" toml:"commit-message" mapstructure:"commit-message"`
 	Branch        BranchConfig        `json:"branch"         toml:"branch"         mapstructure:"branch"`
+	Push          PushConfig          `json:"push"           toml:"push"           mapstructure:"push"`
 	IssueTracker  IssueTrackerConfig  `json:"issue-tracker"  toml:"issue-tracker"  mapstructure:"issue-tracker"`
 }
 
@@ -138,6 +146,10 @@ func Load(v *viper.Viper) (*AppConfig, error) {
 
 	if v.IsSet("branch.worktree-dir") {
 		cfg.Branch.WorktreeDir = v.GetString("branch.worktree-dir")
+	}
+
+	if v.IsSet("push.propose") {
+		cfg.Push.Propose = v.GetBool("push.propose")
 	}
 
 	// issue-tracker is decoded without zeroSlice: Projects defaults to nil, so

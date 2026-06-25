@@ -140,7 +140,7 @@ printf "one implementation\n" >"$DEMO_DIR/dev-alice/one.txt"
 
 pe "echo 'one implementation' > one.txt"
 pe "git add one.txt && git zf commit"
-pe "git push origin 1149830@feat@one"
+pe "git push origin 1149830@feat@one 1149829@feat@big"
 wait
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +153,7 @@ pe "cd ../dev-bob"
 pe "git fetch origin"
 hint "id → 1149831   title → two   type → feat   base → 1149829@feat@big"
 pe "git zf issue start"
+wait
 
 role "Bob" "implements part two"
 printf "two implementation\n" >"$DEMO_DIR/dev-bob/two.txt"

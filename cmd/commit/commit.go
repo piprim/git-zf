@@ -8,6 +8,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/pushflow"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -68,6 +69,7 @@ func (c Commit) GetRootCmd() *cobra.Command {
 	f.BoolVarP(&signoff, "signoff", "s", false, "add Signed-off-by trailer to the commit message")
 	f.BoolVar(&allowEmpty, "allow-empty", false, "allow a commit with no changes")
 	f.StringVar(&author, "author", "", `override commit author as "Name <email>"`)
+	pushflow.AddFlags(cmd)
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		return c.runE(cmd, tui.CommitOption{
@@ -124,7 +126,30 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 
-	return nil
+	return proposeCommitPush(cmd, client, c.appConfig.Push.Propose)
+}
+
+// proposeCommitPush offers to push the current branch after a successful commit.
+func proposeCommitPush(cmd *cobra.Command, client *git.Client, propose bool) error {
+	push, noPush := pushflow.ReadFlags(cmd)
+	skip, auto, err := pushflow.ResolveFlags(push, noPush, propose)
+	if err != nil {
+		return err
+	}
+
+	branch, err := client.CurrentBranch()
+	if err != nil {
+		return nil // detached/unknown HEAD → nothing to offer
+	}
+
+	yes, _ := cmd.Flags().GetBool("yes")
+
+	return pushflow.Propose(cmd.Context(), client, pushflow.Opts{
+		Branch:         branch,
+		Skip:           skip,
+		AutoConfirm:    auto,
+		NonInteractive: yes,
+	}, pushflow.NewHuhConfirm())
 }
 
 // issueHintFromClient detects whether the current branch is an issue branch

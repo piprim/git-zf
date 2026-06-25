@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
 func (r Review) getApproveCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "approve",
 		Short: "Approve a review — signals the branch is ready to close",
 		Args:  cobra.NoArgs,
@@ -26,6 +27,8 @@ func (r Review) getApproveCmd() *cobra.Command {
 			return runReviewApproveInteractive(ctx, deps, newHuhReviewPrompter())
 		},
 	}
+	pushflow.AddFlags(cmd)
+	return cmd
 }
 
 func runReviewApproveInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
@@ -127,6 +130,12 @@ func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) er
 	}
 	fmt.Fprintln(deps.client.IO().Out, msg)
 	fmt.Fprintf(deps.client.IO().Out, "Issue %q is ready to close. Developer can now run: git zf issue close\n", issueSlug)
+
+	if exists, _ := deps.client.BranchExists(reviewBranch); exists && hasCommits {
+		if err := proposeReviewPush(ctx, deps, reviewBranch); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

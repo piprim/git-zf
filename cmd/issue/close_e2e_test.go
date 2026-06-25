@@ -2,6 +2,7 @@ package issue
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -1424,3 +1425,151 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 		}
 	})
 }
+
+// revParseInDir runs `git rev-parse <ref>` in dir and returns the trimmed SHA.
+func revParseInDir(t *testing.T, dir, ref string) string {
+	t.Helper()
+
+	out, err := exec.CommandContext(t.Context(), "git", "-C", dir, "rev-parse", ref).Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s in %s: %v", ref, dir, err)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
+// newCloseOriginRig builds a bare origin + a clone with a seeded in-progress
+// branch one commit ahead of main, mirroring the rig pattern used by
+// TestClose_SubtaskDryRunFallsBackToRemoteBase. Returns (deps, cloneDir, originDir, baseBranchName).
+func newCloseOriginRig(t *testing.T) (closeDeps, string, string, string) {
+	t.Helper()
+
+	originDir := t.TempDir()
+	cloneDir := t.TempDir()
+
+	runIn := func(dir string, args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+		}
+	}
+
+	// Build a non-bare seed repo, then push to a bare origin.
+	seedDir := t.TempDir()
+	runIn(seedDir, "init", "-q", "--initial-branch=main")
+	runIn(seedDir, "config", "user.name", "Seed")
+	runIn(seedDir, "config", "user.email", "seed@example.com")
+	runIn(seedDir, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(seedDir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base.txt: %v", err)
+	}
+	runIn(seedDir, "add", "base.txt")
+	runIn(seedDir, "commit", "-m", "chore: init")
+
+	// Bare origin.
+	runIn(originDir, "init", "-q", "--bare", "--initial-branch=main")
+	runIn(seedDir, "remote", "add", "origin", originDir)
+	runIn(seedDir, "push", "origin", "main")
+
+	// Clone from origin.
+	runIn(cloneDir, "init", "-q", "--initial-branch=main")
+	runIn(cloneDir, "config", "user.name", "Dev")
+	runIn(cloneDir, "config", "user.email", "dev@example.com")
+	runIn(cloneDir, "config", "commit.gpgsign", "false")
+	runIn(cloneDir, "remote", "add", "origin", originDir)
+	runIn(cloneDir, "fetch", "origin")
+	runIn(cloneDir, "checkout", "-b", "main", "--track", "origin/main")
+
+	// Feature branch one commit ahead of main.
+	runIn(cloneDir, "checkout", "-b", "ABC-1@feat@push-test")
+	if err := os.WriteFile(filepath.Join(cloneDir, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+	runIn(cloneDir, "add", "feature.txt")
+	runIn(cloneDir, "commit", "-m", "feat: implement push test")
+	runIn(cloneDir, "checkout", "main")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	ioStreams := &pkg.IO{In: bytes.NewReader(nil), Out: stdout, Err: stderr}
+
+	client, err := git.NewClientAt(ioStreams, cloneDir)
+	if err != nil {
+		t.Fatalf("git.NewClientAt: %v", err)
+	}
+
+	s, err := store.Open(t.Context(), cloneDir)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	// Seed the store and a tracker-born branch ref.
+	trackerType := "fake"
+	if err := s.InsertIssueWithBranch(t.Context(),
+		&store.Issue{IDSlug: "ABC-1", Title: "Push test", StatusID: store.StatusIDInProgress, TrackerType: &trackerType},
+		&store.Branch{Name: "ABC-1@feat@push-test", Type: "feat", StatusID: store.StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed branch: %v", err)
+	}
+	if _, err := client.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
+		IssueSlug:   "ABC-1",
+		BranchName:  "ABC-1@feat@push-test",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		TrackerType: "fake",
+	}); err != nil {
+		t.Fatalf("seed branch ref: %v", err)
+	}
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+	cfg.IssueTracker.Type = "fake"
+
+	deps := closeDeps{client: client, store: s, cfg: cfg}
+
+	return deps, cloneDir, originDir, "main"
+}
+
+// TestClose_ProposesPushOfMergeTarget verifies that after a successful close,
+// proposeClosePush pushes the merge target (base) to origin when pushConfirm
+// returns true and cfg.Push.Propose is true.
+func TestClose_ProposesPushOfMergeTarget(t *testing.T) {
+	t.Parallel()
+
+	deps, cloneDir, originDir, base := newCloseOriginRig(t)
+	deps.cfg.Push.Propose = true
+	deps.pushConfirm = func(_ context.Context, _ string) (bool, error) { return true, nil }
+
+	pickedRow := &store.BranchRow{
+		IssueID:    1,
+		IssueSlug:  "ABC-1",
+		Title:      "Push test",
+		BranchName: "ABC-1@feat@push-test",
+		Type:       "feat",
+		Status:     store.BranchStatusInProgress,
+	}
+	prompter := &scriptedPrompter{
+		Branch:        pickedRow,
+		Strategy:      StrategyRebase,
+		Confirm:       true,
+		Message:       []byte("feat(push-test): close ABC-1\n"),
+		TrackerStatus: "Closed",
+		DeleteBranch:  false,
+	}
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("origin main advanced to local main", func(t *testing.T) {
+		local := revParseInDir(t, cloneDir, "refs/heads/"+base)
+		remote := revParseInDir(t, originDir, "refs/heads/"+base)
+		if local != remote {
+			t.Fatalf("origin %s = %s, want local tip %s", base, remote, local)
+		}
+	})
+}
+

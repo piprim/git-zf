@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
 func (r Review) getRejectCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "reject",
 		Short: "Request changes on a review — unlocks the branch for the next iteration",
 		Args:  cobra.NoArgs,
@@ -26,6 +27,8 @@ func (r Review) getRejectCmd() *cobra.Command {
 			return runReviewRejectInteractive(ctx, deps, newHuhReviewPrompter())
 		},
 	}
+	pushflow.AddFlags(cmd)
+	return cmd
 }
 
 func runReviewRejectInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
@@ -147,6 +150,12 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug string) err
 	branchLabel := featureBranch
 	if branchLabel == "" {
 		branchLabel = issueSlug
+	}
+
+	if reviewBranchExists && hasCommits {
+		if err := proposeReviewPush(ctx, deps, reviewBranch); err != nil {
+			return err
+		}
 	}
 
 	if hasCommits {

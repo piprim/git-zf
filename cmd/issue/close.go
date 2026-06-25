@@ -9,6 +9,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
+	"github.com/piprim/git-zf/cmd/pushflow"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -33,6 +34,11 @@ type closeDeps struct {
 	// Set per-invocation by closeRunE; left empty by the E2E tests that drive
 	// the default/picker paths.
 	baseOverride string
+
+	// push proposal wiring (Phase 1). pushConfirm is nil in tests that build
+	// closeDeps directly, which disables the push step there.
+	push, noPush bool
+	pushConfirm  pushflow.ConfirmFunc
 }
 
 // buildCloseDeps constructs the production closeDeps from a cobra command.
@@ -110,6 +116,8 @@ update the local store, update the remote tracker, then optionally delete the lo
 	cmd.Flags().String("base", "",
 		"merge target branch (default: parent integration branch or base, with an interactive picker)")
 
+	pushflow.AddFlags(cmd)
+
 	return cmd
 }
 
@@ -128,6 +136,8 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	defer func() { _ = deps.store.Close() }()
 
 	deps.baseOverride = baseOverride
+	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
+	deps.pushConfirm = pushflow.NewHuhConfirm()
 
 	return runClose(ctx, deps, newHuhPrompter(deps.client, deps.store, i.appConfig))
 }
@@ -216,7 +226,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 
 	fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
 
-	return nil
+	return proposeClosePush(ctx, deps, base)
 }
 
 // resolveDefaultBase computes the smart-default merge target: the configured
@@ -915,4 +925,21 @@ func composeAndCommit(ctx context.Context, mc mergeContext, prompter ClosePrompt
 	}
 
 	return nil
+}
+
+// proposeClosePush offers to push the merge target (base) after a successful
+// close. No-op when no confirm was wired (tests) or when gating/skip applies.
+func proposeClosePush(ctx context.Context, deps closeDeps, base string) error {
+	if deps.pushConfirm == nil {
+		return nil
+	}
+	skip, auto, err := pushflow.ResolveFlags(deps.push, deps.noPush, deps.cfg.Push.Propose)
+	if err != nil {
+		return err
+	}
+	return pushflow.Propose(ctx, deps.client, pushflow.Opts{
+		Branch:      base,
+		Skip:        skip,
+		AutoConfirm: auto,
+	}, deps.pushConfirm)
 }

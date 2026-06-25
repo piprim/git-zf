@@ -1642,3 +1642,54 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		}
 	})
 }
+
+// TestReviewRequest_ProposesFeatureBranchPush verifies that when Push.Propose=true
+// and the push confirm returns true, runReviewRequestInteractive pushes the feature
+// branch to origin after submitting for review.
+func TestReviewRequest_ProposesFeatureBranchPush(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewE2ERigWithOrigin(t)
+
+	// Resolve the actual origin path from the rig's git config.
+	originOut, err := exec.CommandContext(t.Context(), "git", "-C", rig.dir,
+		"remote", "get-url", "origin").Output()
+	if err != nil {
+		t.Fatalf("get origin url: %v", err)
+	}
+	originDir := strings.TrimSpace(string(originOut))
+
+	// Checkout the feature branch so currentIssueSlug resolves correctly.
+	if err := rig.client.RunGitAt(t.Context(), rig.dir, "checkout", "77@feat@my-feature"); err != nil {
+		t.Fatalf("checkout feature branch: %v", err)
+	}
+
+	branches, err := rig.store.ListBranches(t.Context(), store.BranchStatusInProgress)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	var picked store.BranchRow
+	for _, b := range branches {
+		if b.IssueSlug == "77" {
+			picked = b
+			break
+		}
+	}
+
+	deps := rig.deps()
+	deps.cfg.Push.Propose = true
+	deps.pushConfirm = func(_ context.Context, _ string) (bool, error) { return true, nil }
+
+	p := &scriptedReviewPrompter{Branch: &picked}
+	if err := runReviewRequestInteractive(t.Context(), deps, p); err != nil {
+		t.Fatalf("runReviewRequestInteractive: %v", err)
+	}
+
+	t.Run("feature branch present on origin after push", func(t *testing.T) {
+		cmd := exec.CommandContext(t.Context(), "git", "-C", originDir,
+			"rev-parse", "refs/heads/77@feat@my-feature")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("origin missing 77@feat@my-feature: %v\n%s", err, out)
+		}
+	})
+}

@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/piprim/git-zf/cmd/issueflow"
+	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
 func (r Review) getRequestCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "request",
 		Short: "Submit an issue branch for code review (locks the branch)",
 		Args:  cobra.NoArgs,
@@ -27,6 +28,8 @@ func (r Review) getRequestCmd() *cobra.Command {
 			return runReviewRequestInteractive(ctx, deps, newHuhReviewPrompter())
 		},
 	}
+	pushflow.AddFlags(cmd)
+	return cmd
 }
 
 func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
@@ -160,6 +163,10 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 		"Issue %q is now in review (round %d). Branch %q is locked.\n"+
 			"Share with your reviewer: git fetch && git zf review start\n",
 		issueSlug, reviewRow.Round, featureBranch)
+
+	if err := proposeReviewPush(ctx, deps, featureBranch); err != nil {
+		return err
+	}
 
 	return nil
 }

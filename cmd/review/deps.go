@@ -7,6 +7,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
@@ -29,6 +30,10 @@ type reviewDeps struct {
 	// (or it failed to initialise). A nil tracker disables the status-update
 	// prompt — see maybeUpdateTrackerStatus.
 	tracker tracker.Tracker
+	// push proposal wiring (Phase 1). pushConfirm is nil in tests that build
+	// reviewDeps literals, disabling the push step there.
+	push, noPush bool
+	pushConfirm  pushflow.ConfirmFunc
 }
 
 // currentBrancher is the one-method slice of *git.Client that currentIssueSlug
@@ -54,6 +59,8 @@ func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppCon
 	}
 
 	deps := reviewDeps{client: client, store: s, cfg: cfg}
+	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
+	deps.pushConfirm = pushflow.NewHuhConfirm()
 
 	// Build the tracker so the review-lifecycle commands can offer to update the
 	// originating issue status (mirrors buildCloseDeps). Non-fatal: warn and
@@ -161,6 +168,23 @@ func ensureReviewRecord(ctx context.Context, deps reviewDeps, issueSlug string) 
 		}
 	}
 	return inserted, nil
+}
+
+// proposeReviewPush offers to push branch after a review transition. No-op when
+// no confirm was wired (tests) or when gating/skip applies.
+func proposeReviewPush(ctx context.Context, deps reviewDeps, branch string) error {
+	if deps.pushConfirm == nil {
+		return nil
+	}
+	skip, auto, err := pushflow.ResolveFlags(deps.push, deps.noPush, deps.cfg.Push.Propose)
+	if err != nil {
+		return err
+	}
+	return pushflow.Propose(ctx, deps.client, pushflow.Opts{
+		Branch:      branch,
+		Skip:        skip,
+		AutoConfirm: auto,
+	}, deps.pushConfirm)
 }
 
 // currentIssueSlug returns the IssueID of the current git branch, or "" if it

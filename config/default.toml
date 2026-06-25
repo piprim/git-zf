@@ -73,3 +73,6 @@ projects = []
 type = ""
 url = ""
 token = ""
+
+[push]
+propose = true
