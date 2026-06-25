@@ -44,6 +44,11 @@ type scriptedStartPrompter struct {
 	BaseBranch    string
 	BaseBranchErr error
 
+	// CapturedBaseBranches records the candidate list PickBaseBranch was offered,
+	// so tests can assert a remote-only parent was presented. nil ⇒ the picker
+	// was never invoked (gated off by candidate count).
+	CapturedBaseBranches []string
+
 	// Error injection — when non-nil, the corresponding method returns this
 	// error immediately.
 	IssueFromUserErr    error
@@ -95,7 +100,8 @@ func (s *scriptedStartPrompter) PickUseWorktree(_ context.Context) (bool, error)
 	return s.UseWorktree, nil
 }
 
-func (s *scriptedStartPrompter) PickBaseBranch(_ context.Context, _ string, _ []string) (string, error) {
+func (s *scriptedStartPrompter) PickBaseBranch(_ context.Context, _ string, branches []string) (string, error) {
+	s.CapturedBaseBranches = branches
 	return s.BaseBranch, s.BaseBranchErr
 }
 

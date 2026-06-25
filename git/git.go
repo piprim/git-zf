@@ -636,8 +636,14 @@ func (c *Client) BranchExists(name string) (bool, error) {
 }
 
 // CreateBranch creates a new branch from baseBranch and checks it out.
+//
+// baseBranch is resolved via ResolveBranchRef, so it may be a local head
+// (refs/heads/<base>) OR a branch that exists only as a remote-tracking ref
+// (refs/remotes/<remote>/<base>). The latter is the fresh-clone case: a teammate
+// starts a sub-task off a parent integration branch that has been pushed but
+// never checked out locally.
 func (c *Client) CreateBranch(name, baseBranch string) error {
-	baseRef, err := c.repo.Reference(plumbing.ReferenceName("refs/heads/"+baseBranch), true)
+	baseHash, err := c.ResolveBranchRef(baseBranch)
 	if err != nil {
 		return fmt.Errorf("resolve base branch %q: %w", baseBranch, err)
 	}
@@ -651,7 +657,7 @@ func (c *Client) CreateBranch(name, baseBranch string) error {
 	// ref (Branch) when Create is true, and uses Hash as the starting commit for
 	// the new branch ref.
 	if err := wt.Checkout(&gogit.CheckoutOptions{
-		Hash:   baseRef.Hash(),
+		Hash:   baseHash,
 		Branch: plumbing.ReferenceName("refs/heads/" + name),
 		Create: true,
 		Keep:   true,
@@ -660,6 +666,55 @@ func (c *Client) CreateBranch(name, baseBranch string) error {
 	}
 
 	return nil
+}
+
+// RemoteBranchNames returns the short names of the configured remote's tracking
+// branches (refs/remotes/<remote>/*), with the "<remote>/" prefix stripped and
+// the remote's HEAD symref skipped. Returns nil when no remote is configured.
+//
+// Used by the issue-start base picker so a parent integration branch that exists
+// only on the remote (fresh clone, never checked out locally) is still offered
+// as a base candidate — mirroring how LocalBranchNames feeds the local ones.
+func (c *Client) RemoteBranchNames() ([]string, error) {
+	remote, err := c.Remote()
+	if err != nil {
+		return nil, fmt.Errorf("resolve remote: %w", err)
+	}
+	if remote == "" {
+		return nil, nil
+	}
+
+	refs, err := c.repo.References()
+	if err != nil {
+		return nil, fmt.Errorf("list references: %w", err)
+	}
+
+	prefix := "refs/remotes/" + remote + "/"
+	var names []string
+	if err := refs.ForEach(func(ref *plumbing.Reference) error {
+		// Skip the remote HEAD symref (refs/remotes/<remote>/HEAD).
+		if ref.Type() == plumbing.SymbolicReference {
+			return nil
+		}
+
+		full := ref.Name().String()
+		if !strings.HasPrefix(full, prefix) {
+			return nil
+		}
+
+		short := strings.TrimPrefix(full, prefix)
+		if short == "" || short == "HEAD" {
+			return nil
+		}
+
+		names = append(names, short)
+
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("iterate references: %w", err)
+	}
+
+	return names, nil
 }
 
 // CreateWorktree creates a new branch from baseBranch and checks it out

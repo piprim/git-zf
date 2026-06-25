@@ -89,34 +89,23 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 	}
 
 	// When --parent was not explicitly set, offer a base branch picker so the
-	// user can create a sub-task without knowing the flag exists.
+	// user can create a sub-task without knowing the flag exists. Candidates are
+	// the union of local branches and remote-tracking branches: on a fresh clone
+	// the parent integration branch exists only as origin/<name> (never checked
+	// out locally), and it must still be offerable as a base — git.CreateBranch
+	// resolves a remote-only base via its remote-tracking ref.
 	if deps.Flags.ParentIssueSlug == "" {
-		if gitBranches, brErr := deps.Client.LocalBranchNames(); brErr == nil && len(gitBranches) > 1 {
+		if candidates, brErr := baseBranchCandidates(deps.Client); brErr == nil && len(candidates) > 1 {
 			defaultBase, dbErr := resolveDefaultBase(deps)
 			if dbErr != nil {
 				return fmt.Errorf("resolve default base: %w", dbErr)
 			}
-			baseBranch, pbErr := prompter.PickBaseBranch(ctx, defaultBase, gitBranches)
+			baseBranch, pbErr := prompter.PickBaseBranch(ctx, defaultBase, candidates)
 			if pbErr != nil {
 				return fmt.Errorf("pick base branch: %w", pbErr)
 			}
 			deps.BaseBranchOverride = baseBranch
-			// If the chosen branch is tracked by git-zf, record it as the parent (best-effort).
-			// Open the store via the client's git dir so this works in tests (temp dirs)
-			// as well as production (CWD is the repo).
-			if gitDir, gdErr := deps.Client.GitDir(); gdErr == nil {
-				if s, openErr := store.Open(ctx, gitDir); openErr == nil {
-					defer func() { _ = s.Close() }()
-					if rows, listErr := s.ListBranches(ctx, store.BranchStatusAll); listErr == nil {
-						for _, r := range rows {
-							if r.BranchName == baseBranch {
-								deps.Flags.ParentIssueSlug = r.IssueSlug
-								break
-							}
-						}
-					}
-				}
-			}
+			deps.Flags.ParentIssueSlug = resolveParentSlug(ctx, deps.Client, baseBranch)
 		}
 	}
 
@@ -385,6 +374,84 @@ func worktreeCreator(ctx context.Context, deps StartDeps, prompter StartPrompter
 	return true, "worktree", nil
 }
 
+// resolveParentSlug derives the parent issue slug from the chosen base branch so
+// the parent relation (store) and the branch ref's ParentSlug are recorded.
+//
+// It prefers the local store — authoritative when the base is a git-zf-tracked
+// branch present locally — and falls back to parsing the branch name
+// (<slug>@<type>@<title>) when the store has no matching row. The fallback is the
+// fresh-clone case: the parent integration branch exists only as a
+// remote-tracking ref, so it is absent from the local store, but its name still
+// encodes the slug. Returns "" when the base is not a git-zf issue branch (e.g.
+// main), leaving the new branch parentless.
+func resolveParentSlug(ctx context.Context, c *git.Client, baseBranch string) string {
+	if gitDir, gdErr := c.GitDir(); gdErr == nil {
+		if s, openErr := store.Open(ctx, gitDir); openErr == nil {
+			defer func() { _ = s.Close() }()
+			if rows, listErr := s.ListBranches(ctx, store.BranchStatusAll); listErr == nil {
+				for _, r := range rows {
+					if r.BranchName == baseBranch {
+						return r.IssueSlug
+					}
+				}
+			}
+		}
+	}
+
+	if parsed, perr := branch.Parse(baseBranch); perr == nil {
+		return parsed.IssueID()
+	}
+
+	return ""
+}
+
+// BaseBrancher is the slice of *git.Client that baseBranchCandidates needs:
+// the local and remote-tracking branch listers. Declared as a tiny interface so
+// candidate assembly is unit-testable without a real repository.
+type BaseBrancher interface {
+	LocalBranchNames() ([]string, error)
+	RemoteBranchNames() ([]string, error)
+}
+
+// Compile-time check that the production client satisfies the role.
+var _ BaseBrancher = (*git.Client)(nil)
+
+// baseBranchCandidates returns the branches offerable as a base for a new
+// sub-task: every local branch plus every remote-tracking branch (with the
+// remote prefix stripped), deduplicated with locals taking precedence. A branch
+// present both locally and on the remote appears once. Including remote-only
+// branches is what lets a fresh-clone teammate base a sub-task on a parent
+// integration branch that has been pushed but never checked out locally.
+func baseBranchCandidates(c BaseBrancher) ([]string, error) {
+	locals, err := c.LocalBranchNames()
+	if err != nil {
+		return nil, fmt.Errorf("list local branches: %w", err)
+	}
+
+	// Remote-tracking branches are best-effort: a missing/erroring remote must
+	// not block the local-only picker (the prior behaviour).
+	remotes, _ := c.RemoteBranchNames()
+
+	seen := make(map[string]bool, len(locals)+len(remotes))
+	out := make([]string, 0, len(locals)+len(remotes))
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+
+	for _, n := range locals {
+		add(n)
+	}
+	for _, n := range remotes {
+		add(n)
+	}
+
+	return out, nil
+}
+
 // resolveDefaultBase returns the configured base branch, falling back to the
 // repo's default (main/master) when not set.
 func resolveDefaultBase(deps StartDeps) (string, error) {
@@ -405,11 +472,15 @@ func prepareBranch(ctx context.Context, deps StartDeps, picked *issue.Issue, par
 		return nil, "", fmt.Errorf("assemble branch name: %w", err)
 	}
 
+	// An explicit base chosen via the interactive picker (PickBaseBranch) always
+	// wins — including a remote-only parent branch that is absent from the local
+	// store on a fresh clone. Checked before the --parent store lookup so the
+	// operator's pick is never silently overridden by the config base.
+	if deps.BaseBranchOverride != "" {
+		return b, deps.BaseBranchOverride, nil
+	}
+
 	if deps.Flags.ParentIssueSlug != "" {
-		if deps.BaseBranchOverride != "" {
-			// Already resolved by PickBaseBranch — use directly, no store query needed.
-			return b, deps.BaseBranchOverride, nil
-		}
 		// --parent set via flag; look up the branch from the provided store.
 		if parentStore == nil {
 			return nil, "", fmt.Errorf("no store available to resolve parent issue %q", deps.Flags.ParentIssueSlug)

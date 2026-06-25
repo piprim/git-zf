@@ -707,6 +707,126 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 	})
 }
 
+// TestRunIssueStart_PickerOffersRemoteOnlyParent reproduces the cross-clone
+// sub-task scenario (the parallel-review demo, Bob starting X.2): a teammate
+// clones the repo, the parent integration branch exists only as a
+// remote-tracking ref (origin/<parent>) — never checked out locally — and they
+// start a sub-task off it via the interactive base picker (no --parent flag).
+// The picker must OFFER the remote-only parent, and the new branch must be cut
+// from it rather than silently falling back to main.
+//
+// Not parallel: it t.Chdir's into the clone so persist()'s store.OpenRepo
+// resolves to the clone, keeping the project store untouched.
+func TestRunIssueStart_PickerOffersRemoteOnlyParent(t *testing.T) {
+	parentBranch := "1149829@feat@big"
+
+	// Bare origin seeded with main + the parent integration branch.
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+	if err := os.MkdirAll(originDir, 0o755); err != nil {
+		t.Fatalf("mkdir origin: %v", err)
+	}
+	runGitIn(t, originDir, "init", "--bare", "-q", "--initial-branch=main")
+
+	seed := t.TempDir()
+	runGitIn(t, seed, "init", "-q", "--initial-branch=main")
+	runGitIn(t, seed, "config", "user.name", "Alice")
+	runGitIn(t, seed, "config", "user.email", "alice@test.com")
+	runGitIn(t, seed, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(seed, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base.txt: %v", err)
+	}
+	runGitIn(t, seed, "add", "base.txt")
+	runGitIn(t, seed, "commit", "-m", "chore: init")
+	runGitIn(t, seed, "checkout", "-b", parentBranch)
+	if err := os.WriteFile(filepath.Join(seed, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
+		t.Fatalf("write parent.txt: %v", err)
+	}
+	runGitIn(t, seed, "add", "parent.txt")
+	runGitIn(t, seed, "commit", "-m", "feat: parent integration branch")
+	runGitIn(t, seed, "remote", "add", "origin", originDir)
+	runGitIn(t, seed, "push", "-q", "origin", "main", parentBranch)
+
+	// Bob clones: only main is local; parentBranch exists as origin/<parentBranch>.
+	cloneDir := t.TempDir()
+	runGitIn(t, filepath.Dir(cloneDir), "clone", "-q", originDir, filepath.Base(cloneDir))
+	runGitIn(t, cloneDir, "config", "user.name", "Bob")
+	runGitIn(t, cloneDir, "config", "user.email", "bob@test.com")
+	runGitIn(t, cloneDir, "config", "commit.gpgsign", "false")
+	t.Chdir(cloneDir)
+
+	ioStreams := &pkg.IO{In: bytes.NewReader(nil), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+	client, err := git.NewClientAt(ioStreams, cloneDir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+	cfg.CommitTypes = []config.CommitTypeOption{{Name: "feat"}, {Name: "fix"}}
+
+	prompter := &scriptedStartPrompter{
+		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{ID: "1149831", Subject: "two"}},
+		BaseBranch:    parentBranch, // picker selects the remote-only parent
+		UseWorktree:   false,
+		ConfirmBranch: true,
+	}
+
+	flags := issuepkg.IssueStartFlags{TrackerFirst: false}
+	deps := issueflow.StartDeps{Client: client, Cfg: cfg, Tracker: nil, Flags: flags}
+	if err := issueflow.RunIssueStart(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("RunIssueStart: %v", err)
+	}
+
+	wantBranch := "1149831@feat@two"
+
+	t.Run("picker offered the remote-only parent as a candidate", func(t *testing.T) {
+		found := false
+		for _, c := range prompter.CapturedBaseBranches {
+			if c == parentBranch {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("CapturedBaseBranches = %v, want to include %q", prompter.CapturedBaseBranches, parentBranch)
+		}
+	})
+
+	t.Run("sub-task branch is created from the remote-only parent, not main", func(t *testing.T) {
+		exists, err := client.BranchExists(wantBranch)
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if !exists {
+			t.Fatalf("branch %q was not created", wantBranch)
+		}
+		isAnc, err := client.IsAncestor(t.Context(), "refs/remotes/origin/"+parentBranch, wantBranch)
+		if err != nil {
+			t.Fatalf("IsAncestor: %v", err)
+		}
+		if !isAnc {
+			t.Fatalf("branch %q is not descended from origin/%s (cut from main instead)", wantBranch, parentBranch)
+		}
+	})
+
+	t.Run("parent slug recorded in the branch ref (cross-clone)", func(t *testing.T) {
+		// The parent (1149829) is absent from Bob's fresh-clone store, so the
+		// parent slug must be derived from the picked base branch name and
+		// stamped on refs/zf/branches/1149831 — otherwise a later close cannot
+		// resolve the parent integration branch as the merge target.
+		ref, err := client.ReadBranchRef(t.Context(), "1149831")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if ref == nil {
+			t.Fatal("branch ref for 1149831 was not written")
+		}
+		if ref.ParentSlug != "1149829" {
+			t.Fatalf("ParentSlug = %q, want %q", ref.ParentSlug, "1149829")
+		}
+	})
+}
+
 func TestRunIssueStart_WritesBranchRef(t *testing.T) {
 	t.Parallel()
 
