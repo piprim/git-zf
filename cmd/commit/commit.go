@@ -8,6 +8,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
@@ -126,30 +127,56 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 
-	return proposeCommitPush(cmd, client, c.appConfig.Push.Propose)
+	return proposeCommitPush(cmd, client, s, c.appConfig)
 }
 
-// proposeCommitPush offers to push the current branch after a successful commit.
-func proposeCommitPush(cmd *cobra.Command, client *git.Client, propose bool) error {
+// proposeCommitPush offers to push the current branch after a successful commit,
+// enriched (on a git-zf issue branch) with a merge-vs-parent preview.
+func proposeCommitPush(cmd *cobra.Command, client *git.Client, s *store.Store, cfg *config.AppConfig) error {
 	push, noPush := pushflow.ReadFlags(cmd)
-	skip, auto, err := pushflow.ResolveFlags(push, noPush, propose)
+	skip, auto, err := pushflow.ResolveFlags(push, noPush, cfg.Push.Propose)
 	if err != nil {
 		return err
 	}
 
-	branch, err := client.CurrentBranch()
+	branchName, err := client.CurrentBranch()
 	if err != nil {
 		return nil // detached/unknown HEAD → nothing to offer
 	}
 
+	parent, includeMerge := resolveCommitMergeParent(cmd.Context(), client, s, branchName, cfg.Branch.Base)
+
 	yes, _ := cmd.Flags().GetBool("yes")
 
 	return pushflow.Propose(cmd.Context(), client, pushflow.Opts{
-		Branch:         branch,
-		Skip:           skip,
-		AutoConfirm:    auto,
-		NonInteractive: yes,
+		Branch:              branchName,
+		Skip:                skip,
+		AutoConfirm:         auto,
+		NonInteractive:      yes,
+		IncludeMergePreview: includeMerge,
+		Parent:              parent,
 	}, pushflow.NewHuhConfirm())
+}
+
+// resolveCommitMergeParent returns the parent integration branch for the
+// merge-vs-parent preview (as a ref IsAncestor/MergeDryRun can use), and whether
+// to show the preview at all. include is false when the current branch is not a
+// git-zf issue branch, when no distinct parent/base resolves, or on any error —
+// in those cases commit shows the push preview only.
+func resolveCommitMergeParent(ctx context.Context, client *git.Client, s *store.Store, currentBranch, cfgBase string) (string, bool) {
+	parsed, err := branch.Parse(currentBranch)
+	if err != nil {
+		return "", false // not a git-zf issue branch
+	}
+
+	parentBranch, err := issueflow.ResolveParentBranch(ctx, s, client, parsed.IssueID(), cfgBase)
+	if err != nil || parentBranch == "" || parentBranch == currentBranch {
+		return "", false
+	}
+
+	// Resolve to a ref the read-only preview primitives can read: the local head,
+	// or <remote>/<parent> when the parent is remote-only.
+	return client.LocalOrRemoteRef(parentBranch), true
 }
 
 // issueHintFromClient detects whether the current branch is an issue branch

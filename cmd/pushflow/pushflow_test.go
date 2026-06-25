@@ -19,6 +19,11 @@ type fakePusher struct {
 	pushErr error
 	pushed  []string
 	out     *bytes.Buffer
+
+	// merge-preview inputs
+	isAncestor     map[[2]string]bool // [child, ancestor] → result
+	mergeConflicts []string
+	mergeErr       error
 }
 
 func (f *fakePusher) Remote() (string, error) { return f.remote, nil }
@@ -31,6 +36,12 @@ func (f *fakePusher) PushBranch(_ context.Context, b string) error {
 }
 func (f *fakePusher) IO() *pkg.IO {
 	return &pkg.IO{In: strings.NewReader(""), Out: f.out, Err: f.out}
+}
+func (f *fakePusher) IsAncestor(_ context.Context, child, ancestor string) (bool, error) {
+	return f.isAncestor[[2]string{child, ancestor}], nil
+}
+func (f *fakePusher) MergeDryRun(_ context.Context, _, _ string) ([]string, error) {
+	return f.mergeConflicts, f.mergeErr
 }
 
 func newFake() *fakePusher {
@@ -237,6 +248,92 @@ func TestResolveFlags(t *testing.T) {
 		skip, auto, err := ResolveFlags(false, false, true)
 		if err != nil || skip || auto {
 			t.Fatalf("got skip=%v auto=%v err=%v, want both false", skip, auto, err)
+		}
+	})
+}
+
+func TestPropose_MergePreview(t *testing.T) {
+	t.Parallel()
+
+	// withMerge returns a fake set up for a merge-preview run: a fast-forward
+	// push to origin, plus the IsAncestor results the test overrides per case.
+	newMergeFake := func() *fakePusher {
+		f := newFake()
+		f.isAncestor = map[[2]string]bool{}
+		return f
+	}
+	mergeOpts := Opts{Branch: "b", IncludeMergePreview: true, Parent: "p"}
+
+	t.Run("already merged into parent", func(t *testing.T) {
+		t.Parallel()
+		f := newMergeFake()
+		f.isAncestor[[2]string{"b", "p"}] = true // current is ancestor of parent
+		if err := Propose(t.Context(), f, mergeOpts, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if !strings.Contains(f.out.String(), "Already merged into p") {
+			t.Fatalf("output missing already-merged line; got %q", f.out.String())
+		}
+	})
+
+	t.Run("fast-forwards into parent", func(t *testing.T) {
+		t.Parallel()
+		f := newMergeFake()
+		f.isAncestor[[2]string{"p", "b"}] = true // parent is ancestor of current
+		if err := Propose(t.Context(), f, mergeOpts, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if !strings.Contains(f.out.String(), "Fast-forwards into p") {
+			t.Fatalf("output missing fast-forward line; got %q", f.out.String())
+		}
+	})
+
+	t.Run("diverged, no conflicts → merge commit", func(t *testing.T) {
+		t.Parallel()
+		f := newMergeFake() // both IsAncestor false, no conflicts
+		if err := Propose(t.Context(), f, mergeOpts, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if !strings.Contains(f.out.String(), "Merges into p with a merge commit (no conflicts)") {
+			t.Fatalf("output missing merge-commit line; got %q", f.out.String())
+		}
+	})
+
+	t.Run("diverged with conflicts", func(t *testing.T) {
+		t.Parallel()
+		f := newMergeFake()
+		f.mergeConflicts = []string{"a.go", "b.go"}
+		if err := Propose(t.Context(), f, mergeOpts, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if !strings.Contains(f.out.String(), "Conflicts with p: a.go, b.go") {
+			t.Fatalf("output missing conflicts line; got %q", f.out.String())
+		}
+	})
+
+	t.Run("not included → no merge line, push still proceeds", func(t *testing.T) {
+		t.Parallel()
+		f := newMergeFake()
+		f.isAncestor[[2]string{"p", "b"}] = true
+		if err := Propose(t.Context(), f, Opts{Branch: "b"}, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if strings.Contains(f.out.String(), "into p") {
+			t.Fatalf("merge line shown when IncludeMergePreview=false; got %q", f.out.String())
+		}
+		if len(f.pushed) != 1 {
+			t.Fatalf("push did not proceed; pushed=%v", f.pushed)
+		}
+	})
+
+	t.Run("parent equal to branch → no merge line", func(t *testing.T) {
+		t.Parallel()
+		f := newMergeFake()
+		if err := Propose(t.Context(), f, Opts{Branch: "b", IncludeMergePreview: true, Parent: "b"}, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if strings.Contains(f.out.String(), "into b") {
+			t.Fatalf("merge line shown when parent==branch; got %q", f.out.String())
 		}
 	})
 }

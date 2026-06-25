@@ -233,51 +233,11 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 // base (or DefaultBaseBranch) redirected to the parent integration branch when
 // the picked issue has a parent. This is the value pre-selected in the picker.
 //
-// The store is checked first for the parent relation; on a cross-machine clone
-// where the store has no record, the refs/zf/branches/<slug> git ref is the
-// fallback. FetchBranchRefs runs here (best-effort) for the top-level case so a
-// later reconcileChildrenFromRefs sees fresh refs.
+// The body lives in issueflow.ResolveParentBranch so the commit flow can reuse
+// the identical resolution for its merge-vs-parent preview; this wrapper keeps
+// the close call site (runClose) unchanged.
 func resolveDefaultBase(ctx context.Context, deps closeDeps, picked *store.BranchRow) (string, error) {
-	base := deps.cfg.Branch.Base
-	if base == "" {
-		detected, err := deps.client.DefaultBaseBranch()
-		if err != nil {
-			return "", fmt.Errorf("detect base branch: %w", err)
-		}
-		base = detected
-	}
-
-	parentSlug, err := deps.store.GetParentIssue(ctx, picked.IssueSlug)
-	if err != nil {
-		return "", fmt.Errorf("check parent issue: %w", err)
-	}
-	if parentSlug == "" {
-		// One fetch retrieves all refs/zf/branches/* atomically.
-		_ = deps.client.FetchBranchRefs(ctx)
-		if br, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug); br != nil {
-			parentSlug = br.ParentSlug
-		}
-	}
-	if parentSlug == "" {
-		return base, nil
-	}
-
-	// Try store first for the parent branch name.
-	parentBranches, listErr := deps.store.ListBranches(ctx, store.BranchStatusAll)
-	if listErr != nil {
-		return "", fmt.Errorf("list branches for parent %q: %w", parentSlug, listErr)
-	}
-	for _, b := range parentBranches {
-		if b.IssueSlug == parentSlug {
-			return b.BranchName, nil
-		}
-	}
-	// Store miss — read the parent's branch ref for the branch name.
-	if parentBR, _ := deps.client.ReadBranchRef(ctx, parentSlug); parentBR != nil {
-		return parentBR.BranchName, nil
-	}
-
-	return base, nil
+	return issueflow.ResolveParentBranch(ctx, deps.store, deps.client, picked.IssueSlug, deps.cfg.Branch.Base)
 }
 
 // chooseMergeTarget refines the smart-default base into the final merge target.
@@ -506,14 +466,9 @@ func doMerge(
 	mc mergeContext,
 	prompter ClosePrompter) (strategy MergeStrategy, aborted bool, err error) {
 	// The base branch may not exist locally (e.g. a parent integration branch
-	// that Bob never checked out). Fall back to origin/<base> so merge-tree
-	// can resolve it from the remote tracking ref.
-	dryRunBase := mc.baseBranch
-	if exists, _ := mc.client.BranchExists(mc.baseBranch); !exists {
-		if remote, _ := mc.client.Remote(); remote != "" {
-			dryRunBase = remote + "/" + mc.baseBranch
-		}
-	}
+	// that Bob never checked out). LocalOrRemoteRef falls back to origin/<base>
+	// so merge-tree can resolve it from the remote tracking ref.
+	dryRunBase := mc.client.LocalOrRemoteRef(mc.baseBranch)
 	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, dryRunBase)
 	if err != nil {
 		return "", false, fmt.Errorf("merge dry-run: %w", err)

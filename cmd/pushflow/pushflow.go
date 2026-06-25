@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
@@ -17,6 +18,8 @@ type Pusher interface {
 	Remote() (string, error)
 	PushDryRun(ctx context.Context, branch string) (git.PushOutcome, bool, error)
 	PushBranch(ctx context.Context, branch string) error
+	IsAncestor(ctx context.Context, child, ancestor string) (bool, error)
+	MergeDryRun(ctx context.Context, branchName, baseBranch string) ([]string, error)
 	IO() *pkg.IO
 }
 
@@ -33,6 +36,13 @@ type Opts struct {
 	Skip           bool   // --no-push or config push.propose=false
 	AutoConfirm    bool   // --push: push without prompting
 	NonInteractive bool   // -y / no TTY: skip unless AutoConfirm
+
+	// Merge-vs-parent preview (commit). When IncludeMergePreview is true and
+	// Parent is a non-empty branch/ref distinct from Branch, Propose prints how
+	// Branch would merge into Parent (fast-forward / merge commit / conflicts /
+	// already merged) alongside the push preview.
+	IncludeMergePreview bool
+	Parent              string
 }
 
 // Propose runs the preview → confirm → push step. It returns nil on every skip
@@ -57,6 +67,12 @@ func Propose(ctx context.Context, c Pusher, opts Opts, confirm ConfirmFunc) erro
 
 	fmt.Fprintf(c.IO().Out, "Push %q to %s — %s\n", opts.Branch, remote, outcome.Summary)
 
+	if opts.IncludeMergePreview && opts.Parent != "" && opts.Parent != opts.Branch {
+		if line := mergePreviewLine(ctx, c, opts.Branch, opts.Parent); line != "" {
+			fmt.Fprintln(c.IO().Out, line)
+		}
+	}
+
 	if opts.NonInteractive && !opts.AutoConfirm {
 		return nil
 	}
@@ -78,6 +94,27 @@ func Propose(ctx context.Context, c Pusher, opts Opts, confirm ConfirmFunc) erro
 	fmt.Fprintf(c.IO().Out, "Pushed %q to %s.\n", opts.Branch, remote)
 
 	return nil
+}
+
+// mergePreviewLine describes how current would merge into parent, using the same
+// read-only primitives as the close flow (IsAncestor + MergeDryRun via
+// git merge-tree). Returns "" when the relationship cannot be determined (e.g.
+// MergeDryRun errors), so the caller simply omits the line.
+func mergePreviewLine(ctx context.Context, c Pusher, current, parent string) string {
+	if merged, err := c.IsAncestor(ctx, current, parent); err == nil && merged {
+		return fmt.Sprintf("Already merged into %s", parent)
+	}
+	if ff, err := c.IsAncestor(ctx, parent, current); err == nil && ff {
+		return fmt.Sprintf("Fast-forwards into %s", parent)
+	}
+	conflicts, err := c.MergeDryRun(ctx, current, parent)
+	if err != nil {
+		return ""
+	}
+	if len(conflicts) > 0 {
+		return fmt.Sprintf("⚠ Conflicts with %s: %s", parent, strings.Join(conflicts, ", "))
+	}
+	return fmt.Sprintf("Merges into %s with a merge commit (no conflicts)", parent)
 }
 
 // ResolveFlags combines the --push/--no-push flags with the config master

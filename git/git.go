@@ -635,6 +635,25 @@ func (c *Client) BranchExists(name string) (bool, error) {
 	return false, fmt.Errorf("lookup branch %q: %w", name, err)
 }
 
+// LocalOrRemoteRef normalises a branch name into a ref usable by read-only
+// operations (git merge-tree, git merge-base --is-ancestor): the bare name when
+// it resolves as a local head, else "<remote>/<name>" when a remote is
+// configured, else the bare name. This is the "the parent integration branch may
+// exist only as a remote-tracking ref" case — a teammate's fresh clone that
+// never checked the parent out locally. A BranchExists error degrades to the
+// remote form (treated as not-found), matching the prior inline behaviour.
+func (c *Client) LocalOrRemoteRef(name string) string {
+	if exists, _ := c.BranchExists(name); exists {
+		return name
+	}
+
+	if remote, _ := c.Remote(); remote != "" {
+		return remote + "/" + name
+	}
+
+	return name
+}
+
 // CreateBranch creates a new branch from baseBranch and checks it out.
 //
 // baseBranch is resolved via ResolveBranchRef, so it may be a local head
