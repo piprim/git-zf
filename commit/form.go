@@ -318,7 +318,8 @@ func (h IssueHint) refMsg(msgCfg config.CommitMessageConfig) string {
 // The issue reference always lands in the message: the footer receives
 // msgCfg.RefFormat % id (or msgCfg.CloseFormat % id plus the merge summary
 // when Closing is set); without a footer item the reference moves into the
-// subject instead. scope independently receives the bare id when present.
+// subject, and failing that into the body. scope independently receives the
+// bare id when present.
 //
 // BranchType is emitted as "type" when non-empty; loadForm validates it
 // against cfg.CommitTypes and silently ignores an unconfigured value.
@@ -341,24 +342,35 @@ func (h IssueHint) Prefill(msgCfg config.CommitMessageConfig) map[string]any {
 }
 
 // prefillClosed returns the issue-hint contribution to a FillOutForm prefill map when closing issue.
+//
+// Invariant: the close message (msgCfg.CloseFormat % IssueID) always appears
+// in the message — in footer when the config has one, else in subject, else
+// in body.
 func (h IssueHint) prefillClosed(msgCfg config.CommitMessageConfig) map[string]any {
 	closeMsg := h.refMsg(msgCfg)
 	out := make(map[string]any)
+
+	hasFooter := hasItem(msgCfg.Items, "footer")
+	hasSubject := hasItem(msgCfg.Items, "subject")
 
 	if hasItem(msgCfg.Items, "scope") {
 		out["scope"] = h.IssueID
 	}
 
-	if hasItem(msgCfg.Items, "footer") {
+	if hasFooter {
 		out["footer"] = closeMsg + " - " + h.Closing.message()
 	}
 
-	if hasItem(msgCfg.Items, "subject") {
-		if hasItem(msgCfg.Items, "footer") {
+	if hasSubject {
+		if hasFooter {
 			out["subject"] = "[close] " + h.IssueSubject
 		} else {
 			out["subject"] = closeMsg + " - " + h.IssueSubject
 		}
+	}
+
+	if !hasFooter && !hasSubject && hasItem(msgCfg.Items, "body") {
+		out["body"] = closeMsg + " - " + h.Closing.message()
 	}
 
 	return out
@@ -367,9 +379,9 @@ func (h IssueHint) prefillClosed(msgCfg config.CommitMessageConfig) map[string]a
 // prefillNotClosed returns the issue-hint contribution to a FillOutForm prefill map when not closing issue.
 //
 // Invariant: the ref message (msgCfg.RefFormat % IssueID) always appears in
-// the message — in footer when the config has one, otherwise in subject. The
-// "(<id>): " subject prefix is decoration only, added when the ref already
-// lives in the footer.
+// the message — in footer when the config has one, else in subject, else in
+// body. The "(<id>): " subject prefix is decoration only, added when the ref
+// already lives in the footer.
 func (h IssueHint) prefillNotClosed(msgCfg config.CommitMessageConfig) map[string]any {
 	refMsg := h.refMsg(msgCfg)
 	out := make(map[string]any)
@@ -387,10 +399,17 @@ func (h IssueHint) prefillNotClosed(msgCfg config.CommitMessageConfig) map[strin
 		out["body"] = "# " + h.IssueSubject
 	}
 
-	if hasFooter {
+	switch {
+	case hasFooter:
 		out["footer"] = refMsg
-	} else if hasSubject {
+	case hasSubject:
 		out["subject"] = refMsg + " - "
+	case hasItem(msgCfg.Items, "body"):
+		if body, ok := out["body"].(string); ok {
+			out["body"] = body + "\n\n" + refMsg
+		} else {
+			out["body"] = refMsg
+		}
 	}
 
 	return out

@@ -644,8 +644,26 @@ func TestIssueHint_Prefill(t *testing.T) {
 			},
 		},
 		{
-			name:  "no_matching_field_only_type",
+			name:  "body_gets_ref_when_only_body_present",
 			items: []config.CommitItem{{Name: "body"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix"},
+			want: map[string]any{
+				"body": "Refs #" + testIssueID,
+				"type": "fix",
+			},
+		},
+		{
+			name:  "body_gets_subject_then_ref_when_only_body_present",
+			items: []config.CommitItem{{Name: "body"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject},
+			want: map[string]any{
+				"body": "# " + testIssueSubject + "\n\nRefs #" + testIssueID,
+				"type": "fix",
+			},
+		},
+		{
+			name:  "no_matching_field_only_type",
+			items: nil,
 			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix"},
 			want: map[string]any{
 				"type": "fix",
@@ -722,8 +740,17 @@ func TestIssueHint_Prefill(t *testing.T) {
 			},
 		},
 		{
-			name:  "closing_no_matching_field_only_type",
+			name:  "closing_body_gets_close_ref_when_only_body_present",
 			items: []config.CommitItem{{Name: "body"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
+			want: map[string]any{
+				"body": "Closes #" + testIssueID + " - " + testMergeMsg,
+				"type": "fix",
+			},
+		},
+		{
+			name:  "closing_no_matching_field_only_type",
+			items: nil,
 			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
 			want: map[string]any{
 				"type": "fix",
