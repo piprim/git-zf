@@ -163,7 +163,11 @@ func proposeCommitPush(cmd *cobra.Command, client *git.Client, s *store.Store, c
 // to show the preview at all. include is false when the current branch is not a
 // git-zf issue branch, when no distinct parent/base resolves, or on any error —
 // in those cases commit shows the push preview only.
-func resolveCommitMergeParent(ctx context.Context, client *git.Client, s *store.Store, currentBranch, cfgBase string) (string, bool) {
+func resolveCommitMergeParent(
+	ctx context.Context,
+	client *git.Client,
+	s *store.Store, currentBranch,
+	cfgBase string) (string, bool) {
 	parsed, err := branch.Parse(currentBranch)
 	if err != nil {
 		return "", false // not a git-zf issue branch

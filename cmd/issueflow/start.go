@@ -237,7 +237,10 @@ func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPromp
 
 // createFlow implements the shared prepare→resolve-conflict→[creator]→persist→tracker
 // pipeline. creator handles the mode-specific confirm+create+output middle.
-func createFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue, creator createFlowCreator) error {
+func createFlow(
+	ctx context.Context, deps StartDeps,
+	prompter StartPrompter,
+	picked *issue.Issue, creator createFlowCreator) error {
 	// Open a single store connection shared by prepareBranch (parent lookup)
 	// and InsertIssueRelation, avoiding two separate connections.
 	// Use the client's git dir so this works in tests (temp dirs) as well as
@@ -315,7 +318,12 @@ func createFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, pic
 	return nil
 }
 
-func branchCreator(ctx context.Context, deps StartDeps, prompter StartPrompter, branchName, base string) (bool, string, error) {
+func branchCreator(
+	ctx context.Context,
+	deps StartDeps,
+	prompter StartPrompter,
+	branchName,
+	base string) (bool, string, error) {
 	confirmed, err := prompter.ConfirmCreateBranch(ctx,
 		fmt.Sprintf("Create branch %q based on %q?", branchName, base))
 	if err != nil {
@@ -337,7 +345,9 @@ func branchCreator(ctx context.Context, deps StartDeps, prompter StartPrompter, 
 	return true, "branch", nil
 }
 
-func worktreeCreator(ctx context.Context, deps StartDeps, prompter StartPrompter, branchName, base string) (bool, string, error) {
+func worktreeCreator(
+	ctx context.Context, deps StartDeps,
+	prompter StartPrompter, branchName, base string) (bool, string, error) {
 	repoRoot, err := deps.Client.WorkingTreeRoot()
 	if err != nil {
 		return false, "", fmt.Errorf("working tree root: %w", err)
@@ -458,6 +468,7 @@ func resolveDefaultBase(deps StartDeps) (string, error) {
 	if deps.Cfg.Branch.Base != "" {
 		return deps.Cfg.Branch.Base, nil
 	}
+
 	return deps.Client.DefaultBaseBranch()
 }
 
@@ -466,7 +477,9 @@ func resolveDefaultBase(deps StartDeps) (string, error) {
 //
 // When deps.Flags.ParentIssueSlug is set, parentStore (must be non-nil) is
 // queried to find the parent's in-progress branch, which becomes the base.
-func prepareBranch(ctx context.Context, deps StartDeps, picked *issue.Issue, parentStore *store.Store) (b *branch.Branch, base string, err error) {
+func prepareBranch(
+	ctx context.Context, deps StartDeps,
+	picked *issue.Issue, parentStore *store.Store) (b *branch.Branch, base string, err error) {
 	b, err = branch.New(picked.ID, picked.Type, picked.Subject, deps.Flags.Variant)
 	if err != nil {
 		return nil, "", fmt.Errorf("assemble branch name: %w", err)
@@ -494,6 +507,7 @@ func prepareBranch(ctx context.Context, deps StartDeps, picked *issue.Issue, par
 				return b, br.BranchName, nil
 			}
 		}
+
 		return nil, "", fmt.Errorf("no in-progress branch found for parent issue %q", deps.Flags.ParentIssueSlug)
 	}
 
@@ -512,7 +526,9 @@ func prepareBranch(ctx context.Context, deps StartDeps, picked *issue.Issue, par
 // chosen status. All errors are non-fatal warnings (the branch was already
 // created — the operator must be able to clean up tracker drift manually).
 func updateTrackerStatus(ctx context.Context, deps StartDeps, prompter StartPrompter, issueID string) {
-	ApplyTrackerStatus(ctx, deps.Tracker, deps.Client.IO().Err, issueID, deps.Cfg.IssueTracker.Type, prompter.PickTrackerStatus)
+	ApplyTrackerStatus(
+		ctx, deps.Tracker, deps.Client.IO().Err,
+		issueID, deps.Cfg.IssueTracker.Type, prompter.PickTrackerStatus)
 }
 
 func persist(ctx context.Context, b *branch.Branch, rawTitle string, trackerType *string) error {
@@ -559,5 +575,6 @@ func writePushBranchRef(ctx context.Context, deps StartDeps, issueSlug, branchNa
 	if _, err := deps.Client.WriteBranchRef(ctx, issueSlug, ref); err != nil {
 		return err
 	}
+
 	return deps.Client.PushBranchRef(ctx, issueSlug)
 }

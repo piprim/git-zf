@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
@@ -189,7 +190,7 @@ func TestClose_RebaseHappyPath(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategyRebase,
+		Strategy:      commitpkg.MergeStrategyRebase,
 		Confirm:       true,
 		Message:       []byte("feat(thing): close ABC-1\n"),
 		TrackerStatus: "Closed",
@@ -238,7 +239,7 @@ func TestClose_SquashHappyPath(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategySquash,
+		Strategy:      commitpkg.MergeStrategySquash,
 		Confirm:       true,
 		Message:       []byte("feat(thing): squash-close ABC-1\n"),
 		TrackerStatus: "Closed",
@@ -283,7 +284,7 @@ func TestClose_ClassicHappyPath(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategyClassic,
+		Strategy:      commitpkg.MergeStrategyClassic,
 		Confirm:       true,
 		Message:       []byte("Merge ABC-1 into main\n"),
 		TrackerStatus: "Closed",
@@ -348,7 +349,7 @@ func TestClose_ManualIssue_NoTrackerPrompt(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategyRebase,
+		Strategy:      commitpkg.MergeStrategyRebase,
 		Confirm:       true,
 		Message:       []byte("feat(thing): close ABC-1\n"),
 		TrackerStatus: "Closed", // would be recorded if the prompt wrongly fired
@@ -417,7 +418,7 @@ func TestClose_UserAbortsAtConfirm(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:   rig.pickedBranchRow(),
-		Strategy: StrategyRebase,
+		Strategy: commitpkg.MergeStrategyRebase,
 		Confirm:  false, // operator declines
 	}
 
@@ -461,7 +462,7 @@ func TestClose_PrefillHasFixFooter(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategyRebase,
+		Strategy:      commitpkg.MergeStrategyRebase,
 		Confirm:       true,
 		Message:       []byte("feat: close ABC-1\n\nCloses #ABC-1\n"),
 		TrackerStatus: "Closed",
@@ -472,12 +473,25 @@ func TestClose_PrefillHasFixFooter(t *testing.T) {
 		t.Fatalf("runClose: %v", err)
 	}
 
-	t.Run("ComposeMessage prefill has footer Closes #ABC-1", func(t *testing.T) {
-		got, ok := prompter.CapturedPrefill["footer"]
+	t.Run("ComposeMessage prefill footer has close ref and merge info", func(t *testing.T) {
+		got, ok := prompter.CapturedPrefill["footer"].(string)
 		if !ok {
-			t.Error("prefill missing 'footer' key")
-		} else if got != "Closes #ABC-1" {
-			t.Errorf("prefill[footer] = %q, want %q", got, "Closes #ABC-1")
+			t.Fatal("prefill missing 'footer' key")
+		}
+		// The SHAs are freshly created by the rig, so only the fixed parts
+		// of "Closes #ABC-1 - Rebase <sha> into <sha>." can be asserted.
+		if !strings.HasPrefix(got, "Closes #ABC-1 - Rebase ") || !strings.HasSuffix(got, ".") {
+			t.Errorf("prefill[footer] = %q, want \"Closes #ABC-1 - Rebase <sha> into <sha>.\"", got)
+		}
+	})
+
+	t.Run("ComposeMessage prefill subject includes the ticket subject", func(t *testing.T) {
+		got, ok := prompter.CapturedPrefill["subject"]
+		if !ok {
+			t.Fatal("prefill missing 'subject' key")
+		}
+		if got != "[close] Add thing" {
+			t.Errorf("prefill[subject] = %q, want %q", got, "[close] Add thing")
 		}
 	})
 }
@@ -724,7 +738,7 @@ func TestClose_ReviewPreflight_IncorporatesRemoteOnlyReviewerCommits(t *testing.
 		Status: store.BranchStatusInProgress,
 	}
 	prompter := &scriptedPrompter{
-		Branch: pickedRow, Strategy: StrategySquash, Confirm: true,
+		Branch: pickedRow, Strategy: commitpkg.MergeStrategySquash, Confirm: true,
 		Message: []byte("feat: close\n"), DeleteBranch: false,
 	}
 
@@ -868,7 +882,7 @@ func TestClose_SubtaskDryRunFallsBackToRemoteBase(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:       pickedRow,
-		Strategy:     StrategySquash,
+		Strategy:     commitpkg.MergeStrategySquash,
 		Confirm:      true,
 		Message:      []byte("feat(X.2): close\n"),
 		DeleteBranch: true,
@@ -1016,7 +1030,7 @@ func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:       pickedRow,
-		Strategy:     StrategySquash,
+		Strategy:     commitpkg.MergeStrategySquash,
 		Confirm:      true,
 		Message:      []byte("feat(X.1): close\n"),
 		DeleteBranch: true,
@@ -1139,7 +1153,7 @@ func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        xRow,
-		Strategy:      StrategySquash,
+		Strategy:      commitpkg.MergeStrategySquash,
 		Confirm:       true,
 		Message:       []byte("feat(X): close into main\n"),
 		TrackerStatus: "Closed",
@@ -1179,7 +1193,7 @@ func TestClose_BaseOverrideMergesIntoChosenBranch(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategyClassic,
+		Strategy:      commitpkg.MergeStrategyClassic,
 		Confirm:       true,
 		Message:       []byte("Merge ABC-1 into release-1.0\n"),
 		TrackerStatus: "Closed",
@@ -1248,7 +1262,7 @@ func TestClose_PickerOffersMergeTargetWhenMultipleCandidates(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategyClassic,
+		Strategy:      commitpkg.MergeStrategyClassic,
 		Confirm:       true,
 		Base:          "release-1.0",
 		Message:       []byte("Merge ABC-1 into release-1.0\n"),
@@ -1280,7 +1294,7 @@ func TestClose_PickerSkippedWhenSingleCandidate(t *testing.T) {
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
-		Strategy:      StrategyClassic,
+		Strategy:      commitpkg.MergeStrategyClassic,
 		Confirm:       true,
 		Base:          "should-not-be-used",
 		Message:       []byte("Merge ABC-1 into main\n"),
@@ -1553,7 +1567,7 @@ func TestClose_ProposesPushOfMergeTarget(t *testing.T) {
 	}
 	prompter := &scriptedPrompter{
 		Branch:        pickedRow,
-		Strategy:      StrategyRebase,
+		Strategy:      commitpkg.MergeStrategyRebase,
 		Confirm:       true,
 		Message:       []byte("feat(push-test): close ABC-1\n"),
 		TrackerStatus: "Closed",

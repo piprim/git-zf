@@ -12,6 +12,7 @@ import (
 	"text/template"
 
 	"github.com/charmbracelet/huh"
+	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/store"
@@ -260,16 +261,56 @@ func assembleMessage(buf *bytes.Buffer, tmplText string, answers map[string]any)
 	return nil
 }
 
+type MergeStrategy string
+
+const (
+	MergeStrategySquash  MergeStrategy = "Squash"
+	MergeStrategyRebase  MergeStrategy = "Rebase"
+	MergeStrategyClassic MergeStrategy = "Classic"
+)
+
+type IssueCloseInfo struct {
+	FromHash plumbing.Hash
+	ToHash   plumbing.Hash
+	Strategy MergeStrategy
+}
+
+// shortSHALen is the number of hex characters used to abbreviate a commit SHA.
+const shortSHALen = 7
+
+func (i *IssueCloseInfo) message() string {
+	if i == nil {
+		return ""
+	}
+
+	return fmt.Sprintf(string(i.Strategy)+" %s into %s.",
+		i.FromHash.String()[:shortSHALen], i.ToHash.String()[:shortSHALen])
+}
+
 // IssueHint carries issue context detected from the current branch.
 // Zero value means no issue branch — form fields are left unchanged.
 type IssueHint struct {
-	IssueID    string
-	BranchType string
-	// Closing indicates this is a merge/close commit. When true, Prefill
-	// always sets footer to CloseFormat % id (if the footer field exists) and
-	// independently sets scope (if the scope field exists). When false, the
-	// fallback chain scope → footer (RefFormat % id) → subject is used instead.
-	Closing bool
+	IssueID      string
+	BranchType   string
+	IssueSubject string
+	// CLosing not nil indicates this is a merge/close commit.
+	Closing *IssueCloseInfo
+}
+
+func (h IssueHint) refMsg(msgCfg config.CommitMessageConfig) string {
+	refFmt := msgCfg.RefFormat
+	if refFmt == "" {
+		refFmt = "Refs #%s"
+	}
+
+	if h.Closing != nil {
+		refFmt = msgCfg.CloseFormat
+		if refFmt == "" {
+			refFmt = "Closes #%s"
+		}
+	}
+
+	return fmt.Sprintf(refFmt, h.IssueID)
 }
 
 // Prefill returns the issue-hint contribution to a FillOutForm prefill map.
@@ -288,7 +329,7 @@ func (h IssueHint) Prefill(msgCfg config.CommitMessageConfig) map[string]any {
 	out := make(map[string]any)
 
 	if h.IssueID != "" {
-		if h.Closing {
+		if h.Closing != nil {
 			out = h.prefillClosed(msgCfg)
 		} else {
 			out = h.prefillNotClosed(msgCfg)
@@ -304,19 +345,23 @@ func (h IssueHint) Prefill(msgCfg config.CommitMessageConfig) map[string]any {
 
 // prefillClosed returns the issue-hint contribution to a FillOutForm prefill map when closing issue.
 func (h IssueHint) prefillClosed(msgCfg config.CommitMessageConfig) map[string]any {
-	closeFmt := msgCfg.CloseFormat
-	if closeFmt == "" {
-		closeFmt = "Closes #%s"
-	}
-
+	closeMsg := h.refMsg(msgCfg)
 	out := make(map[string]any)
+
 	if hasItem(msgCfg.Items, "scope") {
 		out["scope"] = h.IssueID
 	}
+
 	if hasItem(msgCfg.Items, "footer") {
-		out["footer"] = fmt.Sprintf(closeFmt, h.IssueID)
-	} else if !hasItem(msgCfg.Items, "scope") && hasItem(msgCfg.Items, "subject") {
-		out["subject"] = "(" + h.IssueID + ")"
+		out["footer"] = closeMsg + " - " + h.Closing.message()
+	}
+
+	if hasItem(msgCfg.Items, "subject") {
+		if hasItem(msgCfg.Items, "footer") {
+			out["subject"] = "[close] " + h.IssueSubject
+		} else {
+			out["subject"] = closeMsg + " - " + h.IssueSubject
+		}
 	}
 
 	return out
@@ -324,21 +369,23 @@ func (h IssueHint) prefillClosed(msgCfg config.CommitMessageConfig) map[string]a
 
 // prefillNotClosed returns the issue-hint contribution to a FillOutForm prefill map when not closing issue.
 func (h IssueHint) prefillNotClosed(msgCfg config.CommitMessageConfig) map[string]any {
-	refFmt := msgCfg.RefFormat
-	if refFmt == "" {
-		refFmt = "Refs #%s"
+	refMsg := h.refMsg(msgCfg)
+	out := make(map[string]any)
+
+	if hasItem(msgCfg.Items, "scope") {
+		out["scope"] = h.IssueID
+	} else if hasItem(msgCfg.Items, "subject") {
+		out["subject"] = "(" + h.IssueID + "): "
 	}
 
-	out := make(map[string]any)
-	switch {
-	case hasItem(msgCfg.Items, "scope"):
-		out["scope"] = h.IssueID
-	case hasItem(msgCfg.Items, "subject"):
-		out["subject"] = "(" + h.IssueID + ")"
+	if h.IssueSubject != "" && hasItem(msgCfg.Items, "body") {
+		out["body"] = "# " + h.IssueSubject
 	}
 
 	if hasItem(msgCfg.Items, "footer") {
-		out["footer"] = fmt.Sprintf(refFmt, h.IssueID)
+		out["footer"] = refMsg
+	} else if hasItem(msgCfg.Items, "subject") {
+		out["subject"] = refMsg + " - "
 	}
 
 	return out

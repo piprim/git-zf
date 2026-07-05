@@ -10,6 +10,7 @@ import (
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
+	"github.com/piprim/git-zf/commit"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -18,9 +19,6 @@ import (
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
 )
-
-// shortSHALen is the number of hex characters used to abbreviate a commit SHA.
-const shortSHALen = 7
 
 // closeDeps bundles the long-lived dependencies the close flow needs.
 // Production code builds it via buildCloseDeps; tests inject directly.
@@ -72,14 +70,6 @@ func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConf
 
 	return deps, nil
 }
-
-type MergeStrategy string
-
-const (
-	StrategySquash  MergeStrategy = "squash"
-	StrategyRebase  MergeStrategy = "rebase"
-	StrategyClassic MergeStrategy = "classic"
-)
 
 // errFastForwardDeferred signals that the rebase commit landed on feature but
 // local base could not fast-forward (diverged from origin/<base>). closeRunE
@@ -188,9 +178,10 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	} else if !allDone {
 		children, listErr := deps.store.ListChildIssues(ctx, picked.IssueSlug)
 		if listErr != nil {
-			return fmt.Errorf("issue %q has open sub-tasks (list unavailable: %w) — close all sub-tasks before closing the parent",
-				picked.IssueSlug, listErr)
+			format := "issue %q has open sub-tasks (list unavailable: %w) — close all sub-tasks before closing the parent"
+			return fmt.Errorf(format, picked.IssueSlug, listErr)
 		}
+
 		return fmt.Errorf("issue %q has open sub-tasks: %v — close all sub-tasks before closing the parent",
 			picked.IssueSlug, children)
 	}
@@ -253,7 +244,8 @@ func chooseMergeTarget(
 	prompter ClosePrompter) (string, error) {
 	if deps.baseOverride != "" {
 		if deps.baseOverride == picked.BranchName {
-			return "", fmt.Errorf("--base %q is the branch being closed; choose a different merge target", deps.baseOverride)
+			format := "--base %q is the branch being closed; choose a different merge target"
+			return "", fmt.Errorf(format, deps.baseOverride)
 		}
 
 		ok, err := baseBranchResolves(deps.client, deps.baseOverride)
@@ -464,7 +456,7 @@ func getPickedBranch(
 func doMerge(
 	ctx context.Context,
 	mc mergeContext,
-	prompter ClosePrompter) (strategy MergeStrategy, aborted bool, err error) {
+	prompter ClosePrompter) (strategy commit.MergeStrategy, aborted bool, err error) {
 	// The base branch may not exist locally (e.g. a parent integration branch
 	// that Bob never checked out). LocalOrRemoteRef falls back to origin/<base>
 	// so merge-tree can resolve it from the remote tracking ref.
@@ -501,15 +493,15 @@ func doMerge(
 	}
 
 	switch strategy {
-	case StrategyClassic:
+	case commitpkg.MergeStrategyClassic:
 		if err := doClassicClose(ctx, mc, prompter); err != nil {
 			return strategy, false, err
 		}
-	case StrategySquash:
+	case commitpkg.MergeStrategySquash:
 		if err := doSquashCommit(ctx, mc, prompter); err != nil {
 			return strategy, false, err
 		}
-	case StrategyRebase:
+	case commitpkg.MergeStrategyRebase:
 		if err := doRebaseClose(ctx, mc, prompter); err != nil {
 			return strategy, false, err
 		}
@@ -549,10 +541,9 @@ func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter
 		return fmt.Errorf("merge squash: %w", err)
 	}
 
-	subject := fmt.Sprintf("Squashed merge of %s into %s.",
-		branchHash.String()[:shortSHALen], baseHash.String()[:shortSHALen])
+	mergeInfo := commitpkg.IssueCloseInfo{FromHash: branchHash, ToHash: baseHash, Strategy: commitpkg.MergeStrategySquash}
 
-	return composeAndCommit(ctx, mc, prompter, subject, "squash")
+	return composeAndCommit(ctx, mc, prompter, &mergeInfo)
 }
 
 // updateClosedStatus marks the branch and issue as merged in the store and,
@@ -597,7 +588,7 @@ func doDeleteBranch(
 	ctx context.Context,
 	c *git.Client,
 	picked *store.BranchRow,
-	strategy MergeStrategy, prompter ClosePrompter) error {
+	strategy commit.MergeStrategy, prompter ClosePrompter) error {
 	shouldDelete, err := prompter.ConfirmDeleteBranch(ctx, picked.BranchName)
 	if err != nil {
 		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
@@ -608,7 +599,7 @@ func doDeleteBranch(
 		return nil
 	}
 
-	force := strategy == StrategySquash || strategy == StrategyRebase
+	force := strategy == commit.MergeStrategySquash || strategy == commit.MergeStrategyRebase
 	if err := c.DeleteLocalBranch(ctx, picked.BranchName, force); err != nil {
 		fmt.Fprintf(c.IO().Err, "warning: delete branch: %v\n", err)
 	}
@@ -649,7 +640,7 @@ func doRebaseClose(ctx context.Context, mc mergeContext, prompter ClosePrompter)
 
 		fmt.Fprintf(mc.client.IO().Err,
 			"Rolled back: feature branch %q restored to %s\n",
-			mc.pickedBranch.BranchName, plan.featureOrigSHA.String()[:shortSHALen])
+			mc.pickedBranch.BranchName, plan.featureOrigSHA.String()[:7])
 	}()
 
 	baseRef := "refs/remotes/" + plan.remoteBase
@@ -661,10 +652,13 @@ func doRebaseClose(ctx context.Context, mc mergeContext, prompter ClosePrompter)
 		return fmt.Errorf("resolve %s: %w", baseRef, err)
 	}
 
-	subject := fmt.Sprintf("Squashed close of %s into %s.",
-		plan.featureOrigSHA.String()[:shortSHALen], baseOriginSHA.String()[:shortSHALen])
+	mergeInfo := commitpkg.IssueCloseInfo{
+		FromHash: plan.featureOrigSHA,
+		ToHash:   baseOriginSHA,
+		Strategy: commitpkg.MergeStrategyRebase,
+	}
 
-	if err := composeAndCommit(ctx, mc, prompter, subject, "rebase"); err != nil {
+	if err := composeAndCommit(ctx, mc, prompter, &mergeInfo); err != nil {
 		return err
 	}
 
@@ -738,14 +732,12 @@ func doClassicClose(ctx context.Context, mc mergeContext, prompter ClosePrompter
 			mc.baseBranch)
 	}()
 
-	// Steps 5 + 6: TUI form (pre-filled) → commit.
-	subject := fmt.Sprintf("Merge %s into %s.",
-		plan.featureOrigSHA.String()[:shortSHALen], baseSHA.String()[:shortSHALen])
+	mergeInfo := commitpkg.IssueCloseInfo{FromHash: plan.featureOrigSHA, ToHash: baseSHA, Strategy: commitpkg.MergeStrategyClassic}
 
 	// No post-commit fast-forward: unlike Rebase, the merge commit lands
 	// directly on base (MergeNoFFNoCommit checked out base before merging),
 	// so base is already at the new HEAD. No errFastForwardDeferred path.
-	return composeAndCommit(ctx, mc, prompter, subject, "classic")
+	return composeAndCommit(ctx, mc, prompter, &mergeInfo)
 }
 
 // rebasePlan captures the state computed by rebasePreflight and consumed by
@@ -865,10 +857,22 @@ func reconcileChildrenFromRefs(ctx context.Context, deps closeDeps, parentSlug s
 // composeAndCommit builds the prefill from issue context + a strategy subject,
 // drives the commit form, and commits. strategy labels the commit error (e.g.
 // "squash", "rebase", "classic").
-func composeAndCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter, subject, strategy string) error {
-	hint := commitpkg.IssueHint{IssueID: mc.pickedBranch.IssueSlug, BranchType: mc.pickedBranch.Type, Closing: true}
+func composeAndCommit(
+	ctx context.Context,
+	mc mergeContext,
+	prompter ClosePrompter,
+	issueInfo *commit.IssueCloseInfo) error {
+	if issueInfo == nil {
+		return errors.New("issue information can not be nil")
+	}
+
+	hint := commitpkg.IssueHint{
+		IssueID:      mc.pickedBranch.IssueSlug,
+		BranchType:   mc.pickedBranch.Type,
+		IssueSubject: mc.pickedBranch.Title,
+		Closing:      issueInfo}
 	prefill := hint.Prefill(mc.cfg.CommitMessage)
-	prefill["subject"] = subject
+	// prefill["subject"] = subject
 
 	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
 	if err != nil {
@@ -876,7 +880,7 @@ func composeAndCommit(ctx context.Context, mc mergeContext, prompter ClosePrompt
 	}
 
 	if err := mc.client.Commit(ctx, msg, convert.CommitOptionsFromTUI(opts)); err != nil {
-		return fmt.Errorf("commit %s: %w", strategy, err)
+		return fmt.Errorf("commit %s: %w", issueInfo.Strategy, err)
 	}
 
 	return nil

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/commit"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -25,11 +26,11 @@ type ClosePrompter interface {
 	PickBranch(ctx context.Context, branches []store.BranchRow, current string) (*store.BranchRow, error)
 
 	// PickStrategy is called only when MergeDryRun reports no conflicts.
-	PickStrategy(ctx context.Context) (MergeStrategy, error)
+	PickStrategy(ctx context.Context) (commit.MergeStrategy, error)
 
 	// ConfirmMerge gates the actual merge. confirmed=false means the operator
 	// declined; runClose prints "Aborted." and returns nil.
-	ConfirmMerge(ctx context.Context, branch, base string, strategy MergeStrategy) (confirmed bool, err error)
+	ConfirmMerge(ctx context.Context, branch, base string, strategy commit.MergeStrategy) (confirmed bool, err error)
 
 	// ComposeMessage runs inline AFTER the strategy has staged its changes
 	// (after MergeSquash / MergeRebase+soft-reset / MergeNoFFNoCommit). The
@@ -78,21 +79,21 @@ func (p *huhPrompter) PickBranch(ctx context.Context, branches []store.BranchRow
 	return &picked, nil
 }
 
-func (p *huhPrompter) PickStrategy(ctx context.Context) (MergeStrategy, error) {
+func (p *huhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, error) {
 	var picked string
 	form := tui.IssueMergeStrategy(&picked, []tui.StrategyOption{
 		{
-			Value: string(StrategyRebase),
+			Value: string(commit.MergeStrategyRebase),
 			Label: "Rebase",
 			Hint:  "Single clean commit on local base, submodule-safe (recommended)",
 		},
 		{
-			Value: string(StrategySquash),
+			Value: string(commit.MergeStrategySquash),
 			Label: "Squash",
 			Hint:  "git merge --squash — fast, but not submodule-safe",
 		},
 		{
-			Value: string(StrategyClassic),
+			Value: string(commit.MergeStrategyClassic),
 			Label: "Classic",
 			Hint:  "git merge --no-ff with commitizen message — preserves full history",
 		},
@@ -101,10 +102,10 @@ func (p *huhPrompter) PickStrategy(ctx context.Context) (MergeStrategy, error) {
 		return "", fmt.Errorf("strategy picker: %w", err)
 	}
 
-	return MergeStrategy(picked), nil
+	return commit.MergeStrategy(picked), nil
 }
 
-func (p *huhPrompter) ConfirmMerge(ctx context.Context, branch, base string, strategy MergeStrategy) (bool, error) {
+func (p *huhPrompter) ConfirmMerge(ctx context.Context, branch, base string, strategy commit.MergeStrategy) (bool, error) {
 	var confirmed bool
 	if err := huh.NewForm(tui.IssueMergeConfirm(branch, base, string(strategy), &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm form: %w", err)

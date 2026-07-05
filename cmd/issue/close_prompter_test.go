@@ -3,6 +3,7 @@ package issue
 import (
 	"context"
 
+	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
@@ -18,7 +19,7 @@ var _ ClosePrompter = (*scriptedPrompter)(nil)
 // keep test setup readable (literal struct construction).
 type scriptedPrompter struct {
 	Branch        *store.BranchRow
-	Strategy      MergeStrategy
+	Strategy      commitpkg.MergeStrategy
 	Confirm       bool
 	Message       []byte
 	MessageOpts   tui.CommitOption
@@ -56,7 +57,7 @@ func (s *scriptedPrompter) PickBranch(_ context.Context, branches []store.Branch
 	return s.Branch, nil
 }
 
-func (s *scriptedPrompter) PickStrategy(_ context.Context) (MergeStrategy, error) {
+func (s *scriptedPrompter) PickStrategy(_ context.Context) (commitpkg.MergeStrategy, error) {
 	if s.StrategyErr != nil {
 		return "", s.StrategyErr
 	}
@@ -64,7 +65,7 @@ func (s *scriptedPrompter) PickStrategy(_ context.Context) (MergeStrategy, error
 	return s.Strategy, nil
 }
 
-func (s *scriptedPrompter) ConfirmMerge(_ context.Context, _, _ string, _ MergeStrategy) (bool, error) {
+func (s *scriptedPrompter) ConfirmMerge(_ context.Context, _, _ string, _ commitpkg.MergeStrategy) (bool, error) {
 	if s.ConfirmErr != nil {
 		return false, s.ConfirmErr
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/store"
@@ -570,6 +571,21 @@ func TestFillOutForm(t *testing.T) {
 	})
 }
 
+// testCloseInfo is the IssueCloseInfo used by the Closing rows below. The
+// hashes are chosen so their 7-char abbreviations are the readable
+// "abc1234" / "def5678", making testCloseInfo.message() deterministic:
+// "Squash abc1234 into def5678.".
+var testCloseInfo = &IssueCloseInfo{
+	FromHash: plumbing.NewHash("abc1234000000000000000000000000000000000"),
+	ToHash:   plumbing.NewHash("def5678000000000000000000000000000000000"),
+	Strategy: MergeStrategySquash,
+}
+
+const (
+	testIssueSubject = "Add OAuth login"
+	testMergeMsg     = "Squash abc1234 into def5678."
+)
+
 func TestIssueHint_Prefill(t *testing.T) {
 	t.Parallel()
 
@@ -600,17 +616,19 @@ func TestIssueHint_Prefill(t *testing.T) {
 			},
 			hint: IssueHint{IssueID: testIssueID, BranchType: "fix"},
 			want: map[string]any{
-				"subject": "(" + testIssueID + ")",
+				"subject": "(" + testIssueID + "): ",
 				"footer":  "Refs #" + testIssueID,
 				"type":    "fix",
 			},
 		},
 		{
-			name:  "subject_used_when_only_subject_present",
+			// Without a footer item the ref message moves into the subject,
+			// replacing the "(<id>): " prefix set by the scope fallback.
+			name:  "subject_gets_ref_when_only_subject_present",
 			items: []config.CommitItem{{Name: "subject"}},
 			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix"},
 			want: map[string]any{
-				"subject": "(" + testIssueID + ")",
+				"subject": "Refs #" + testIssueID + " - ",
 				"type":    "fix",
 			},
 		},
@@ -644,16 +662,17 @@ func TestIssueHint_Prefill(t *testing.T) {
 			hint:  IssueHint{},
 			want:  map[string]any{},
 		},
-		// Closing=true cases
+		// Closing != nil cases
 		{
-			name: "closing_footer_only_sets_fix",
+			name: "closing_footer_gets_merge_info_subject_gets_title",
 			items: []config.CommitItem{
 				{Name: "subject"}, {Name: "footer"},
 			},
-			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
 			want: map[string]any{
-				"footer": "Closes #" + testIssueID,
-				"type":   "fix",
+				"subject": "[close] " + testIssueSubject,
+				"footer":  "Closes #" + testIssueID + " - " + testMergeMsg,
+				"type":    "fix",
 			},
 		},
 		{
@@ -661,37 +680,40 @@ func TestIssueHint_Prefill(t *testing.T) {
 			items: []config.CommitItem{
 				{Name: "subject"}, {Name: "scope"}, {Name: "footer"},
 			},
-			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
 			want: map[string]any{
-				"scope":  testIssueID,
-				"footer": "Closes #" + testIssueID,
-				"type":   "fix",
+				"scope":   testIssueID,
+				"subject": "[close] " + testIssueSubject,
+				"footer":  "Closes #" + testIssueID + " - " + testMergeMsg,
+				"type":    "fix",
 			},
 		},
 		{
+			// Without a footer item the close ref moves into the subject.
 			name: "closing_scope_only_no_footer",
 			items: []config.CommitItem{
 				{Name: "subject"}, {Name: "scope"},
 			},
-			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			hint: IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
 			want: map[string]any{
-				"scope": testIssueID,
-				"type":  "fix",
+				"scope":   testIssueID,
+				"subject": "Closes #" + testIssueID + " - " + testIssueSubject,
+				"type":    "fix",
 			},
 		},
 		{
 			name:  "closing_subject_fallback_when_no_scope_or_footer",
 			items: []config.CommitItem{{Name: "subject"}},
-			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
 			want: map[string]any{
-				"subject": "(" + testIssueID + ")",
+				"subject": "Closes #" + testIssueID + " - " + testIssueSubject,
 				"type":    "fix",
 			},
 		},
 		{
 			name:  "closing_no_matching_field_only_type",
 			items: []config.CommitItem{{Name: "body"}},
-			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
 			want: map[string]any{
 				"type": "fix",
 			},
@@ -703,19 +725,31 @@ func TestIssueHint_Prefill(t *testing.T) {
 			refFormat: "Refs: %s",
 			hint:      IssueHint{IssueID: testIssueID, BranchType: "fix"},
 			want: map[string]any{
-				"subject": "(" + testIssueID + ")",
+				"subject": "(" + testIssueID + "): ",
 				"footer":  "Refs: " + testIssueID,
 				"type":    "fix",
+			},
+		},
+		{
+			name:  "body_gets_issue_subject_when_present",
+			items: []config.CommitItem{{Name: "scope"}, {Name: "footer"}, {Name: "body"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject},
+			want: map[string]any{
+				"scope":  testIssueID,
+				"footer": "Refs #" + testIssueID,
+				"body":   "# " + testIssueSubject,
+				"type":   "fix",
 			},
 		},
 		{
 			name:        "custom_close_format_used_for_footer",
 			items:       []config.CommitItem{{Name: "subject"}, {Name: "footer"}},
 			closeFormat: "Tests #%s",
-			hint:        IssueHint{IssueID: testIssueID, BranchType: "fix", Closing: true},
+			hint:        IssueHint{IssueID: testIssueID, BranchType: "fix", IssueSubject: testIssueSubject, Closing: testCloseInfo},
 			want: map[string]any{
-				"footer": "Tests #" + testIssueID,
-				"type":   "fix",
+				"subject": "[close] " + testIssueSubject,
+				"footer":  "Tests #" + testIssueID + " - " + testMergeMsg,
+				"type":    "fix",
 			},
 		},
 	}
