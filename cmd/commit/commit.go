@@ -116,6 +116,8 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 	}
 	defer func() { _ = s.Close() }()
 
+	hint.IssueSubject = issueTitleFromStore(cmd.Context(), s, hint.IssueID)
+
 	prefill := hint.Prefill(c.appConfig.CommitMessage)
 
 	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill)
@@ -207,4 +209,22 @@ func issueHintFromClient(c Committer) commitpkg.IssueHint {
 	}
 
 	return commitpkg.IssueHint{IssueID: b.IssueID(), BranchType: b.Type()}
+}
+
+// issueTitleFromStore returns the stored issue title for slug, or "" when
+// slug is empty, no row matches, or the lookup fails — a missing title only
+// skips the body prefill and must never block a commit.
+func issueTitleFromStore(ctx context.Context, s *store.Store, slug string) string {
+	if slug == "" {
+		return ""
+	}
+
+	rows, err := s.ListBranchesByIssueSlugs(ctx, []string{slug})
+	if err != nil {
+		slog.Debug("could not look up issue title", "slug", slug, "error", err)
+
+		return ""
+	}
+
+	return rows[slug].Title // missing key → zero row → ""
 }
