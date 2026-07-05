@@ -622,12 +622,23 @@ func TestIssueHint_Prefill(t *testing.T) {
 			},
 		},
 		{
-			// Without a footer item the ref message moves into the subject,
-			// replacing the "(<id>): " prefix set by the scope fallback.
+			// Without a footer item the ref message moves into the subject.
 			name:  "subject_gets_ref_when_only_subject_present",
 			items: []config.CommitItem{{Name: "subject"}},
 			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix"},
 			want: map[string]any{
+				"subject": "Refs #" + testIssueID + " - ",
+				"type":    "fix",
+			},
+		},
+		{
+			// scope carries only the bare id, so the ref message still needs
+			// a home: with no footer it goes into the subject.
+			name:  "subject_gets_ref_when_scope_present_but_no_footer",
+			items: []config.CommitItem{{Name: "subject"}, {Name: "scope"}},
+			hint:  IssueHint{IssueID: testIssueID, BranchType: "fix"},
+			want: map[string]any{
+				"scope":   testIssueID,
 				"subject": "Refs #" + testIssueID + " - ",
 				"type":    "fix",
 			},
