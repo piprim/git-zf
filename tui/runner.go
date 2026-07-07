@@ -85,16 +85,22 @@ func (r *FormRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View implements tea.Model. When a panel is present it is recomputed for the
 // current --all value and joined to the right of the form; otherwise only the
 // form is rendered.
+//
+// The panel is only attached while the form is actually rendering something.
+// huh returns an empty view once the form is quitting (completed or aborted);
+// attaching the panel then would leave it as the program's final on-screen
+// frame after the form closes.
 func (r *FormRunner) View() string {
-	if !r.hasPanel() {
-		return r.form.View()
+	formView := r.form.View()
+	if !r.hasPanel() || formView == "" {
+		return formView
 	}
 
 	panel := lipgloss.NewStyle().
 		MarginLeft(panelGap).
 		Render(StatusPanel(r.entries, r.all()))
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, r.form.View(), panel)
+	return lipgloss.JoinHorizontal(lipgloss.Top, formView, panel)
 }
 
 // RunForm runs form inside a bubbletea program. When entries is non-empty it

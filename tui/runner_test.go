@@ -113,6 +113,29 @@ func TestFormRunnerView(t *testing.T) {
 		}
 	})
 
+	t.Run("no panel once the form is done (quitting/aborted)", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRunner()
+		r.entries = []git.StatusEntry{{XY: " M", Path: "plop"}}
+		r.allFn = func() bool { return false }
+
+		// Precondition: while the form is active, the panel is attached.
+		if !strings.Contains(r.View(), "Current Git Status") {
+			t.Fatalf("active form should show the panel; got:\n%s", r.View())
+		}
+
+		// ctrl+c aborts the huh form → its View() becomes empty.
+		r.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+		if got := r.View(); got != r.form.View() {
+			t.Errorf("after the form is done, View() must be the (empty) form view, not the panel; got:\n%q", got)
+		}
+		if strings.Contains(r.View(), "Current Git Status") {
+			t.Errorf("panel must not linger after the form closes; got:\n%s", r.View())
+		}
+	})
+
 	t.Run("WindowSizeMsg reserves room so the panel stays on-screen", func(t *testing.T) {
 		t.Parallel()
 
