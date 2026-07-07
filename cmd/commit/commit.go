@@ -120,7 +120,15 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 
 	prefill := hint.Prefill(c.appConfig.CommitMessage)
 
-	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill)
+	entries, err := client.StatusEntries(cmd.Context())
+	if err != nil {
+		slog.Warn("could not load git status", "error", err)
+
+		entries = nil
+	}
+	panel := tui.StatusPanel(entries, defaults.All)
+
+	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill, panel)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}

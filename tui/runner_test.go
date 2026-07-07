@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func newTestRunner() *FormRunner {
@@ -61,6 +63,54 @@ func TestFormRunner(t *testing.T) {
 
 		if r.WantHistory() {
 			t.Error("WantHistory() = true after esc, want false")
+		}
+	})
+}
+
+func TestFormRunnerView(t *testing.T) {
+	t.Parallel()
+
+	t.Run("View without a panel renders only the form", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRunner() // panel is the zero value ""
+		if r.View() != r.form.View() {
+			t.Error("View() should equal form.View() when panel is empty")
+		}
+	})
+
+	t.Run("View with a panel includes the panel text", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRunner()
+		r.panel = "PANEL-MARKER"
+		if !strings.Contains(r.View(), "PANEL-MARKER") {
+			t.Errorf("View() should contain the panel text; got:\n%s", r.View())
+		}
+	})
+
+	t.Run("WindowSizeMsg reserves room so the panel stays on-screen", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRunner()
+		rawPanel := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Render("Current Git Status\n\nmodified: plop")
+		r.panel = rawPanel
+		const total = 120
+
+		r.Update(tea.WindowSizeMsg{Width: total, Height: 30})
+
+		panelW := lipgloss.Width(rawPanel)
+
+		// The form must be sized to leave room for the panel + gap...
+		if formW := lipgloss.Width(r.form.View()); formW > total-panelW-panelGap {
+			t.Errorf("form width = %d, want <= %d (must reserve %d cols for panel+gap)",
+				formW, total-panelW-panelGap, panelW+panelGap)
+		}
+		// ...so the combined side-by-side view fits within the terminal width.
+		if w := lipgloss.Width(r.View()); w > total {
+			t.Errorf("combined view width = %d, want <= %d (panel would be off-screen)", w, total)
 		}
 	})
 }

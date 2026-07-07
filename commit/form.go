@@ -45,8 +45,8 @@ type formRunner interface {
 
 // runFormFn is the form runner used by FillOutForm and runHistoryPicker.
 // Tests can replace it with a stub to avoid requiring a real terminal.
-var runFormFn = func(form *huh.Form) (formRunner, error) {
-	return tui.RunForm(form)
+var runFormFn = func(form *huh.Form, panel string) (formRunner, error) {
+	return tui.RunForm(form, panel)
 }
 
 // applyPayload clones items and sets each item's Value from payload (string values only).
@@ -121,7 +121,7 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 			Value(&selected),
 	))
 
-	_, runErr := runFormFn(pickerForm)
+	_, runErr := runFormFn(pickerForm, "")
 	if errors.Is(runErr, huh.ErrUserAborted) {
 		return nil, huh.ErrUserAborted
 	}
@@ -151,7 +151,7 @@ func showNoHistoryDialog() {
 			Description("No commit history yet.\n\nPress enter to continue."),
 	))
 
-	if _, err := runFormFn(dialog); err != nil && !errors.Is(err, huh.ErrUserAborted) {
+	if _, err := runFormFn(dialog, ""); err != nil && !errors.Is(err, huh.ErrUserAborted) {
 		slog.Warn("could not show no-history dialog", "error", err)
 	}
 }
@@ -169,13 +169,14 @@ func FillOutForm(
 	defaults tui.CommitOption,
 	hs historyStore,
 	initialPrefill map[string]any,
+	panel string,
 ) ([]byte, tui.CommitOption, error) {
 	prefill := initialPrefill
 
 	for {
 		form, extractMsg, extractOpts := loadForm(cfg, defaults, prefill)
 
-		runner, err := runFormFn(form)
+		runner, err := runFormFn(form, panel)
 		if err != nil {
 			return nil, tui.CommitOption{}, fmt.Errorf("failed to run the form: %w", err)
 		}
