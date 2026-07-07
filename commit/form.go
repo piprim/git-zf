@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
@@ -45,8 +46,12 @@ type formRunner interface {
 
 // runFormFn is the form runner used by FillOutForm and runHistoryPicker.
 // Tests can replace it with a stub to avoid requiring a real terminal.
-var runFormFn = func(form *huh.Form, panel string) (formRunner, error) {
-	return tui.RunForm(form, panel)
+//
+// entries is the working-tree snapshot for the status panel (nil = no panel);
+// allFn reads the form's live --all value so the panel re-classifies as the
+// user toggles it.
+var runFormFn = func(form *huh.Form, entries []git.StatusEntry, allFn func() bool) (formRunner, error) {
+	return tui.RunForm(form, entries, allFn)
 }
 
 // applyPayload clones items and sets each item's Value from payload (string values only).
@@ -121,7 +126,7 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 			Value(&selected),
 	))
 
-	_, runErr := runFormFn(pickerForm, "")
+	_, runErr := runFormFn(pickerForm, nil, nil)
 	if errors.Is(runErr, huh.ErrUserAborted) {
 		return nil, huh.ErrUserAborted
 	}
@@ -151,7 +156,7 @@ func showNoHistoryDialog() {
 			Description("No commit history yet.\n\nPress enter to continue."),
 	))
 
-	if _, err := runFormFn(dialog, ""); err != nil && !errors.Is(err, huh.ErrUserAborted) {
+	if _, err := runFormFn(dialog, nil, nil); err != nil && !errors.Is(err, huh.ErrUserAborted) {
 		slog.Warn("could not show no-history dialog", "error", err)
 	}
 }
@@ -169,14 +174,18 @@ func FillOutForm(
 	defaults tui.CommitOption,
 	hs historyStore,
 	initialPrefill map[string]any,
-	panel string,
+	entries []git.StatusEntry,
 ) ([]byte, tui.CommitOption, error) {
 	prefill := initialPrefill
 
 	for {
 		form, extractMsg, extractOpts := loadForm(cfg, defaults, prefill)
 
-		runner, err := runFormFn(form, panel)
+		// allFn reads the form's live --all value (the CommitOptionsGroup writes
+		// into the opts extractOpts returns), so the status panel re-classifies
+		// as the user toggles it. When the options form is skipped, this is the
+		// fixed launch flag.
+		runner, err := runFormFn(form, entries, func() bool { return extractOpts().All })
 		if err != nil {
 			return nil, tui.CommitOption{}, fmt.Errorf("failed to run the form: %w", err)
 		}

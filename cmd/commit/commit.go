@@ -126,9 +126,8 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 
 		entries = nil
 	}
-	panel := tui.StatusPanel(entries, defaults.All)
 
-	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill, panel)
+	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill, entries)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}

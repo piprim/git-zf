@@ -7,6 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/piprim/git-zf/git"
 )
 
 func newTestRunner() *FormRunner {
@@ -70,22 +72,44 @@ func TestFormRunner(t *testing.T) {
 func TestFormRunnerView(t *testing.T) {
 	t.Parallel()
 
-	t.Run("View without a panel renders only the form", func(t *testing.T) {
+	t.Run("View without entries renders only the form", func(t *testing.T) {
 		t.Parallel()
 
-		r := newTestRunner() // panel is the zero value ""
+		r := newTestRunner() // entries is nil → no panel
 		if r.View() != r.form.View() {
-			t.Error("View() should equal form.View() when panel is empty")
+			t.Error("View() should equal form.View() when there is no panel")
 		}
 	})
 
-	t.Run("View with a panel includes the panel text", func(t *testing.T) {
+	t.Run("View with entries includes the panel content", func(t *testing.T) {
 		t.Parallel()
 
 		r := newTestRunner()
-		r.panel = "PANEL-MARKER"
+		r.entries = []git.StatusEntry{{XY: " M", Path: "PANEL-MARKER"}}
+		r.allFn = func() bool { return false }
 		if !strings.Contains(r.View(), "PANEL-MARKER") {
-			t.Errorf("View() should contain the panel text; got:\n%s", r.View())
+			t.Errorf("View() should contain the panel path; got:\n%s", r.View())
+		}
+	})
+
+	t.Run("View reflects the live --all value", func(t *testing.T) {
+		t.Parallel()
+
+		all := false
+		r := newTestRunner()
+		r.entries = []git.StatusEntry{{XY: " M", Path: "plop"}}
+		r.allFn = func() bool { return all }
+
+		if !strings.Contains(r.View(), "Changes not staged for commit:") {
+			t.Errorf("all=false: expected a 'not staged' section; got:\n%s", r.View())
+		}
+
+		all = true
+		if strings.Contains(r.View(), "Changes not staged for commit:") {
+			t.Errorf("all=true: 'not staged' section should be gone; got:\n%s", r.View())
+		}
+		if !strings.Contains(r.View(), "Changes to be committed:") {
+			t.Errorf("all=true: change should move under 'to be committed'; got:\n%s", r.View())
 		}
 	})
 
@@ -93,20 +117,17 @@ func TestFormRunnerView(t *testing.T) {
 		t.Parallel()
 
 		r := newTestRunner()
-		rawPanel := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Render("Current Git Status\n\nmodified: plop")
-		r.panel = rawPanel
+		r.entries = []git.StatusEntry{{XY: " M", Path: "some/longish/path/to/plop.go"}}
+		r.allFn = func() bool { return false }
+		r.reserveWidth = StatusPanelReserveWidth(r.entries)
 		const total = 120
 
 		r.Update(tea.WindowSizeMsg{Width: total, Height: 30})
 
-		panelW := lipgloss.Width(rawPanel)
-
-		// The form must be sized to leave room for the panel + gap...
-		if formW := lipgloss.Width(r.form.View()); formW > total-panelW-panelGap {
+		// The form must be sized to leave room for the widest panel + gap...
+		if formW := lipgloss.Width(r.form.View()); formW > total-r.reserveWidth-panelGap {
 			t.Errorf("form width = %d, want <= %d (must reserve %d cols for panel+gap)",
-				formW, total-panelW-panelGap, panelW+panelGap)
+				formW, total-r.reserveWidth-panelGap, r.reserveWidth+panelGap)
 		}
 		// ...so the combined side-by-side view fits within the terminal width.
 		if w := lipgloss.Width(r.View()); w > total {

@@ -202,3 +202,16 @@ func StatusPanel(entries []git.StatusEntry, all bool) string {
 
 	return box.Render(title + "\n\n" + body)
 }
+
+// StatusPanelReserveWidth returns the widest the panel can render for these
+// entries across both the default and -a (re-classified) layouts. The form
+// reserves this so its width stays stable when the --all toggle flips the
+// panel between layouts. Returns 0 when there is nothing to show.
+func StatusPanelReserveWidth(entries []git.StatusEntry) int {
+	w := lipgloss.Width(StatusPanel(entries, false))
+	if a := lipgloss.Width(StatusPanel(entries, true)); a > w {
+		w = a
+	}
+
+	return w
+}

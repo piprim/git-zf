@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
@@ -322,7 +323,7 @@ type stubFormRunner struct{ wantHistoryVal bool }
 func (s *stubFormRunner) WantHistory() bool { return s.wantHistoryVal }
 
 // swapRunFormFn replaces runFormFn for the test and restores it in Cleanup.
-func swapRunFormFn(t *testing.T, fn func(*huh.Form, string) (formRunner, error)) {
+func swapRunFormFn(t *testing.T, fn func(*huh.Form, []git.StatusEntry, func() bool) (formRunner, error)) {
 	t.Helper()
 
 	orig := runFormFn
@@ -439,14 +440,14 @@ func TestFillOutForm(t *testing.T) {
 	// Not parallel — subtests swap the global runFormFn.
 
 	t.Run("saves history after successful form completion", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ string) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
 			return &stubFormRunner{}, nil
 		})
 
 		hs := &fakeHistoryStore{}
 
 		// AnyOptionSet() == true skips the options form group (cleaner test).
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, "")
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, nil)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
@@ -460,11 +461,11 @@ func TestFillOutForm(t *testing.T) {
 	})
 
 	t.Run("propagates user abort from the main form", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ string) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
 			return nil, huh.ErrUserAborted
 		})
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, &fakeHistoryStore{}, nil, "")
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, &fakeHistoryStore{}, nil, nil)
 		if !errors.Is(err, huh.ErrUserAborted) {
 			t.Errorf("err = %v, want huh.ErrUserAborted", err)
 		}
@@ -472,7 +473,7 @@ func TestFillOutForm(t *testing.T) {
 
 	t.Run("preserves original answers when history is empty", func(t *testing.T) {
 		call := 0
-		swapRunFormFn(t, func(_ *huh.Form, _ string) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
 			call++
 			switch call {
 			case 1:
@@ -489,7 +490,7 @@ func TestFillOutForm(t *testing.T) {
 
 		hs := &fakeHistoryStore{} // empty history → triggers errNoHistory path
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, "")
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, nil)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
@@ -512,7 +513,7 @@ func TestFillOutForm(t *testing.T) {
 
 	t.Run("exits flow when user aborts the history picker", func(t *testing.T) {
 		call := 0
-		swapRunFormFn(t, func(_ *huh.Form, _ string) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
 			call++
 			if call == 1 {
 				// Main form: user presses ctrl+r.
@@ -529,14 +530,14 @@ func TestFillOutForm(t *testing.T) {
 			},
 		}
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, "")
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, nil)
 		if !errors.Is(err, huh.ErrUserAborted) {
 			t.Errorf("err = %v, want huh.ErrUserAborted", err)
 		}
 	})
 
 	t.Run("prefill values appear in the rendered output", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ string) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
 			return &stubFormRunner{}, nil
 		})
 
@@ -546,7 +547,7 @@ func TestFillOutForm(t *testing.T) {
 			"type":    "feat",
 		}
 
-		msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, prefill, "")
+		msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, prefill, nil)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
@@ -570,20 +571,41 @@ func TestFillOutForm(t *testing.T) {
 		}
 	})
 
-	t.Run("forwards the panel string to the form runner", func(t *testing.T) {
-		var gotPanel string
-		swapRunFormFn(t, func(_ *huh.Form, panel string) (formRunner, error) {
-			gotPanel = panel
+	t.Run("forwards the status entries to the form runner", func(t *testing.T) {
+		var gotEntries []git.StatusEntry
+		swapRunFormFn(t, func(_ *huh.Form, entries []git.StatusEntry, _ func() bool) (formRunner, error) {
+			gotEntries = entries
 			return &stubFormRunner{}, nil
 		})
 
 		hs := &fakeHistoryStore{}
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, "PANEL")
+		ents := []git.StatusEntry{{XY: " M", Path: "plop"}}
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, ents)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
-		if gotPanel != "PANEL" {
-			t.Errorf("panel forwarded = %q, want %q", gotPanel, "PANEL")
+		if len(gotEntries) != 1 || gotEntries[0].Path != "plop" {
+			t.Errorf("entries forwarded = %+v, want single entry plop", gotEntries)
+		}
+	})
+
+	t.Run("allFn reads the live --all value from the form options", func(t *testing.T) {
+		var gotAllFn func() bool
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, allFn func() bool) (formRunner, error) {
+			gotAllFn = allFn
+			return &stubFormRunner{}, nil
+		})
+
+		hs := &fakeHistoryStore{}
+		// Skip=true so no interactive options group is built; opts stays at
+		// defaults, so allFn reflects the launch --all flag (true here).
+		_, _, err := FillOutForm(context.Background(), minimalCfg(),
+			tui.CommitOption{All: true, Skip: true}, hs, nil, []git.StatusEntry{{XY: " M", Path: "x"}})
+		if err != nil {
+			t.Fatalf("FillOutForm: %v", err)
+		}
+		if gotAllFn == nil || !gotAllFn() {
+			t.Errorf("allFn() = %v, want true (reflecting defaults.All)", gotAllFn != nil && gotAllFn())
 		}
 	})
 }

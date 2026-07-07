@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/piprim/git-zf/git"
 )
 
 const (
@@ -21,15 +23,30 @@ const (
 )
 
 // FormRunner wraps a *huh.Form as a tea.Model to intercept ctrl+r before huh
-// sees it, and to render an optional read-only panel to the right of the form.
+// sees it, and to render an optional read-only "Current Git Status" panel to
+// the right of the form.
+//
+// The panel is recomputed on every render from a fixed working-tree snapshot
+// (entries) and the form's live --all value (allFn), so toggling --all in the
+// form re-classifies the panel in real time. reserveWidth is the widest the
+// panel can be across both layouts, so the form width stays stable as the
+// toggle flips. When entries is empty there is no panel.
 type FormRunner struct {
-	form        *huh.Form
-	wantHistory bool
-	panel       string
+	form         *huh.Form
+	wantHistory  bool
+	entries      []git.StatusEntry
+	allFn        func() bool
+	reserveWidth int
 }
 
 // WantHistory reports whether the user pressed ctrl+r during the form.
 func (r *FormRunner) WantHistory() bool { return r.wantHistory }
+
+// hasPanel reports whether a status panel should be rendered alongside the form.
+func (r *FormRunner) hasPanel() bool { return len(r.entries) > 0 }
+
+// all reads the live --all value, defaulting to false when no reader is set.
+func (r *FormRunner) all() bool { return r.allFn != nil && r.allFn() }
 
 // Init implements tea.Model.
 func (r *FormRunner) Init() tea.Cmd { return r.form.Init() }
@@ -46,9 +63,10 @@ func (r *FormRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// full terminal width on a WindowSizeMsg (form.go: `if f.width == 0`), which
 	// would push the joined panel off the right edge. Setting an explicit form
 	// width both fits the panel on-screen and sticks, because huh skips its own
-	// width resize once f.width != 0.
-	if ws, ok := msg.(tea.WindowSizeMsg); ok && r.panel != "" {
-		formWidth := ws.Width - lipgloss.Width(r.panel) - panelGap
+	// width resize once f.width != 0. reserveWidth covers both --all layouts so
+	// the form does not resize when the toggle flips.
+	if ws, ok := msg.(tea.WindowSizeMsg); ok && r.hasPanel() {
+		formWidth := ws.Width - r.reserveWidth - panelGap
 		if formWidth < minFormWidth {
 			formWidth = minFormWidth
 		}
@@ -64,27 +82,36 @@ func (r *FormRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return r, cmd
 }
 
-// View implements tea.Model. When a panel is set, it is joined to the right of
-// the form; otherwise only the form is rendered.
+// View implements tea.Model. When a panel is present it is recomputed for the
+// current --all value and joined to the right of the form; otherwise only the
+// form is rendered.
 func (r *FormRunner) View() string {
-	if r.panel == "" {
+	if !r.hasPanel() {
 		return r.form.View()
 	}
 
-	panel := lipgloss.NewStyle().MarginLeft(panelGap).Render(r.panel)
+	panel := lipgloss.NewStyle().
+		MarginLeft(panelGap).
+		Render(StatusPanel(r.entries, r.all()))
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, r.form.View(), panel)
 }
 
-// RunForm runs form inside a bubbletea program, rendering panel (when non-empty)
-// to the right of the form.
+// RunForm runs form inside a bubbletea program. When entries is non-empty it
+// renders a live "Current Git Status" panel to the right of the form, whose
+// staged/unstaged split follows allFn (the form's current --all value).
 // Returns (runner, nil) on normal completion or ctrl+r; call runner.WantHistory() to distinguish.
 // Returns (runner, huh.ErrUserAborted) on ctrl+c / esc.
-func RunForm(form *huh.Form, panel string) (*FormRunner, error) {
+func RunForm(form *huh.Form, entries []git.StatusEntry, allFn func() bool) (*FormRunner, error) {
 	form.SubmitCmd = tea.Quit
 	form.CancelCmd = tea.Quit
 
-	r := &FormRunner{form: form, panel: panel}
+	r := &FormRunner{
+		form:         form,
+		entries:      entries,
+		allFn:        allFn,
+		reserveWidth: StatusPanelReserveWidth(entries),
+	}
 	_, err := tea.NewProgram(r, tea.WithOutput(os.Stderr)).Run()
 
 	if errors.Is(err, tea.ErrInterrupted) {

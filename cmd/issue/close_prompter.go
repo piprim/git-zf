@@ -127,7 +127,7 @@ func (p *huhPrompter) ComposeMessage(ctx context.Context, prefill map[string]any
 		defaults.Author = authors[0]
 	}
 
-	msg, opts, err := commitpkg.FillOutForm(ctx, p.cfg, defaults, p.store, prefill, "")
+	msg, opts, err := commitpkg.FillOutForm(ctx, p.cfg, defaults, p.store, prefill, nil)
 	if err != nil {
 		return nil, tui.CommitOption{}, fmt.Errorf("fill commit form: %w", err)
 	}
