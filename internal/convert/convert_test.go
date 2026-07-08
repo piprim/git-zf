@@ -16,12 +16,13 @@ func TestCommitOptionsFromTUI(t *testing.T) {
 		Skip:    true,
 		Authors: []string{"Ada <ada@example.com>"},
 		// Mapped fields, mixed so a field swap is observable.
-		All:        true,
-		Amend:      false,
-		NoVerify:   true,
-		Signoff:    false,
-		AllowEmpty: true,
-		Author:     "Jane Doe <jane@example.com>",
+		All:              true,
+		Amend:            false,
+		NoVerify:         true,
+		Signoff:          false,
+		AllowEmpty:       true,
+		IncludeUntracked: true,
+		Author:           "Jane Doe <jane@example.com>",
 	}
 
 	got := CommitOptionsFromTUI(in)
@@ -59,6 +60,12 @@ func TestCommitOptionsFromTUI(t *testing.T) {
 	t.Run("maps Author", func(t *testing.T) {
 		if got.Author != in.Author {
 			t.Errorf("Author = %q, want %q", got.Author, in.Author)
+		}
+	})
+
+	t.Run("maps IncludeUntracked", func(t *testing.T) {
+		if got.IncludeUntracked != in.IncludeUntracked {
+			t.Errorf("IncludeUntracked = %v, want %v", got.IncludeUntracked, in.IncludeUntracked)
 		}
 	})
 }

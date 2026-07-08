@@ -27,15 +27,16 @@ const (
 // the right of the form.
 //
 // The panel is recomputed on every render from a fixed working-tree snapshot
-// (entries) and the form's live --all value (allFn), so toggling --all in the
-// form re-classifies the panel in real time. reserveWidth is the widest the
-// panel can be across both layouts, so the form width stays stable as the
-// toggle flips. When entries is empty there is no panel.
+// (entries) and the form's live (--all, --include-untracked) values
+// (classifyFn), so toggling either option re-classifies the panel in real
+// time. reserveWidth is the widest the panel can be across all layouts, so the
+// form width stays stable as the toggles flip. When entries is empty there is
+// no panel.
 type FormRunner struct {
 	form         *huh.Form
 	wantHistory  bool
 	entries      []git.StatusEntry
-	allFn        func() bool
+	classifyFn   func() (bool, bool)
 	reserveWidth int
 }
 
@@ -45,8 +46,15 @@ func (r *FormRunner) WantHistory() bool { return r.wantHistory }
 // hasPanel reports whether a status panel should be rendered alongside the form.
 func (r *FormRunner) hasPanel() bool { return len(r.entries) > 0 }
 
-// all reads the live --all value, defaulting to false when no reader is set.
-func (r *FormRunner) all() bool { return r.allFn != nil && r.allFn() }
+// classify reads the live (--all, --include-untracked) values, defaulting to
+// (false, false) when no reader is set.
+func (r *FormRunner) classify() (all, includeUntracked bool) {
+	if r.classifyFn == nil {
+		return false, false
+	}
+
+	return r.classifyFn()
+}
 
 // Init implements tea.Model.
 func (r *FormRunner) Init() tea.Cmd { return r.form.Init() }
@@ -96,26 +104,27 @@ func (r *FormRunner) View() string {
 		return formView
 	}
 
+	all, includeUntracked := r.classify()
 	panel := lipgloss.NewStyle().
 		MarginLeft(panelGap).
-		Render(StatusPanel(r.entries, r.all()))
+		Render(StatusPanel(r.entries, all, includeUntracked))
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, formView, panel)
 }
 
 // RunForm runs form inside a bubbletea program. When entries is non-empty it
 // renders a live "Current Git Status" panel to the right of the form, whose
-// staged/unstaged split follows allFn (the form's current --all value).
+// staged/unstaged split follows classifyFn (the form's live (--all, --include-untracked) values).
 // Returns (runner, nil) on normal completion or ctrl+r; call runner.WantHistory() to distinguish.
 // Returns (runner, huh.ErrUserAborted) on ctrl+c / esc.
-func RunForm(form *huh.Form, entries []git.StatusEntry, allFn func() bool) (*FormRunner, error) {
+func RunForm(form *huh.Form, entries []git.StatusEntry, classifyFn func() (bool, bool)) (*FormRunner, error) {
 	form.SubmitCmd = tea.Quit
 	form.CancelCmd = tea.Quit
 
 	r := &FormRunner{
 		form:         form,
 		entries:      entries,
-		allFn:        allFn,
+		classifyFn:   classifyFn,
 		reserveWidth: StatusPanelReserveWidth(entries),
 	}
 	_, err := tea.NewProgram(r, tea.WithOutput(os.Stderr)).Run()

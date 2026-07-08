@@ -1474,3 +1474,104 @@ func TestConfigUser(t *testing.T) {
 		}
 	})
 }
+
+func TestCommitIncludeUntracked(t *testing.T) {
+	t.Parallel()
+
+	// showStat returns `git show --stat HEAD` output for dir.
+	showStat := func(t *testing.T, dir string) string {
+		t.Helper()
+
+		var buf bytes.Buffer
+		cmd := exec.Command("git", "show", "--stat", "HEAD")
+		cmd.Dir = dir
+		cmd.Stdout = &buf
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git show: %v", err)
+		}
+
+		return buf.String()
+	}
+
+	t.Run("stages and commits an untracked file", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newDiskRepo(t)
+		client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+
+		writeFile(t, dir, "fresh.go", "package main\n")
+
+		if err := client.Commit(t.Context(), []byte("feat: add fresh"), CommitOptions{IncludeUntracked: true}); err != nil {
+			t.Fatalf("Commit error: %v", err)
+		}
+
+		if out := showStat(t, dir); !strings.Contains(out, "fresh.go") {
+			t.Errorf("fresh.go must be in the commit; got:\n%s", out)
+		}
+	})
+
+	t.Run("no untracked files is a no-op and the commit still succeeds", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newDiskRepo(t)
+		client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+
+		// Stage a tracked change so the commit has content; no untracked files exist.
+		writeFile(t, dir, "base.go", "package changed\n")
+		runGitInDir(t, dir, "add", "base.go")
+
+		if err := client.Commit(t.Context(), []byte("chore: no untracked"), CommitOptions{IncludeUntracked: true}); err != nil {
+			t.Fatalf("Commit error: %v", err)
+		}
+
+		if out := showStat(t, dir); !strings.Contains(out, "base.go") {
+			t.Errorf("base.go must be in the commit; got:\n%s", out)
+		}
+	})
+
+	t.Run("composes with All: tracked edit and untracked file both land in the commit", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newDiskRepo(t)
+		client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+
+		writeFile(t, dir, "base.go", "package modified\n") // tracked, worktree-modified (unstaged)
+		writeFile(t, dir, "fresh.go", "package main\n")    // untracked
+
+		err := client.Commit(t.Context(), []byte("feat: all + untracked"), CommitOptions{All: true, IncludeUntracked: true})
+		if err != nil {
+			t.Fatalf("Commit error: %v", err)
+		}
+
+		out := showStat(t, dir)
+		if !strings.Contains(out, "base.go") {
+			t.Errorf("base.go (tracked edit via --all) must be in the commit; got:\n%s", out)
+		}
+		if !strings.Contains(out, "fresh.go") {
+			t.Errorf("fresh.go (untracked) must be in the commit; got:\n%s", out)
+		}
+	})
+
+	t.Run("respects .gitignore: an ignored untracked file is not staged", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newDiskRepo(t)
+		client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+
+		writeFile(t, dir, ".gitignore", "ignored.txt\n")
+		writeFile(t, dir, "ignored.txt", "secret\n")
+		writeFile(t, dir, "fresh.go", "package main\n")
+
+		if err := client.Commit(t.Context(), []byte("feat: respect gitignore"), CommitOptions{IncludeUntracked: true}); err != nil {
+			t.Fatalf("Commit error: %v", err)
+		}
+
+		out := showStat(t, dir)
+		if !strings.Contains(out, "fresh.go") {
+			t.Errorf("fresh.go must be in the commit; got:\n%s", out)
+		}
+		if strings.Contains(out, "ignored.txt") {
+			t.Errorf("ignored.txt must NOT be in the commit; got:\n%s", out)
+		}
+	})
+}

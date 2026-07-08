@@ -45,13 +45,14 @@ func New(appConfig *config.AppConfig) Commit {
 
 func (c Commit) GetRootCmd() *cobra.Command {
 	var (
-		skip       bool
-		all        bool
-		amend      bool
-		noVerify   bool
-		signoff    bool
-		allowEmpty bool
-		author     string
+		skip             bool
+		all              bool
+		amend            bool
+		noVerify         bool
+		signoff          bool
+		allowEmpty       bool
+		includeUntracked bool
+		author           string
 	)
 
 	desc := "Open the " + c.appConfig.ProgName +
@@ -65,6 +66,7 @@ func (c Commit) GetRootCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVarP(&skip, "yes", "y", false, "skip the commit options form and assume defaults")
 	f.BoolVarP(&all, "all", "a", false, "stage all tracked modified/deleted files before committing")
+	f.BoolVarP(&includeUntracked, "include-untracked", "u", false, "stage untracked files before committing")
 	f.BoolVar(&amend, "amend", false, "replace the tip of the current branch")
 	f.BoolVarP(&noVerify, "no-verify", "n", false, "bypass pre-commit and commit-msg hooks")
 	f.BoolVarP(&signoff, "signoff", "s", false, "add Signed-off-by trailer to the commit message")
@@ -76,17 +78,19 @@ func (c Commit) GetRootCmd() *cobra.Command {
 		return c.runE(cmd, tui.CommitOption{
 			Skip: skip ||
 				cmd.Flags().Changed("all") ||
+				cmd.Flags().Changed("include-untracked") ||
 				cmd.Flags().Changed("amend") ||
 				cmd.Flags().Changed("no-verify") ||
 				cmd.Flags().Changed("signoff") ||
 				cmd.Flags().Changed("allow-empty") ||
 				cmd.Flags().Changed("author"),
-			All:        all,
-			Amend:      amend,
-			NoVerify:   noVerify,
-			Signoff:    signoff,
-			AllowEmpty: allowEmpty,
-			Author:     author,
+			All:              all,
+			IncludeUntracked: includeUntracked,
+			Amend:            amend,
+			NoVerify:         noVerify,
+			Signoff:          signoff,
+			AllowEmpty:       allowEmpty,
+			Author:           author,
 		})
 	}
 

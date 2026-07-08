@@ -323,7 +323,7 @@ type stubFormRunner struct{ wantHistoryVal bool }
 func (s *stubFormRunner) WantHistory() bool { return s.wantHistoryVal }
 
 // swapRunFormFn replaces runFormFn for the test and restores it in Cleanup.
-func swapRunFormFn(t *testing.T, fn func(*huh.Form, []git.StatusEntry, func() bool) (formRunner, error)) {
+func swapRunFormFn(t *testing.T, fn func(*huh.Form, []git.StatusEntry, func() (bool, bool)) (formRunner, error)) {
 	t.Helper()
 
 	orig := runFormFn
@@ -440,7 +440,7 @@ func TestFillOutForm(t *testing.T) {
 	// Not parallel — subtests swap the global runFormFn.
 
 	t.Run("saves history after successful form completion", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			return &stubFormRunner{}, nil
 		})
 
@@ -461,7 +461,7 @@ func TestFillOutForm(t *testing.T) {
 	})
 
 	t.Run("propagates user abort from the main form", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			return nil, huh.ErrUserAborted
 		})
 
@@ -473,7 +473,7 @@ func TestFillOutForm(t *testing.T) {
 
 	t.Run("preserves original answers when history is empty", func(t *testing.T) {
 		call := 0
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			call++
 			switch call {
 			case 1:
@@ -513,7 +513,7 @@ func TestFillOutForm(t *testing.T) {
 
 	t.Run("exits flow when user aborts the history picker", func(t *testing.T) {
 		call := 0
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			call++
 			if call == 1 {
 				// Main form: user presses ctrl+r.
@@ -537,7 +537,7 @@ func TestFillOutForm(t *testing.T) {
 	})
 
 	t.Run("prefill values appear in the rendered output", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() bool) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			return &stubFormRunner{}, nil
 		})
 
@@ -573,7 +573,7 @@ func TestFillOutForm(t *testing.T) {
 
 	t.Run("forwards the status entries to the form runner", func(t *testing.T) {
 		var gotEntries []git.StatusEntry
-		swapRunFormFn(t, func(_ *huh.Form, entries []git.StatusEntry, _ func() bool) (formRunner, error) {
+		swapRunFormFn(t, func(_ *huh.Form, entries []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			gotEntries = entries
 			return &stubFormRunner{}, nil
 		})
@@ -589,23 +589,28 @@ func TestFillOutForm(t *testing.T) {
 		}
 	})
 
-	t.Run("allFn reads the live --all value from the form options", func(t *testing.T) {
-		var gotAllFn func() bool
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, allFn func() bool) (formRunner, error) {
-			gotAllFn = allFn
+	t.Run("classifyFn reads the live --all and --include-untracked values", func(t *testing.T) {
+		var gotFn func() (bool, bool)
+		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, classifyFn func() (bool, bool)) (formRunner, error) {
+			gotFn = classifyFn
 			return &stubFormRunner{}, nil
 		})
 
 		hs := &fakeHistoryStore{}
 		// Skip=true so no interactive options group is built; opts stays at
-		// defaults, so allFn reflects the launch --all flag (true here).
+		// defaults, so classifyFn reflects the launch flags (both true here).
 		_, _, err := FillOutForm(context.Background(), minimalCfg(),
-			tui.CommitOption{All: true, Skip: true}, hs, nil, []git.StatusEntry{{XY: " M", Path: "x"}})
+			tui.CommitOption{All: true, IncludeUntracked: true, Skip: true}, hs, nil,
+			[]git.StatusEntry{{XY: " M", Path: "x"}})
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
-		if gotAllFn == nil || !gotAllFn() {
-			t.Errorf("allFn() = %v, want true (reflecting defaults.All)", gotAllFn != nil && gotAllFn())
+		if gotFn == nil {
+			t.Fatal("classifyFn was not passed to the runner")
+		}
+		all, iu := gotFn()
+		if !all || !iu {
+			t.Errorf("classifyFn() = (%v, %v), want (true, true)", all, iu)
 		}
 	})
 }

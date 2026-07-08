@@ -56,14 +56,17 @@ Usage:
   git-zf commit [flags]
 
 Flags:
-  -a, --all             stage all tracked modified/deleted files before committing
-      --allow-empty     allow a commit with no changes
-      --amend           replace the tip of the current branch
-      --author string   override commit author as "Name <email>"
-  -h, --help            help for commit
-  -n, --no-verify       bypass pre-commit and commit-msg hooks
-  -s, --signoff         add Signed-off-by trailer to the commit message
-  -y, --yes             skip the commit options form and assume defaults
+  -a, --all                 stage all tracked modified/deleted files before committing
+      --allow-empty         allow a commit with no changes
+      --amend               replace the tip of the current branch
+      --author string       override commit author as "Name <email>"
+  -h, --help                help for commit
+  -u, --include-untracked   stage untracked files before committing
+      --no-push             skip the post-action push proposal
+  -n, --no-verify           bypass pre-commit and commit-msg hooks
+      --push                push the resulting branch to the remote after the action (skips the prompt)
+  -s, --signoff             add Signed-off-by trailer to the commit message
+  -y, --yes                 skip the commit options form and assume defaults
 ```
 
 If any commit flag is passed, the options page of the TUI form is skipped and the flags are used directly.

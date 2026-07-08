@@ -48,10 +48,10 @@ type formRunner interface {
 // Tests can replace it with a stub to avoid requiring a real terminal.
 //
 // entries is the working-tree snapshot for the status panel (nil = no panel);
-// allFn reads the form's live --all value so the panel re-classifies as the
-// user toggles it.
-var runFormFn = func(form *huh.Form, entries []git.StatusEntry, allFn func() bool) (formRunner, error) {
-	return tui.RunForm(form, entries, allFn)
+// classifyFn reads the form's live (--all, --include-untracked) values so the
+// panel re-classifies as the user toggles either one.
+var runFormFn = func(form *huh.Form, entries []git.StatusEntry, classifyFn func() (bool, bool)) (formRunner, error) {
+	return tui.RunForm(form, entries, classifyFn)
 }
 
 // applyPayload clones items and sets each item's Value from payload (string values only).
@@ -181,11 +181,15 @@ func FillOutForm(
 	for {
 		form, extractMsg, extractOpts := loadForm(cfg, defaults, prefill)
 
-		// allFn reads the form's live --all value (the CommitOptionsGroup writes
-		// into the opts extractOpts returns), so the status panel re-classifies
-		// as the user toggles it. When the options form is skipped, this is the
-		// fixed launch flag.
-		runner, err := runFormFn(form, entries, func() bool { return extractOpts().All })
+		// classifyFn reads the form's live --all and --include-untracked values
+		// (the CommitOptionsGroup writes into the opts extractOpts returns), so
+		// the status panel re-classifies as the user toggles either. When the
+		// options form is skipped, these are the fixed launch flags.
+		runner, err := runFormFn(form, entries, func() (bool, bool) {
+			o := extractOpts()
+
+			return o.All, o.IncludeUntracked
+		})
 		if err != nil {
 			return nil, tui.CommitOption{}, fmt.Errorf("failed to run the form: %w", err)
 		}

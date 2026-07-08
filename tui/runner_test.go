@@ -86,7 +86,7 @@ func TestFormRunnerView(t *testing.T) {
 
 		r := newTestRunner()
 		r.entries = []git.StatusEntry{{XY: " M", Path: "PANEL-MARKER"}}
-		r.allFn = func() bool { return false }
+		r.classifyFn = func() (bool, bool) { return false, false }
 		if !strings.Contains(r.View(), "PANEL-MARKER") {
 			t.Errorf("View() should contain the panel path; got:\n%s", r.View())
 		}
@@ -98,7 +98,7 @@ func TestFormRunnerView(t *testing.T) {
 		all := false
 		r := newTestRunner()
 		r.entries = []git.StatusEntry{{XY: " M", Path: "plop"}}
-		r.allFn = func() bool { return all }
+		r.classifyFn = func() (bool, bool) { return all, false }
 
 		if !strings.Contains(r.View(), "Changes not staged for commit:") {
 			t.Errorf("all=false: expected a 'not staged' section; got:\n%s", r.View())
@@ -113,12 +113,33 @@ func TestFormRunnerView(t *testing.T) {
 		}
 	})
 
+	t.Run("View reflects the live --include-untracked value", func(t *testing.T) {
+		t.Parallel()
+
+		iu := false
+		r := newTestRunner()
+		r.entries = []git.StatusEntry{{XY: "??", Path: "notes.md"}}
+		r.classifyFn = func() (bool, bool) { return false, iu }
+
+		if !strings.Contains(r.View(), "Untracked files:") {
+			t.Errorf("includeUntracked=false: expected an 'Untracked files:' section; got:\n%s", r.View())
+		}
+
+		iu = true
+		if strings.Contains(r.View(), "Untracked files:") {
+			t.Errorf("includeUntracked=true: 'Untracked files:' section should be gone; got:\n%s", r.View())
+		}
+		if !strings.Contains(r.View(), "new file: notes.md") {
+			t.Errorf("includeUntracked=true: untracked file should move under 'to be committed'; got:\n%s", r.View())
+		}
+	})
+
 	t.Run("no panel once the form is done (quitting/aborted)", func(t *testing.T) {
 		t.Parallel()
 
 		r := newTestRunner()
 		r.entries = []git.StatusEntry{{XY: " M", Path: "plop"}}
-		r.allFn = func() bool { return false }
+		r.classifyFn = func() (bool, bool) { return false, false }
 
 		// Precondition: while the form is active, the panel is attached.
 		if !strings.Contains(r.View(), "Current Git Status") {
@@ -141,7 +162,7 @@ func TestFormRunnerView(t *testing.T) {
 
 		r := newTestRunner()
 		r.entries = []git.StatusEntry{{XY: " M", Path: "some/longish/path/to/plop.go"}}
-		r.allFn = func() bool { return false }
+		r.classifyFn = func() (bool, bool) { return false, false }
 		r.reserveWidth = StatusPanelReserveWidth(r.entries)
 		const total = 120
 

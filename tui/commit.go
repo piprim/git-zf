@@ -16,14 +16,15 @@ import (
 // CommitOption holds commit option values for the commit options group of the TUI.
 // Used both as flag-derived defaults (input) and as user selections (output).
 type CommitOption struct {
-	Skip       bool
-	Authors    []string
-	Author     string
-	All        bool
-	Amend      bool
-	NoVerify   bool
-	Signoff    bool
-	AllowEmpty bool
+	Skip             bool
+	Authors          []string
+	Author           string
+	All              bool
+	Amend            bool
+	NoVerify         bool
+	Signoff          bool
+	AllowEmpty       bool
+	IncludeUntracked bool
 }
 
 var (
@@ -132,6 +133,7 @@ func CommitOptionsGroup(opt *CommitOption) *huh.Group {
 			Options(authorOpts...).
 			Value(&opt.Author),
 		huh.NewConfirm().Title("Stage all tracked modified/deleted files? (--all)").Value(&opt.All),
+		huh.NewConfirm().Title("Stage untracked files? (--include-untracked)").Value(&opt.IncludeUntracked),
 		huh.NewConfirm().Title("Amend last commit? (--amend)").Value(&opt.Amend),
 		huh.NewConfirm().Title("Skip hooks? (--no-verify)").Value(&opt.NoVerify),
 		huh.NewConfirm().Title("Add Signed-off-by trailer? (--signoff)").Value(&opt.Signoff),

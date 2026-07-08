@@ -99,7 +99,11 @@ func mergeUnstagedIntoStaged(staged, unstaged []statusLine) []statusLine {
 // into "Changes to be committed" (deduping a path already staged) and no
 // separate unstaged section is emitted. Untracked files are never staged by
 // -a, so they stay in their own section.
-func groupEntries(entries []git.StatusEntry, all bool) []statusGroup {
+//
+// When includeUntracked is true (the commit ran with -u/--include-untracked),
+// untracked files are folded into "Changes to be committed" as "new file:"
+// lines and the untracked section is omitted.
+func groupEntries(entries []git.StatusEntry, all, includeUntracked bool) []statusGroup {
 	var staged, unstaged, untracked, unmerged []statusLine
 
 	for _, e := range entries {
@@ -121,6 +125,18 @@ func groupEntries(entries []git.StatusEntry, all bool) []statusGroup {
 	if all {
 		staged = mergeUnstagedIntoStaged(staged, unstaged)
 		unstaged = nil
+	}
+
+	// --include-untracked stages untracked files at commit time, so they show up
+	// under "Changes to be committed" as `new file: <path>` (what git status
+	// prints once an untracked file is staged), and no separate "Untracked
+	// files:" section is emitted. Untracked paths never collide with staged
+	// paths, so a plain append is correct. Independent of the `all` fold.
+	if includeUntracked {
+		for _, ln := range untracked {
+			staged = append(staged, statusLine{Word: "new file", Path: ln.Path})
+		}
+		untracked = nil
 	}
 
 	var groups []statusGroup
@@ -169,9 +185,11 @@ func formatLine(ln statusLine) string {
 //
 // When all is true (commit -a/--all), tracked worktree changes are shown under
 // "Changes to be committed" instead of a separate "not staged" section, so the
-// panel reflects what the commit will actually include.
-func StatusPanel(entries []git.StatusEntry, all bool) string {
-	groups := groupEntries(entries, all)
+// panel reflects what the commit will actually include. When includeUntracked
+// is true (commit -u/--include-untracked), untracked files fold into "Changes
+// to be committed" as "new file:" lines and the untracked section is omitted.
+func StatusPanel(entries []git.StatusEntry, all, includeUntracked bool) string {
+	groups := groupEntries(entries, all, includeUntracked)
 	if len(groups) == 0 {
 		return ""
 	}
@@ -204,13 +222,17 @@ func StatusPanel(entries []git.StatusEntry, all bool) string {
 }
 
 // StatusPanelReserveWidth returns the widest the panel can render for these
-// entries across both the default and -a (re-classified) layouts. The form
-// reserves this so its width stays stable when the --all toggle flips the
-// panel between layouts. Returns 0 when there is nothing to show.
+// entries across every combination of the --all and --include-untracked
+// re-classifications. The form reserves this so its width stays stable when
+// either toggle flips the panel between layouts. Returns 0 when nothing shows.
 func StatusPanelReserveWidth(entries []git.StatusEntry) int {
-	w := lipgloss.Width(StatusPanel(entries, false))
-	if a := lipgloss.Width(StatusPanel(entries, true)); a > w {
-		w = a
+	w := 0
+	for _, all := range []bool{false, true} {
+		for _, includeUntracked := range []bool{false, true} {
+			if pw := lipgloss.Width(StatusPanel(entries, all, includeUntracked)); pw > w {
+				w = pw
+			}
+		}
 	}
 
 	return w

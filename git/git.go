@@ -17,12 +17,13 @@ import (
 
 // CommitOptions configures Client.Commit.
 type CommitOptions struct {
-	All        bool
-	Amend      bool
-	NoVerify   bool
-	Signoff    bool
-	AllowEmpty bool
-	Author     string // "Name <email>"; empty = git config identity
+	All              bool
+	Amend            bool
+	NoVerify         bool
+	Signoff          bool
+	AllowEmpty       bool
+	IncludeUntracked bool   // stage untracked (non-ignored) files before committing
+	Author           string // "Name <email>"; empty = git config identity
 }
 
 // Client wraps a go-git repository and exposes commit operations.
@@ -318,12 +319,48 @@ func (c *Client) Authors(ctx context.Context) ([]string, error) {
 	return list, nil
 }
 
+// stageUntracked runs `git add` on every untracked, non-ignored file so an
+// --include-untracked commit picks them up. It lists paths with
+// `ls-files --others --exclude-standard -z` (NUL-separated, .gitignore and
+// .git/info/exclude respected) and passes each as its own argv element to
+// `git add --`, so paths containing spaces are safe. An empty list is a no-op.
+func (c *Client) stageUntracked(ctx context.Context, root string) error {
+	out, err := exec.CommandContext(ctx, "git", "-C", root,
+		"ls-files", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return fmt.Errorf("list untracked files: %w", err)
+	}
+
+	var untracked []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" { // trailing element after the final NUL is empty
+			untracked = append(untracked, p)
+		}
+	}
+	if len(untracked) == 0 {
+		return nil
+	}
+
+	args := append([]string{"-C", root, "add", "--"}, untracked...)
+	if err := exec.CommandContext(ctx, "git", args...).Run(); err != nil {
+		return fmt.Errorf("stage untracked files: %w", err)
+	}
+
+	return nil
+}
+
 // Commit records a commit with msg and the given options using the system git
 // binary so that all configured hooks (pre-commit, commit-msg, post-commit) run.
 func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) error {
 	root, err := c.WorkingTreeRoot()
 	if err != nil {
 		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	if opts.IncludeUntracked {
+		if err := c.stageUntracked(ctx, root); err != nil {
+			return err // wrapped by stageUntracked; commit does not proceed
+		}
 	}
 
 	f, err := os.CreateTemp("", "git-zf-msg-*")
