@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -319,34 +320,76 @@ func (c *Client) Authors(ctx context.Context) ([]string, error) {
 	return list, nil
 }
 
-// stageUntracked runs `git add` on every untracked, non-ignored file so an
-// --include-untracked commit picks them up. It lists paths with
-// `ls-files --others --exclude-standard -z` (NUL-separated, .gitignore and
-// .git/info/exclude respected) and passes each as its own argv element to
-// `git add --`, so paths containing spaces are safe. An empty list is a no-op.
-func (c *Client) stageUntracked(ctx context.Context, root string) error {
-	out, err := exec.CommandContext(ctx, "git", "-C", root,
-		"ls-files", "--others", "--exclude-standard", "-z").Output()
-	if err != nil {
-		return fmt.Errorf("list untracked files: %w", err)
-	}
-
-	var untracked []string
-	for _, p := range strings.Split(string(out), "\x00") {
-		if p != "" { // trailing element after the final NUL is empty
-			untracked = append(untracked, p)
+// gitStderr enriches a git *exec.ExitError with its captured stderr, so wrapped
+// errors surface git's actual diagnostic instead of a bare "exit status N".
+func gitStderr(err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if s := strings.TrimSpace(string(ee.Stderr)); s != "" {
+			return fmt.Errorf("%w: %s", err, s)
 		}
 	}
-	if len(untracked) == 0 {
-		return nil
-	}
 
-	args := append([]string{"-C", root, "add", "--"}, untracked...)
-	if err := exec.CommandContext(ctx, "git", args...).Run(); err != nil {
-		return fmt.Errorf("stage untracked files: %w", err)
+	return err
+}
+
+// runGitPathspecStdin runs `git -C root <sub> --pathspec-from-file=- --pathspec-file-nul`
+// feeding the NUL-separated pathspec list (raw `ls-files -z` output) on stdin.
+// Streaming the list avoids the ARG_MAX limit an unignored build/vendor
+// directory of untracked files would otherwise hit, handles paths with spaces,
+// and surfaces git's stderr on failure. Used for both the `add` (stage) and the
+// `reset` (rollback) of the untracked set.
+func (c *Client) runGitPathspecStdin(ctx context.Context, root string, nulPaths []byte, sub string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", root, sub,
+		"--pathspec-from-file=-", "--pathspec-file-nul")
+	cmd.Stdin = bytes.NewReader(nulPaths)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if s := strings.TrimSpace(stderr.String()); s != "" {
+			return fmt.Errorf("%w: %s", err, s)
+		}
+
+		return err
 	}
 
 	return nil
+}
+
+// untrackedPaths returns the NUL-separated list of untracked, non-ignored files
+// (raw `ls-files --others --exclude-standard -z` output; .gitignore and
+// .git/info/exclude respected). Empty when the working tree has none.
+func (c *Client) untrackedPaths(ctx context.Context, root string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, "git", "-C", root,
+		"ls-files", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return nil, fmt.Errorf("list untracked files: %w", gitStderr(err))
+	}
+
+	return out, nil
+}
+
+// stageUntracked stages every untracked, non-ignored file so an
+// --include-untracked commit picks them up, and returns the raw NUL-separated
+// path list it staged (nil when there was nothing to stage). The caller keeps
+// that list so it can roll the exact paths back out of the index if the commit
+// later fails. The list is captured before staging because afterwards the files
+// are no longer "others" and cannot be re-derived.
+func (c *Client) stageUntracked(ctx context.Context, root string) ([]byte, error) {
+	paths, err := c.untrackedPaths(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	if err := c.runGitPathspecStdin(ctx, root, paths, "add"); err != nil {
+		return nil, fmt.Errorf("stage untracked files: %w", err)
+	}
+
+	return paths, nil
 }
 
 // Commit records a commit with msg and the given options using the system git
@@ -357,8 +400,10 @@ func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) err
 		return fmt.Errorf("working tree root: %w", err)
 	}
 
+	var stagedUntracked []byte
 	if opts.IncludeUntracked {
-		if err := c.stageUntracked(ctx, root); err != nil {
+		stagedUntracked, err = c.stageUntracked(ctx, root)
+		if err != nil {
 			return err // wrapped by stageUntracked; commit does not proceed
 		}
 	}
@@ -399,6 +444,18 @@ func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) err
 	}
 
 	if err := c.runInteractive(ctx, root, args...); err != nil {
+		// A failed commit (e.g. a rejecting pre-commit hook) leaves the files we
+		// staged for --include-untracked sitting in the index, where the user's
+		// next commit would silently pick them up. Roll exactly those paths back
+		// out of the index — unlike git's own --all, which commits through a
+		// temporary index and never mutates the real one on failure. Files that
+		// were already staged before the commit keep their staging.
+		if len(stagedUntracked) > 0 {
+			if rbErr := c.runGitPathspecStdin(ctx, root, stagedUntracked, "reset"); rbErr != nil {
+				return fmt.Errorf("commit failed (%w); additionally, unstaging the untracked files staged by --include-untracked failed (%v) — they remain staged", err, rbErr)
+			}
+		}
+
 		return fmt.Errorf("commit: %w", err)
 	}
 

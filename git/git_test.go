@@ -1575,3 +1575,61 @@ func TestCommitIncludeUntracked(t *testing.T) {
 		}
 	})
 }
+
+// TestCommitIncludeUntrackedRollback verifies that when --include-untracked
+// stages files but the commit then fails (here: a rejecting pre-commit hook),
+// the files it staged are rolled back to untracked so the user's next commit
+// does not silently include them — while any change that was already staged
+// beforehand is left untouched.
+func TestCommitIncludeUntrackedRollback(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+	client.io = &pkg.IO{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
+
+	// Rejecting pre-commit hook so the commit aborts after staging.
+	hookDir := filepath.Join(dir, ".git", "hooks")
+	if err := os.MkdirAll(hookDir, 0o755); err != nil {
+		t.Fatalf("mkdir hooks: %v", err)
+	}
+	writeFile(t, hookDir, "pre-commit", "#!/bin/sh\nexit 1\n")
+	if err := os.Chmod(filepath.Join(hookDir, "pre-commit"), 0o755); err != nil {
+		t.Fatalf("chmod hook: %v", err)
+	}
+
+	// A change staged BEFORE the commit that must survive the rollback.
+	writeFile(t, dir, "prestaged.go", "package main\n")
+	runGitInDir(t, dir, "add", "prestaged.go")
+
+	// An untracked file that -u stages and must roll back on failure.
+	writeFile(t, dir, "fresh.go", "package main\n")
+
+	err := client.Commit(t.Context(), []byte("feat: will be rejected"), CommitOptions{IncludeUntracked: true})
+
+	var buf bytes.Buffer
+	st := exec.CommandContext(t.Context(), "git", "status", "--porcelain")
+	st.Dir = dir
+	st.Stdout = &buf
+	if e := st.Run(); e != nil {
+		t.Fatalf("git status: %v", e)
+	}
+	status := buf.String()
+
+	t.Run("commit returns an error when the hook rejects", func(t *testing.T) {
+		if err == nil {
+			t.Error("Commit should return an error when the pre-commit hook rejects")
+		}
+	})
+
+	t.Run("staged untracked file is rolled back to untracked", func(t *testing.T) {
+		if !strings.Contains(status, "?? fresh.go") {
+			t.Errorf("fresh.go should be untracked again after rollback; status:\n%s", status)
+		}
+	})
+
+	t.Run("pre-existing staged change is preserved", func(t *testing.T) {
+		if !strings.Contains(status, "A  prestaged.go") {
+			t.Errorf("prestaged.go should remain staged after rollback; status:\n%s", status)
+		}
+	})
+}
