@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
@@ -66,7 +67,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug string) err
 	}
 
 	// Detect reviewer commits on <issueSlug>@review.
-	reviewBranch := issueSlug + "@review"
+	reviewBranch := branch.ReviewBranchName(issueSlug)
 	var featureBranch string
 
 	branches, branchErr := deps.store.ListBranches(ctx, store.BranchStatusAll)

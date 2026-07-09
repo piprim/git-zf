@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
@@ -66,7 +67,7 @@ func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) er
 	}
 
 	// Detect whether reviewer pushed commits to <issueSlug>@review.
-	reviewBranch := issueSlug + "@review"
+	reviewBranch := branch.ReviewBranchName(issueSlug)
 	hasCommits := false
 
 	branches, branchErr := deps.store.ListBranches(ctx, store.BranchStatusAll)

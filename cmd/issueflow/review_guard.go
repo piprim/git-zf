@@ -2,8 +2,8 @@ package issueflow
 
 import (
 	"context"
-	"strings"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 )
@@ -33,7 +33,7 @@ func PendingReviewCommits(ctx context.Context, client *git.Client, slug, feature
 		return nil, nil
 	}
 
-	reviewBranch := slug + "@review"
+	reviewBranch := branch.ReviewBranchName(slug)
 	effective := ""
 	localExists, _ := client.BranchExists(reviewBranch)
 	if localExists {
@@ -93,7 +93,7 @@ func PendingReviewForHEAD(ctx context.Context, client *git.Client, s *store.Stor
 	if err != nil || branchName == "" {
 		return nil, "", nil
 	}
-	if strings.HasSuffix(branchName, "@review") {
+	if branch.IsReviewBranch(branchName) {
 		return nil, "", nil
 	}
 	if inProgress, mhErr := client.MergeInProgress(); mhErr == nil && inProgress {

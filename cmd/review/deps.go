@@ -3,7 +3,6 @@ package review
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
@@ -100,7 +99,7 @@ func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, 
 		// follows the <IssueID>@review convention.
 		result = append(result, store.BranchRow{
 			IssueSlug:  issueID,
-			BranchName: issueID + "@review",
+			BranchName: branch.ReviewBranchName(issueID),
 			Title:      issueID,
 		})
 	}
@@ -196,8 +195,8 @@ func currentIssueSlug(client currentBrancher) string {
 		return ""
 	}
 	// Review branch: "<issueSlug>@review"
-	if strings.HasSuffix(name, "@review") {
-		return strings.TrimSuffix(name, "@review")
+	if slug, ok := branch.CutReviewSuffix(name); ok {
+		return slug
 	}
 	// Feature branch: "<issueSlug>@<type>@<slug>[@<variant>]"
 	if b, err := branch.Parse(name); err == nil {

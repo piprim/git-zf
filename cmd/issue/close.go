@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
@@ -377,7 +378,7 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 			picked.IssueSlug, ref.Round, ref.Round+1, ErrReviewChangesRequested)
 
 	case store.ReviewStatusApproved:
-		reviewBranch := picked.IssueSlug + "@review"
+		reviewBranch := branch.ReviewBranchName(picked.IssueSlug)
 
 		// Resolve pending reviewer commits through the shared helper so a stale
 		// local <slug>@review never shadows a fresher origin/<slug>@review

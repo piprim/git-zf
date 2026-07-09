@@ -50,7 +50,7 @@ func runTrack(ctx context.Context, deps reviewDeps) error {
 		return fmt.Errorf("get current branch: %w", err)
 	}
 
-	if strings.HasSuffix(currentBranch, "@review") {
+	if branch.IsReviewBranch(currentBranch) {
 		return runTrackReviewer(ctx, deps, currentBranch)
 	}
 
@@ -110,7 +110,7 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 // runTrackReviewer registers a manually-created review branch in the git-zf
 // store so the reviewer can run approve/reject without having used review start.
 func runTrackReviewer(ctx context.Context, deps reviewDeps, branchName string) error {
-	issueSlug := strings.TrimSuffix(branchName, "@review")
+	issueSlug, _ := branch.CutReviewSuffix(branchName)
 
 	// Fetch review refs best-effort so we see the developer's lock signal.
 	if err := deps.client.FetchReviewRefs(ctx); err != nil {

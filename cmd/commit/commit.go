@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
@@ -216,7 +215,7 @@ func issueHintFromClient(c Committer) commitpkg.IssueHint {
 	// Review branches ("<issueSlug>@review") are not feature-branch shaped, so
 	// branch.Parse rejects them. Recognise the suffix and prefill the issue ID
 	// from the slug; the reviewer chooses the commit type themselves.
-	if slug, ok := strings.CutSuffix(name, "@review"); ok {
+	if slug, ok := branch.CutReviewSuffix(name); ok {
 		return commitpkg.IssueHint{IssueID: slug}
 	}
 

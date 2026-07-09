@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -75,7 +76,7 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 		return fmt.Errorf("issue %q is not awaiting review (current status: %s)", issueSlug, ref.Status)
 	}
 
-	reviewBranch := issueSlug + "@review"
+	reviewBranch := branch.ReviewBranchName(issueSlug)
 	if exists, _ := deps.client.BranchExists(reviewBranch); exists {
 		return fmt.Errorf("branch %q already exists — review already started", reviewBranch)
 	}

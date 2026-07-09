@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/git"
@@ -174,7 +175,7 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 	}
 
 	// Delete any stale review branch from a previous rejected round.
-	reviewBranch := issueSlug + "@review"
+	reviewBranch := branch.ReviewBranchName(issueSlug)
 	if exists, _ := deps.client.BranchExists(reviewBranch); exists {
 		if err := deps.client.DeleteLocalBranch(ctx, reviewBranch, true); err != nil {
 			fmt.Fprintf(deps.client.IO().Err, "warning: delete stale %s: %v\n", reviewBranch, err)

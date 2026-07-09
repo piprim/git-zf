@@ -3,8 +3,8 @@ package review
 import (
 	"context"
 	"fmt"
-	"strings"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +34,7 @@ func (r Review) getGuardCmd() *cobra.Command {
 
 func runReviewGuard(ctx context.Context, deps reviewDeps, branchName string) error {
 	// Reviewer's own branch — always allow.
-	if strings.HasSuffix(branchName, "@review") {
+	if branch.IsReviewBranch(branchName) {
 		return nil
 	}
 
