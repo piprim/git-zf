@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -83,6 +84,11 @@ var ErrBranchLockedForReview = errors.New("branch locked for review")
 // ErrReviewChangesRequested is returned by reviewPreflight when the reviewer
 // has requested changes. Use errors.Is to detect it.
 var ErrReviewChangesRequested = errors.New("reviewer requested changes")
+
+// ErrReviewSyncNeeded is returned by reviewPreflight when reviewer commits on
+// the @review branch conflict with the feature branch (or the tree is dirty)
+// and the developer must run `git zf review sync` before closing.
+var ErrReviewSyncNeeded = errors.New("review sync needed")
 
 // mergeContext bundles inputs for doMerge / doSquashCommit so each helper
 // stays under the revive argument-limit while keeping inputs immutable.
@@ -373,37 +379,71 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 	case store.ReviewStatusApproved:
 		reviewBranch := picked.IssueSlug + "@review"
 
-		// Resolve the effective review branch ref for CommitsAhead and
-		// FastForwardOnly. The reviewer may have pushed their review branch to
-		// origin without the developer ever checking it out locally; in that case
-		// use the remote tracking ref (origin/<reviewBranch>) so the incorporation
-		// is not silently skipped.
+		// Resolve pending reviewer commits through the shared helper so a stale
+		// local <slug>@review never shadows a fresher origin/<slug>@review
+		// (reviewer pushed or force-pushed after the developer's checkout).
+		pending, pendErr := issueflow.PendingReviewCommits(ctx, deps.client, picked.IssueSlug, picked.BranchName)
+		if pendErr != nil {
+			return fmt.Errorf("detect pending review commits: %w", pendErr)
+		}
+
 		localExists, _ := deps.client.BranchExists(reviewBranch)
-		effectiveReview := reviewBranch
-		if !localExists {
-			if remote, _ := deps.client.Remote(); remote != "" {
-				candidate := remote + "/" + reviewBranch
-				if _, err := deps.client.ResolveRef("refs/remotes/" + candidate); err == nil {
-					effectiveReview = candidate
+		remoteTrackingExists := false
+		if remote, _ := deps.client.Remote(); remote != "" {
+			if _, err := deps.client.ResolveRef("refs/remotes/" + remote + "/" + reviewBranch); err == nil {
+				remoteTrackingExists = true
+			}
+		}
+
+		if pending != nil {
+			m, mErr := deps.client.CommitsAhead(ctx, picked.BranchName, pending.EffectiveRef)
+			if mErr != nil {
+				return fmt.Errorf("check review divergence: %w", mErr)
+			}
+			switch {
+			case m == 0:
+				// Feature branch has not moved — plain fast-forward as before.
+				fmt.Fprintf(deps.client.IO().Out,
+					"Incorporating %d reviewer commit(s) from %s into %s...\n",
+					pending.Commits, pending.EffectiveRef, picked.BranchName)
+				if err := deps.client.FastForwardOnly(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
+					return fmt.Errorf("fast-forward %s to %s: %w", picked.BranchName, pending.EffectiveRef, err)
+				}
+			default:
+				// Diverged: dry-run first; close never leaves MERGE_HEAD behind.
+				conflicts, dryErr := deps.client.MergeDryRun(ctx, pending.EffectiveRef, picked.BranchName)
+				if dryErr != nil {
+					return fmt.Errorf("review merge dry-run: %w", dryErr)
+				}
+				if len(conflicts) > 0 {
+					return fmt.Errorf(
+						"reviewer commits on %s conflict with %q (%s).\n"+
+							"Run 'git zf review sync', resolve the conflicts, then close: %w",
+						pending.EffectiveRef, picked.BranchName, strings.Join(conflicts, ", "), ErrReviewSyncNeeded)
+				}
+				if dirty, dErr := deps.client.IsDirty(ctx); dErr == nil && dirty {
+					return fmt.Errorf(
+						"working tree has uncommitted changes — cannot incorporate %s.\n"+
+							"Run 'git stash', then retry the close: %w", pending.EffectiveRef, ErrReviewSyncNeeded)
+				}
+				fmt.Fprintf(deps.client.IO().Out,
+					"Merging %d reviewer commit(s) from %s into %s...\n",
+					pending.Commits, pending.EffectiveRef, picked.BranchName)
+				if err := deps.client.MergeForward(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
+					_ = deps.client.AbortMerge(ctx)
+					return fmt.Errorf("merge %s into %s: %w", pending.EffectiveRef, picked.BranchName, err)
 				}
 			}
 		}
 
-		if localExists || effectiveReview != reviewBranch {
-			n, countErr := deps.client.CommitsAhead(ctx, effectiveReview, picked.BranchName)
-			if countErr == nil && n > 0 {
-				fmt.Fprintf(deps.client.IO().Out,
-					"Incorporating %d reviewer commit(s) from %s into %s...\n",
-					n, reviewBranch, picked.BranchName)
-				if err := deps.client.FastForwardOnly(ctx, effectiveReview, picked.BranchName); err != nil {
-					return fmt.Errorf("fast-forward %s to %s: %w", picked.BranchName, reviewBranch, err)
-				}
+		// Cleanup mirrors today's behavior: delete the local review branch when it
+		// exists, and push a remote delete when any review branch was known.
+		if localExists {
+			if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
+				fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
 			}
-			if localExists {
-				if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
-					fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
-				}
-			}
+		}
+		if localExists || remoteTrackingExists {
 			_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
 		}
 		// Always clean up the review ref (local + remote) on close, regardless

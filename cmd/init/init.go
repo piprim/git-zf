@@ -30,6 +30,38 @@ done
 exit 0
 `
 
+// preCommitHookScript is the shell script written to .git/hooks/pre-commit.
+// It calls `git zf review guard-commit`, which blocks new commits on a feature
+// branch while reviewer commits on <slug>@review await incorporation.
+const preCommitHookScript = `#!/bin/sh
+# git-zf review commit guard — installed by 'git zf init'
+# Requires: git zf install (binary in git exec-path)
+if ! git zf review guard-commit; then
+    exit 1
+fi
+exit 0
+`
+
+// hookSpec describes one hook managed by `git zf init`.
+type hookSpec struct {
+	name    string // file name under .git/hooks/
+	script  string // full managed script body
+	snippet string // line to suggest when a foreign hook already exists
+}
+
+var managedHooks = []hookSpec{
+	{
+		name:    "pre-push",
+		script:  prePushHookScript,
+		snippet: `  git zf review guard "$(echo "$local_ref" | sed 's|^refs/heads/||')"`,
+	},
+	{
+		name:    "pre-commit",
+		script:  preCommitHookScript,
+		snippet: `  git zf review guard-commit || exit 1`,
+	},
+}
+
 // Init is the `git zf init` command.
 type Init struct{}
 
@@ -40,13 +72,15 @@ func New() Init { return Init{} }
 func (i Init) GetRootCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Initialize git-zf in the current repository (installs the pre-push hook)",
-		Long: `Install the git-zf pre-push hook into the current repository.
+		Short: "Initialize git-zf in the current repository (installs the pre-push and pre-commit hooks)",
+		Long: `Install the git-zf pre-push and pre-commit hooks into the current repository.
 
-The hook calls 'git zf review guard' before every push, blocking pushes to
-branches that are locked for code review.
+The pre-push hook calls 'git zf review guard' before every push, blocking pushes to
+branches that are locked for code review. The pre-commit hook calls 'git zf review
+guard-commit', which blocks new commits on a feature branch while reviewer commits
+await incorporation.
 
-Works correctly in git submodules: the hook is written to the submodule's own
+Works correctly in git submodules: the hooks are written to the submodule's own
 git directory (resolved via 'git rev-parse --git-dir'), not the parent repo.
 
 Run 'git zf install' first to make the 'git zf' binary available in the git
@@ -73,40 +107,48 @@ func (i Init) runE(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolve git dir: %w", err)
 	}
 
-	hookPath := filepath.Join(gitDir, "hooks", "pre-push")
+	for _, h := range managedHooks {
+		if err := installHook(cmd, gitDir, h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-	// If a hook already exists, check whether it is ours.
+// installHook writes one managed hook, preserving foreign hooks. Mirrors the
+// original single-hook logic: byte-identical → up-to-date no-op; foreign hook
+// → never overwrite, print the snippet to add manually; missing → write.
+func installHook(cmd *cobra.Command, gitDir string, h hookSpec) error {
+	hookPath := filepath.Join(gitDir, "hooks", h.name)
+
 	if info, err := os.Stat(hookPath); err == nil {
 		existing, readErr := os.ReadFile(hookPath) //nolint:gosec
 		if readErr == nil {
-			if string(existing) == prePushHookScript {
-				fmt.Fprintf(cmd.OutOrStdout(), "Pre-push hook already up to date at %s\n", hookPath)
+			if string(existing) == h.script {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s hook already up to date at %s\n", h.name, hookPath)
 				return nil
 			}
-			// Foreign hook: ensure it is at least executable, then warn.
 			if info.Mode()&0o111 == 0 {
 				_ = os.Chmod(hookPath, info.Mode()|0o755)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
-				"WARNING: a pre-push hook already exists at %s\n"+
-					"The git-zf lock guard was NOT installed to avoid overwriting your hook.\n"+
-					"To enable the guard, add this to your existing hook:\n\n"+
-					"  git zf review guard \"$(echo \"$local_ref\" | sed 's|^refs/heads/||')\"\n",
-				hookPath)
+				"WARNING: a %s hook already exists at %s\n"+
+					"The git-zf guard was NOT installed to avoid overwriting your hook.\n"+
+					"To enable the guard, add this to your existing hook:\n\n%s\n",
+				h.name, hookPath, h.snippet)
 			return nil
 		}
 	}
 
-	// Ensure the hooks directory exists (submodules and bare repos may not have it).
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
 		return fmt.Errorf("create hooks dir: %w", err)
 	}
 
 	//nolint:gosec // hook script is a compile-time constant
-	if err := os.WriteFile(hookPath, []byte(prePushHookScript), 0o755); err != nil {
-		return fmt.Errorf("write pre-push hook: %w", err)
+	if err := os.WriteFile(hookPath, []byte(h.script), 0o755); err != nil {
+		return fmt.Errorf("write %s hook: %w", h.name, err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Pre-push hook installed at %s\n", hookPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "%s hook installed at %s\n", h.name, hookPath)
 	return nil
 }

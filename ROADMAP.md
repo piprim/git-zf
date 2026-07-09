@@ -36,7 +36,4 @@ Still a placeholder (`cmd/branch/branch.go:mergeRunE`). The original bug-section
 
 ## To be discuss
 
-- Clossing an issue, the subject should include the ticket subject
-- Add option in `git zf commit` to add untracked files.
-- On `git zf commit` a the list of file to be commited (like `git status`)
-- Ajouter dans la conf de redimne les tracker pour "En cours de dev", "À Revue/tester", "En cours de revue", "Tester/revue" pour automatiser le wf de revue de code.
+- Add the trackers for “Under development”, “To be reviewed/tested”, “Under review”, “Test/review” to the redimne conf to automate the code review workflow.

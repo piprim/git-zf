@@ -120,6 +120,12 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 	}
 	defer func() { _ = s.Close() }()
 
+	if !flags.NoVerify {
+		if err := guardPendingReview(cmd.Context(), client, s, newHuhReviewConfirm()); err != nil {
+			return err
+		}
+	}
+
 	hint.IssueSubject = issueTitleFromStore(cmd.Context(), s, hint.IssueID)
 
 	prefill := hint.Prefill(c.appConfig.CommitMessage)

@@ -26,6 +26,8 @@ func (c *captureReviewPrompter) PickBranch(ctx context.Context, title string, br
 	return c.scriptedReviewPrompter.PickBranch(ctx, title, branches, current)
 }
 
+func (c *captureReviewPrompter) Confirm(_ context.Context, _ string) (bool, error) { return true, nil }
+
 // seedMergedElsewhere inserts an in-progress issue+branch into the store and
 // stamps its branch ref Merged=true, simulating a clone that closed it (the ref
 // is the cross-machine source of truth; this clone's store still lags).

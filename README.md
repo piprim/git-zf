@@ -71,6 +71,8 @@ Flags:
 
 If any commit flag is passed, the options page of the TUI form is skipped and the flags are used directly.
 
+**Review guard** — if the current branch is a feature branch (not `<IssueID>@review`) with unincorporated reviewer commits (a decided review — `approved` or `changes_requested` — where `<IssueID>@review` carries commits not yet in your branch), `git zf commit` offers to merge them in before opening the commit form. Declining aborts the commit with a hint to run `git zf review sync` first. `--no-verify` skips the guard entirely, same as it bypasses the pre-commit hook (see [Init](#init)).
+
 ### Issue
 ```
 $ git zf issue
@@ -274,6 +276,72 @@ $ git zf branch prune-tracker --safe-delete            # CI: safe-delete every c
 $ git zf branch prune-tracker --force-delete --base main
 ```
 
+### Review
+```
+$ git zf review start     # reviewer: create <IssueID>@review from the locked snapshot
+$ git zf review request   # developer: submit an issue branch for review (locks it)
+$ git zf review approve   # reviewer: approve — the branch is ready to close
+$ git zf review reject    # reviewer: request changes — unlocks the branch
+$ git zf review list      # list issues currently in review or approved
+$ git zf review status    # show the round-by-round history for an issue
+$ git zf review fetch     # fetch review refs from the remote, reconcile the store
+$ git zf review sync      # bring a branch up to date: reviewer commits + parent drift
+$ git zf review track     # register a branch created with plain git checkout
+```
+
+Peer-to-peer code review with no server-side component. Review state lives in git refs under `refs/zf/reviews/<IssueID>` — a JSON blob holding the status, the round number, the feature HEAD SHA captured at lock time, and the reviewer identity — pushed to and fetched from the remote. The refs are the source of truth; the local SQLite store is only a cache. Ref writes and pushes use compare-and-swap, so two machines cannot silently overwrite each other's decision.
+
+A review round:
+
+1. **Developer** — `git zf review request`. A picker lists in-progress branches not already in review; the chosen issue gets a review ref with status `in_review`. The feature branch is now **locked**: the pre-push hook installed by [`git zf init`](#init) rejects pushes to it until the reviewer decides (bypass: `git push --no-verify`).
+2. **Reviewer** — `git fetch && git zf review start`. A picker lists issues awaiting review; git-zf creates `<IssueID>@review` at the exact SHA captured at lock time and records the reviewer identity in the ref. Review the code; optionally commit fixes on the `@review` branch.
+3. **Reviewer decides**:
+   - `review approve` — status becomes `approved`; the developer can now run `git zf issue close`. Commits the reviewer pushed on the `@review` branch are incorporated on close: a fast-forward when the feature branch hasn't moved, or an automatic merge when it has diverged and merges cleanly. If the diverged merge conflicts, close refuses with a hint to run `git zf review sync`, resolve, and retry — close never leaves a merge in progress.
+   - `review reject` — status becomes `changes_requested` and the feature branch is unlocked. An empty `@review` branch is deleted (locally and on the remote); if it carries reviewer commits it is kept so the developer can inspect (`git log <feature>..<IssueID>@review`) and cherry-pick before the next round. After a reject that leaves reviewer commits behind, **new commits on the feature branch are blocked** (the commit guard and the pre-commit hook installed by [`git zf init`](#init) both refuse) until `git zf review sync` incorporates them; bypass: `git commit --no-verify` / `git zf commit --no-verify`.
+4. **Next round** — the developer pushes fixes and runs `git zf review request` again: the round counter increments and any stale `@review` branch from the previous round is removed. If that branch still carries unincorporated reviewer commits, the request refuses to delete them; an interactive run offers to merge them on the spot before proceeding.
+
+If an issue tracker is configured and the issue originated from it, `request`, `approve`, and `reject` also propose updating the issue's tracker status after the action.
+
+`review request`, `review approve` and `review reject` flags:
+```
+--no-push   skip the post-action push proposal
+--push      push the resulting branch to the remote after the action (skips the prompt)
+```
+
+**`review list`** — reads `refs/zf/reviews/*` directly (works on a fresh clone with an empty store) and prints every issue whose status is `in_review` or `approved`, with its round number.
+
+**`review status`** — picker over issues with review history, then a round-by-round listing: status, reviewer, opened/resolved timestamps, and whether the reviewer pushed commits. The latest round is reconciled from the ref, so decisions made on another machine show up.
+
+**`review fetch`** — fetch `refs/zf/reviews/*` from the remote (pruning refs deleted remotely) and reconcile the local store. The interactive review commands fetch on their own; use this before scripting around review state.
+
+**`review sync`** — brings any in-progress branch up to date; the picker pre-selects the branch you're currently on. Two steps run in order:
+
+1. **Reviewer commits** — if a decision (`approved` or `changes_requested`) says `<IssueID>@review` carries commits not yet in the feature branch, they are merged in directly, without a confirm prompt (unlike the offer flow in [Commit](#commit), sync is picker-driven, not interactive). On conflicts the merge is left in progress with conflict markers in the working tree — resolve them, then run `git zf commit` to conclude the merge.
+2. **Parent drift** — for sub-task branches only: merges the parent integration branch (read as `origin/<parent>` to catch teammates' pushes) into the sub-task. On conflicts the merge is aborted and reported — nothing is left half-merged.
+
+A dirty working tree refuses step 1 outright, with a `git stash` → `git zf review sync` → `git stash pop` hint; a parent-only sync (step 2) is not pre-flighted for a dirty tree.
+
+**`review track`** — register the current branch in the git-zf store without creating anything. Use it when the branch was created with plain `git checkout` instead of `git zf issue start` / `git zf review start`, so the review commands can find it.
+
+There are also two hidden internal subcommands. `review guard <branch>` — the pre-push hook calls it for every pushed branch, and it exits non-zero when the branch is locked (`in_review`). `review guard-commit` — the pre-commit hook calls it before every commit, and it exits non-zero when the current branch has reviewer commits on `<IssueID>@review` awaiting incorporation. Both fail open on store or fetch errors; `review guard-commit` also exempts `@review` branches themselves and commits that conclude an in-progress merge (that's exactly how incorporation happens).
+
+### Init
+```
+$ git zf init
+```
+
+Install the git-zf pre-push and pre-commit hooks into the current repository (see [Review](#review)):
+
+- **pre-push** calls `git zf review guard` before every push, blocking pushes to branches that are locked for code review. Bypass: `git push --no-verify`.
+- **pre-commit** calls `git zf review guard-commit` before every commit, blocking commits on a feature branch while reviewer commits on `<IssueID>@review` await incorporation. Bypass: `git commit --no-verify`.
+
+Both hooks share the same install policy:
+
+- Run `git zf install` first so the `git zf` binary is available in the git exec-path, then run `git zf init` once per repository (and per submodule).
+- Works correctly in git submodules and linked worktrees: each hook is written to the repository's real git directory (resolved via `git rev-parse --git-dir`), not the parent repo.
+- Re-running the command is safe: a hook that is already installed and up to date is left untouched (idempotent, checked independently per hook).
+- If a foreign hook already exists for either file, it is **not** overwritten; a warning prints the snippet to add to your existing hook instead (`git zf review guard "..."` for pre-push, `git zf review guard-commit || exit 1` for pre-commit).
+
 ### Config
 ```
 $ git zf config show
@@ -335,13 +403,15 @@ Available Commands:
   completion  Generate completion script
   config      Manage git-zf configuration
   help        Help about any command
-  install     Install this tool to git-core as git-zf
-  uninstall   uninstall this tool from git-core
+  init        Initialize git-zf in the current repository (installs the pre-push and pre-commit hooks)
+  install     Install this tool to git-core as zf
   issue       Manage issues
+  review      Manage the code review lifecycle for an issue branch
+  uninstall   uninstall zf from git-core
   version     Print version information and quit
 
 Flags:
-  -d, --debug   debug mode, output debug info to debug.log
+  -d, --debug   debug mode, print debug info to stdout
   -h, --help    help for git-zf
 ```
 

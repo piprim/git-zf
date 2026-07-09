@@ -154,6 +154,28 @@ func (r *closeTestRig) addBranch(t *testing.T, name string) {
 	}
 }
 
+// mustRunGitAt runs a git command in dir, failing the test on error. Shared
+// helper for tests that need ad-hoc git operations beyond what closeTestRig
+// exposes (e.g. creating a review branch with its own commits).
+func mustRunGitAt(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// writeFileAt writes content to name under dir, failing the test on error.
+func writeFileAt(t *testing.T, dir, name, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
 // assertHeadSubject asserts the subject line of HEAD on branch matches want.
 func assertHeadSubject(t *testing.T, dir, branch, want string) {
 	t.Helper()
@@ -1587,3 +1609,95 @@ func TestClose_ProposesPushOfMergeTarget(t *testing.T) {
 	})
 }
 
+// TestClose_ReviewPreflight_DivergedCleanAutoMerges verifies that when the
+// feature branch has moved on since the review branch was created (diverged,
+// not a simple fast-forward), reviewPreflight falls back to a real merge
+// (MergeForward) as long as the merge is conflict-free, incorporating the
+// reviewer's commits without developer intervention.
+func TestClose_ReviewPreflight_DivergedCleanAutoMerges(t *testing.T) {
+	rig := newCloseRig(t)
+	slug := rig.pickedBranchRow().IssueSlug
+	feature := rig.pickedBranchRow().BranchName
+
+	// Reviewer branch with a commit touching a reviewer-only file.
+	mustRunGitAt(t, rig.dir, "checkout", "-b", slug+"@review", feature)
+	writeFileAt(t, rig.dir, "reviewer-only.txt", "r\n")
+	mustRunGitAt(t, rig.dir, "add", "reviewer-only.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "fix: reviewer nit")
+	// Developer continues on the feature branch (non-conflicting file) → diverged.
+	mustRunGitAt(t, rig.dir, "checkout", feature)
+	writeFileAt(t, rig.dir, "dev-later.txt", "d\n")
+	mustRunGitAt(t, rig.dir, "add", "dev-later.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "feat: more work")
+
+	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
+
+	err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
+
+	t.Run("preflight succeeds via real merge", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("reviewPreflight: %v", err)
+		}
+	})
+	t.Run("reviewer commit incorporated", func(t *testing.T) {
+		n, cErr := rig.client.CommitsAhead(t.Context(), slug+"@review", feature)
+		// branch may already be deleted by cleanup; only check when it survives
+		if cErr == nil && n != 0 {
+			t.Fatalf("want 0 pending, got %d", n)
+		}
+	})
+	t.Run("review ref cleaned up", func(t *testing.T) {
+		ref, _, _ := rig.client.ReadReviewRef(t.Context(), slug)
+		if ref != nil {
+			t.Fatalf("want review ref deleted, got %+v", ref)
+		}
+	})
+}
+
+// TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint verifies that
+// when the reviewer's commits conflict with the developer's own commits on
+// the feature branch, reviewPreflight refuses to close: it never leaves
+// MERGE_HEAD behind, it wraps ErrReviewSyncNeeded, and the review ref survives
+// so a subsequent `git zf review sync` can pick up where this left off.
+func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T) {
+	rig := newCloseRig(t)
+	slug := rig.pickedBranchRow().IssueSlug
+	feature := rig.pickedBranchRow().BranchName
+
+	// Reviewer and developer edit the same file differently → conflict.
+	mustRunGitAt(t, rig.dir, "checkout", "-b", slug+"@review", feature)
+	writeFileAt(t, rig.dir, "clash.txt", "reviewer\n")
+	mustRunGitAt(t, rig.dir, "add", "clash.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "fix: reviewer version")
+	mustRunGitAt(t, rig.dir, "checkout", feature)
+	writeFileAt(t, rig.dir, "clash.txt", "developer\n")
+	mustRunGitAt(t, rig.dir, "add", "clash.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "feat: developer version")
+
+	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
+
+	err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
+
+	t.Run("refused with ErrReviewSyncNeeded", func(t *testing.T) {
+		if !errors.Is(err, ErrReviewSyncNeeded) {
+			t.Fatalf("want ErrReviewSyncNeeded, got %v", err)
+		}
+	})
+	t.Run("sync hint present", func(t *testing.T) {
+		if err == nil || !strings.Contains(err.Error(), "git zf review sync") {
+			t.Fatalf("want sync hint, got %v", err)
+		}
+	})
+	t.Run("repo left clean (no MERGE_HEAD)", func(t *testing.T) {
+		inProgress, _ := rig.client.MergeInProgress()
+		if inProgress {
+			t.Fatal("close must never leave a merge in progress")
+		}
+	})
+	t.Run("review ref NOT cleaned up", func(t *testing.T) {
+		ref, _, _ := rig.client.ReadReviewRef(t.Context(), slug)
+		if ref == nil {
+			t.Fatal("review ref must survive a refused close")
+		}
+	})
+}

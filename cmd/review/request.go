@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -75,6 +76,38 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 		return nil
 	}
 
+	// Best-effort branch fetch so origin/<slug>@review is visible for the
+	// pending-review offer (review refs were already fetched above).
+	if remote, _ := deps.client.Remote(); remote != "" {
+		_ = deps.client.Fetch(ctx)
+	}
+
+	if pending, pErr := issueflow.PendingReviewCommits(ctx, deps.client, picked.IssueSlug, picked.BranchName); pErr == nil && pending != nil {
+		ok, cErr := prompter.Confirm(ctx, fmt.Sprintf(
+			"%s has %d reviewer commit(s) not in %q — merge now?",
+			pending.EffectiveRef, pending.Commits, picked.BranchName))
+		if cErr != nil {
+			return fmt.Errorf("merge confirm: %w", cErr)
+		}
+		if !ok {
+			return fmt.Errorf("request aborted: run 'git zf review sync' to incorporate reviewer commits first")
+		}
+		if dirty, dErr := deps.client.IsDirty(ctx); dErr == nil && dirty {
+			return fmt.Errorf("working tree has uncommitted changes — cannot merge %s.\n"+
+				"Run 'git stash', then 'git zf review sync', then 'git stash pop'", pending.EffectiveRef)
+		}
+		if mErr := deps.client.MergeLeaveConflicts(ctx, pending.EffectiveRef, picked.BranchName); mErr != nil {
+			if errors.Is(mErr, git.ErrMergeConflicts) {
+				fmt.Fprintf(deps.client.IO().Out,
+					"Merge left in progress with conflicts.\n"+
+						"Resolve the conflict markers, then run 'git zf commit' to conclude the merge.\n")
+				return nil
+			}
+			return mErr
+		}
+		fmt.Fprintf(deps.client.IO().Out, "Reviewer commits incorporated into %q.\n", picked.BranchName)
+	}
+
 	if err := runReviewRequest(ctx, deps, picked.IssueSlug); err != nil {
 		return err
 	}
@@ -122,6 +155,22 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 	featureSHA, err := deps.client.ResolveRef("refs/heads/" + featureBranch)
 	if err != nil {
 		return fmt.Errorf("resolve feature branch HEAD: %w", err)
+	}
+
+	// Refuse to delete reviewer work that was never incorporated. This is the
+	// safety net; the interactive wrapper offers an inline merge first.
+	// A detection error must also refuse (fail closed) since we're about to
+	// irreversibly delete the local and remote review branch below.
+	pending, pErr := issueflow.PendingReviewCommits(ctx, deps.client, issueSlug, featureBranch)
+	if pErr != nil {
+		return fmt.Errorf("detect pending review commits: %w", pErr)
+	}
+	if pending != nil {
+		return fmt.Errorf(
+			"%s has %d unincorporated reviewer commit(s) from the previous round.\n"+
+				"Run 'git zf review sync' to incorporate them first "+
+				"(or delete the branch to discard them), then re-request",
+			pending.EffectiveRef, pending.Commits)
 	}
 
 	// Delete any stale review branch from a previous rejected round.

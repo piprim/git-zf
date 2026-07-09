@@ -25,6 +25,10 @@ type ReviewPrompter interface {
 	// status name (or "" to skip). Used by request/approve/reject to update the
 	// originating tracker, mirroring issue close.
 	PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error)
+
+	// Confirm presents a yes/no confirmation with the given title. Used by the
+	// request flow to offer merging pending reviewer commits before re-requesting.
+	Confirm(ctx context.Context, title string) (bool, error)
 }
 
 // Compile-time check.
@@ -58,6 +62,15 @@ func (p *huhReviewPrompter) PickTrackerStatus(ctx context.Context, issueID, trac
 	return selected, nil
 }
 
+func (p *huhReviewPrompter) Confirm(ctx context.Context, title string) (bool, error) {
+	confirmed := true
+	form := huh.NewForm(huh.NewGroup(huh.NewConfirm().Title(title).Value(&confirmed)))
+	if err := form.RunWithContext(ctx); err != nil {
+		return false, fmt.Errorf("confirm form: %w", err)
+	}
+	return confirmed, nil
+}
+
 // scriptedReviewPrompter is the canned-response prompter used by review E2E tests.
 type scriptedReviewPrompter struct {
 	Branch           *store.BranchRow
@@ -66,6 +79,8 @@ type scriptedReviewPrompter struct {
 	BranchErr        error
 	IssueErr         error
 	TrackerStatusErr error
+	ConfirmAnswer    bool
+	ConfirmErr       error
 }
 
 var _ ReviewPrompter = (*scriptedReviewPrompter)(nil)
@@ -89,4 +104,11 @@ func (s *scriptedReviewPrompter) PickTrackerStatus(_ context.Context, _, _ strin
 		return "", s.TrackerStatusErr
 	}
 	return s.TrackerStatus, nil
+}
+
+func (s *scriptedReviewPrompter) Confirm(_ context.Context, _ string) (bool, error) {
+	if s.ConfirmErr != nil {
+		return false, s.ConfirmErr
+	}
+	return s.ConfirmAnswer, nil
 }
