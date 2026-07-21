@@ -2,7 +2,6 @@
 
 ## Enhancement
 
-- Actually before `git zf review start` the reviewer must do a `git fetch` manually. Make the `git zf review start` auto fetch 
 - `git zf review reject` should permit to add a md file or a comment for explanation
 - **Reviewer-initiated close**: allow a reviewer (or any team member) to close
   an issue they didn't start. Currently `issue close` requires the branch to be
