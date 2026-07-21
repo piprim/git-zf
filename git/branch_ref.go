@@ -141,3 +141,48 @@ func (c *Client) PushBranchRef(ctx context.Context, issueSlug string) error {
 
 	return nil
 }
+
+// ListBranchRefs returns all locally available branch refs (refs/zf/branches/*).
+// Call FetchBranchRefs first to refresh the namespace from the remote. Returns
+// an empty slice (not an error) when none exist; malformed blobs are skipped.
+// Mirrors ListReviewRefs.
+func (c *Client) ListBranchRefs(ctx context.Context) ([]BranchRef, error) {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return nil, fmt.Errorf("working tree root: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", root,
+		"for-each-ref", "--format=%(objectname) %(refname)", branchRefPrefix)
+	out, err := cmd.Output()
+	if err != nil {
+		// No refs exist yet — return empty slice, not an error.
+		return []BranchRef{}, nil
+	}
+
+	result := []BranchRef{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		sha := parts[0]
+
+		catCmd := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", sha)
+		blobOut, catErr := catCmd.Output()
+		if catErr != nil {
+			continue // skip malformed ref
+		}
+
+		var ref BranchRef
+		if jsonErr := json.Unmarshal(blobOut, &ref); jsonErr != nil {
+			continue
+		}
+		result = append(result, ref)
+	}
+
+	return result, nil
+}

@@ -861,3 +861,22 @@ func (c *Client) SafeDeleteBranch(name string) error {
 func (c *Client) ForceDeleteBranch(name string) error {
 	return c.DeleteLocalBranch(context.Background(), name, true)
 }
+
+// CreateLocalBranch creates refs/heads/<name> pointing at startPoint (a branch
+// name, remote-tracking ref like "origin/X.1@feat@slug", or a SHA). It does not
+// switch the working tree. Used to materialize a feature branch that exists only
+// as a remote-tracking ref on a reviewer's clone so the merge strategies can
+// resolve it by bare name.
+func (c *Client) CreateLocalBranch(ctx context.Context, name, startPoint string) error {
+	root, err := c.WorkingTreeRoot()
+	if err != nil {
+		return fmt.Errorf("working tree root: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "branch", name, startPoint)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git branch %s %s: %w: %s", name, startPoint, err, out)
+	}
+
+	return nil
+}

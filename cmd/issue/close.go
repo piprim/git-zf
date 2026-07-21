@@ -159,6 +159,16 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return nil
 	}
 
+	// A ref-derived pick (reviewer/teammate closing a branch they never started)
+	// has IssueID == 0: materialize the feature branch from origin and track it
+	// so the rest of the flow — which reads the store and needs a local feature
+	// branch — behaves exactly as for a locally-started branch.
+	promoted, err := issueflow.MaterializeAndTrack(ctx, deps.store, deps.client, *picked)
+	if err != nil {
+		return err
+	}
+	picked = &promoted
+
 	if err := reviewPreflight(ctx, deps, picked); err != nil {
 		return err
 	}
@@ -467,9 +477,9 @@ func getPickedBranch(
 	// the picker never offers a branch that was already closed elsewhere.
 	issueflow.ReconcileMergedFromRefs(ctx, s, client)
 
-	branches, err := s.ListBranches(ctx, store.BranchStatusInProgress)
+	branches, err := issueflow.CloseCandidates(ctx, s, client)
 	if err != nil {
-		return nil, fmt.Errorf("list branches: %w", err)
+		return nil, fmt.Errorf("list close candidates: %w", err)
 	}
 
 	if len(branches) == 0 {

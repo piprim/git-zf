@@ -1701,3 +1701,152 @@ func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T)
 		}
 	})
 }
+
+// TestClose_ReviewerInitiated verifies a reviewer/teammate can close an issue
+// they did not start: an empty local store, the feature branch present only as
+// origin/<feature>, and only refs/zf/branches/<slug> to go on. The close flow
+// must surface the ref-derived candidate, materialize the feature branch, track
+// it, merge it, and stamp the ref merged=true.
+func TestClose_ReviewerInitiated(t *testing.T) {
+	t.Parallel()
+
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+	carolDir := t.TempDir()
+
+	runIn := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+		}
+	}
+
+	// ----- origin + seed (developer) -----
+	if err := os.MkdirAll(originDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	runIn(originDir, "init", "--bare", "--initial-branch=main")
+
+	seedDir := t.TempDir()
+	runIn(seedDir, "init", "--initial-branch=main")
+	runIn(seedDir, "config", "user.name", "Seed")
+	runIn(seedDir, "config", "user.email", "seed@example.com")
+	runIn(seedDir, "config", "commit.gpgsign", "false")
+	writeFileAt(t, seedDir, "base.txt", "base\n")
+	runIn(seedDir, "add", "base.txt")
+	runIn(seedDir, "commit", "-m", "chore: init")
+	runIn(seedDir, "remote", "add", "origin", originDir)
+	runIn(seedDir, "push", "origin", "main")
+
+	runIn(seedDir, "checkout", "-b", "ABC-1@feat@thing")
+	writeFileAt(t, seedDir, "feature.txt", "feature\n")
+	runIn(seedDir, "add", "feature.txt")
+	runIn(seedDir, "commit", "-m", "feat: implement")
+	runIn(seedDir, "push", "origin", "ABC-1@feat@thing")
+	runIn(seedDir, "checkout", "main")
+
+	// Developer publishes the branch ref (manual issue: no tracker origin).
+	seedClient, err := git.NewClientAt(nil, seedDir)
+	if err != nil {
+		t.Fatalf("seed NewClientAt: %v", err)
+	}
+	if _, err := seedClient.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
+		IssueSlug: "ABC-1", BranchName: "ABC-1@feat@thing",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed WriteBranchRef: %v", err)
+	}
+	runIn(seedDir, "push", "origin", "refs/zf/branches/ABC-1")
+
+	// ----- Carol's clone: empty store, no local feature branch -----
+	runIn(carolDir, "init", "--initial-branch=main")
+	runIn(carolDir, "config", "user.name", "Carol")
+	runIn(carolDir, "config", "user.email", "carol@example.com")
+	runIn(carolDir, "config", "commit.gpgsign", "false")
+	runIn(carolDir, "remote", "add", "origin", originDir)
+	runIn(carolDir, "fetch", "origin")
+	runIn(carolDir, "checkout", "main")
+	// ABC-1@feat@thing deliberately NOT checked out locally.
+
+	stdout := &bytes.Buffer{}
+	carolClient, err := git.NewClientAt(&pkg.IO{
+		In: bytes.NewReader(nil), Out: stdout, Err: &bytes.Buffer{},
+	}, carolDir)
+	if err != nil {
+		t.Fatalf("carol NewClientAt: %v", err)
+	}
+
+	carolStore, err := store.Open(t.Context(), filepath.Join(carolDir, ".git"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = carolStore.Close() })
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+	deps := closeDeps{client: carolClient, store: carolStore, cfg: cfg}
+
+	// The picker returns the ref-derived candidate (IssueID 0). runClose must
+	// promote it via MaterializeAndTrack before merging.
+	prompter := &scriptedPrompter{
+		Branch: &store.BranchRow{
+			IssueID: 0, IssueSlug: "ABC-1", Title: "thing",
+			BranchName: "ABC-1@feat@thing", Type: "feat", Status: store.BranchStatusInProgress,
+		},
+		Strategy:     commitpkg.MergeStrategySquash,
+		Confirm:      true,
+		Message:      []byte("feat(thing): reviewer closes ABC-1\n"),
+		DeleteBranch: false,
+	}
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("picker was offered the ref-derived candidate", func(t *testing.T) {
+		var found bool
+		for _, b := range prompter.PickBranchSeen {
+			if b.IssueSlug == "ABC-1" && b.BranchName == "ABC-1@feat@thing" && b.IssueID == 0 {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("PickBranchSeen = %+v, want an ABC-1 ref-derived (IssueID 0) row", prompter.PickBranchSeen)
+		}
+	})
+
+	t.Run("feature branch materialized locally", func(t *testing.T) {
+		exists, err := carolClient.BranchExists("ABC-1@feat@thing")
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if !exists {
+			t.Errorf("expected local ABC-1@feat@thing to be materialized")
+		}
+	})
+
+	t.Run("main HEAD carries the close commit", func(t *testing.T) {
+		assertHeadSubject(t, carolDir, "main", "feat(thing): reviewer closes ABC-1")
+	})
+
+	t.Run("store now tracks ABC-1 as merged", func(t *testing.T) {
+		merged, err := carolStore.ListBranches(t.Context(), store.BranchStatusMerged)
+		if err != nil {
+			t.Fatalf("ListBranches: %v", err)
+		}
+		if len(merged) != 1 || merged[0].BranchName != "ABC-1@feat@thing" {
+			t.Errorf("merged rows = %+v, want one ABC-1@feat@thing", merged)
+		}
+	})
+
+	t.Run("branch ref stamped merged=true", func(t *testing.T) {
+		ref, err := carolClient.ReadBranchRef(t.Context(), "ABC-1")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if ref == nil || !ref.Merged {
+			t.Errorf("branch ref = %+v, want Merged=true", ref)
+		}
+	})
+}

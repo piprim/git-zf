@@ -139,3 +139,51 @@ func TestBranchRef_ReadWrite(t *testing.T) {
 		}
 	})
 }
+
+func TestListBranchRefs(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newDiskRepo(t)
+
+	t.Run("empty namespace returns empty slice", func(t *testing.T) {
+		got, err := client.ListBranchRefs(t.Context())
+		if err != nil {
+			t.Fatalf("ListBranchRefs: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("expected 0 refs, got %d: %+v", len(got), got)
+		}
+	})
+
+	t.Run("returns every written ref", func(t *testing.T) {
+		if _, err := client.WriteBranchRef(t.Context(), "X.1", BranchRef{
+			IssueSlug: "X.1", BranchName: "X.1@feat@one", CreatedAt: "2026-07-21T10:00:00Z",
+		}); err != nil {
+			t.Fatalf("WriteBranchRef X.1: %v", err)
+		}
+		if _, err := client.WriteBranchRef(t.Context(), "X.2", BranchRef{
+			IssueSlug: "X.2", BranchName: "X.2@fix@two", Merged: true, TrackerType: "github",
+		}); err != nil {
+			t.Fatalf("WriteBranchRef X.2: %v", err)
+		}
+
+		got, err := client.ListBranchRefs(t.Context())
+		if err != nil {
+			t.Fatalf("ListBranchRefs: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 refs, got %d: %+v", len(got), got)
+		}
+
+		bySlug := map[string]BranchRef{}
+		for _, r := range got {
+			bySlug[r.IssueSlug] = r
+		}
+		if bySlug["X.1"].BranchName != "X.1@feat@one" {
+			t.Errorf("X.1 BranchName = %q, want X.1@feat@one", bySlug["X.1"].BranchName)
+		}
+		if !bySlug["X.2"].Merged || bySlug["X.2"].TrackerType != "github" {
+			t.Errorf("X.2 = %+v, want Merged=true TrackerType=github", bySlug["X.2"])
+		}
+	})
+}

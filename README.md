@@ -113,6 +113,8 @@ In the interactive TUI:
 
 **`issue close`** — close an in-progress issue: pick from the list of in-progress branches (the currently checked-out branch is pre-selected), merge into the base branch, update the local store, and optionally update the tracker status and delete the local branch.
 
+The picker also lists branches known only from fetched `refs/zf/branches/*` refs, so a reviewer or teammate can close an issue they did not start without running `git zf issue track` first — the feature branch is materialized from `origin/<branch>` and tracked automatically before the merge.
+
 The close flow:
 1. A conflict dry-run is performed via `git merge-tree` — if conflicts are detected the command aborts without touching anything.
 2. Choose merge strategy: **Rebase** (default, recommended — single clean commit, submodule-safe), **Squash** (`git merge --squash`, fast but not submodule-safe), or **Classic** (`--no-ff`, preserves full history). For all three strategies the final commit is composed through the commitizen TUI form, pre-filled from the branch's issue ID and type.

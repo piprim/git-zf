@@ -1633,3 +1633,62 @@ func TestCommitIncludeUntrackedRollback(t *testing.T) {
 		}
 	})
 }
+
+func TestCreateLocalBranch(t *testing.T) {
+	t.Parallel()
+
+	client, cloneDir, originDir := newDiskRepoWithOrigin(t)
+
+	runIn := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+		}
+	}
+
+	// Create a feature branch on origin (via a throwaway seed working tree),
+	// then make it visible to the clone as a remote-tracking ref only.
+	seed := t.TempDir()
+	runIn(filepath.Dir(seed), "clone", originDir, filepath.Base(seed))
+	runIn(seed, "config", "user.name", "Seed")
+	runIn(seed, "config", "user.email", "seed@test.com")
+	runIn(seed, "config", "commit.gpgsign", "false")
+	runIn(seed, "checkout", "-b", "ABC-1@feat@thing")
+	if err := os.WriteFile(filepath.Join(seed, "f.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	runIn(seed, "add", "f.go")
+	runIn(seed, "commit", "-m", "feat: thing")
+	runIn(seed, "push", "origin", "ABC-1@feat@thing")
+
+	runIn(cloneDir, "fetch", "origin")
+
+	t.Run("before: local branch absent", func(t *testing.T) {
+		exists, err := client.BranchExists("ABC-1@feat@thing")
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if exists {
+			t.Fatalf("expected local branch absent before materialize")
+		}
+	})
+
+	t.Run("CreateLocalBranch materializes from origin ref", func(t *testing.T) {
+		if err := client.CreateLocalBranch(t.Context(), "ABC-1@feat@thing", "origin/ABC-1@feat@thing"); err != nil {
+			t.Fatalf("CreateLocalBranch: %v", err)
+		}
+		local, err := client.ResolveRef("refs/heads/ABC-1@feat@thing")
+		if err != nil {
+			t.Fatalf("resolve new local branch: %v", err)
+		}
+		remote, err := client.ResolveRef("refs/remotes/origin/ABC-1@feat@thing")
+		if err != nil {
+			t.Fatalf("resolve origin ref: %v", err)
+		}
+		if local != remote {
+			t.Errorf("local %s != origin %s", local, remote)
+		}
+	})
+}
