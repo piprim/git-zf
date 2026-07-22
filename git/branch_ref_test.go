@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"testing"
 )
 
@@ -184,6 +185,16 @@ func TestListBranchRefs(t *testing.T) {
 		}
 		if !bySlug["X.2"].Merged || bySlug["X.2"].TrackerType != "github" {
 			t.Errorf("X.2 = %+v, want Merged=true TrackerType=github", bySlug["X.2"])
+		}
+	})
+
+	t.Run("git failure surfaces an error (not an empty slice)", func(t *testing.T) {
+		// A canceled context makes for-each-ref fail — the caller must see the
+		// error so best-effort call sites (CloseCandidates) can degrade knowingly.
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if _, err := client.ListBranchRefs(ctx); err == nil {
+			t.Fatal("ListBranchRefs: want error when git for-each-ref fails, got nil")
 		}
 	})
 }

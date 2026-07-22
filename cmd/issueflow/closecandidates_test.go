@@ -149,9 +149,73 @@ func TestCloseCandidates(t *testing.T) {
 			t.Fatalf("got %+v, want no candidates (unresolvable excluded)", got)
 		}
 	})
+
+	t.Run("ListBranchRefs failure degrades to store-only", func(t *testing.T) {
+		t.Parallel()
+		s := &fakeCandStore{inProgress: []store.BranchRow{{IssueID: 1, IssueSlug: "A", BranchName: "A@feat@x"}}}
+		c := &fakeCandClient{refsErr: errors.New("for-each-ref: git exploded")}
+		got, err := CloseCandidates(t.Context(), s, c)
+		if err != nil {
+			t.Fatalf("CloseCandidates: %v (want degrade, not error)", err)
+		}
+		if len(got) != 1 || got[0].IssueSlug != "A" {
+			t.Fatalf("got %+v, want the store row only", got)
+		}
+	})
 }
 
-func TestMaterializeAndTrack(t *testing.T) {
+func TestMaterializeBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("absent branch is created (created=true)", func(t *testing.T) {
+		t.Parallel()
+		c := &fakeCandClient{localExists: map[string]bool{}} // feature branch absent locally
+		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat"}
+		created, err := MaterializeBranch(t.Context(), c, picked)
+		if err != nil {
+			t.Fatalf("MaterializeBranch: %v", err)
+		}
+		if !created {
+			t.Errorf("created = false, want true")
+		}
+		if len(c.created) != 1 || c.created[0] != "B@feat@thing" {
+			t.Errorf("created = %v, want [B@feat@thing]", c.created)
+		}
+	})
+
+	t.Run("existing branch is a no-op (created=false)", func(t *testing.T) {
+		t.Parallel()
+		c := &fakeCandClient{localExists: map[string]bool{"B@feat@thing": true}}
+		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat"}
+		created, err := MaterializeBranch(t.Context(), c, picked)
+		if err != nil {
+			t.Fatalf("MaterializeBranch: %v", err)
+		}
+		if created {
+			t.Errorf("created = true, want false (branch already local)")
+		}
+		if len(c.created) != 0 {
+			t.Errorf("created = %v, want no CreateLocalBranch call", c.created)
+		}
+	})
+
+	t.Run("unresolvable start point surfaces error", func(t *testing.T) {
+		t.Parallel()
+		c := &fakeCandClient{
+			localExists:  map[string]bool{},
+			unresolvable: map[string]bool{"B@feat@thing": true},
+		}
+		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat"}
+		if _, err := MaterializeBranch(t.Context(), c, picked); err == nil {
+			t.Fatal("MaterializeBranch: want error for unresolvable branch, got nil")
+		}
+		if len(c.created) != 0 {
+			t.Errorf("created = %v, want no CreateLocalBranch call on failure", c.created)
+		}
+	})
+}
+
+func TestTrackCandidate(t *testing.T) {
 	t.Parallel()
 
 	t.Run("store-derived pick returned unchanged", func(t *testing.T) {
@@ -159,37 +223,33 @@ func TestMaterializeAndTrack(t *testing.T) {
 		s := &fakeCandStore{}
 		c := &fakeCandClient{}
 		picked := store.BranchRow{IssueID: 5, IssueSlug: "A", BranchName: "A@feat@x", Type: "feat"}
-		got, err := MaterializeAndTrack(t.Context(), s, c, picked)
+		got, err := TrackCandidate(t.Context(), s, c, picked)
 		if err != nil {
-			t.Fatalf("MaterializeAndTrack: %v", err)
+			t.Fatalf("TrackCandidate: %v", err)
 		}
 		if got.IssueID != 5 {
 			t.Errorf("IssueID = %d, want 5 (unchanged)", got.IssueID)
 		}
-		if len(s.inserted) != 0 || len(c.created) != 0 {
-			t.Errorf("expected no insert/create for tracked pick; inserted=%v created=%v", s.inserted, c.created)
+		if len(s.inserted) != 0 {
+			t.Errorf("expected no insert for tracked pick; inserted=%v", s.inserted)
 		}
 	})
 
-	t.Run("ref-derived pick materializes and tracks", func(t *testing.T) {
+	t.Run("ref-derived pick inserts rows and returns real IssueID", func(t *testing.T) {
 		t.Parallel()
 		s := &fakeCandStore{}
 		c := &fakeCandClient{
-			localExists: map[string]bool{}, // feature branch absent locally
 			bySlug: map[string]*git.BranchRef{
 				"B": {IssueSlug: "B", BranchName: "B@feat@thing", TrackerType: "github"},
 			},
 		}
 		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat", Title: "thing"}
-		got, err := MaterializeAndTrack(t.Context(), s, c, picked)
+		got, err := TrackCandidate(t.Context(), s, c, picked)
 		if err != nil {
-			t.Fatalf("MaterializeAndTrack: %v", err)
+			t.Fatalf("TrackCandidate: %v", err)
 		}
 		if got.IssueID == 0 {
 			t.Errorf("IssueID = 0, want non-zero after track")
-		}
-		if len(c.created) != 1 || c.created[0] != "B@feat@thing" {
-			t.Errorf("created = %v, want [B@feat@thing]", c.created)
 		}
 		if len(s.inserted) != 1 {
 			t.Fatalf("inserted len = %d, want 1", len(s.inserted))
@@ -199,16 +259,28 @@ func TestMaterializeAndTrack(t *testing.T) {
 		}
 	})
 
+	t.Run("no branch creation side effect", func(t *testing.T) {
+		t.Parallel()
+		s := &fakeCandStore{}
+		c := &fakeCandClient{bySlug: map[string]*git.BranchRef{}}
+		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat", Title: "thing"}
+		if _, err := TrackCandidate(t.Context(), s, c, picked); err != nil {
+			t.Fatalf("TrackCandidate: %v", err)
+		}
+		if len(c.created) != 0 {
+			t.Errorf("created = %v, want none (materialization is MaterializeBranch's job)", c.created)
+		}
+	})
+
 	t.Run("tracker type carried from ref", func(t *testing.T) {
 		t.Parallel()
 		s := &fakeCandStore{}
 		c := &fakeCandClient{
-			localExists: map[string]bool{"B@feat@thing": true}, // already local; skip create
-			bySlug:      map[string]*git.BranchRef{"B": {IssueSlug: "B", BranchName: "B@feat@thing", TrackerType: "github"}},
+			bySlug: map[string]*git.BranchRef{"B": {IssueSlug: "B", BranchName: "B@feat@thing", TrackerType: "github"}},
 		}
 		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat", Title: "thing"}
-		if _, err := MaterializeAndTrack(t.Context(), s, c, picked); err != nil {
-			t.Fatalf("MaterializeAndTrack: %v", err)
+		if _, err := TrackCandidate(t.Context(), s, c, picked); err != nil {
+			t.Fatalf("TrackCandidate: %v", err)
 		}
 		if len(s.inserted) != 1 {
 			t.Fatalf("inserted len = %d, want 1", len(s.inserted))
@@ -223,12 +295,11 @@ func TestMaterializeAndTrack(t *testing.T) {
 		t.Parallel()
 		s := &fakeCandStore{}
 		c := &fakeCandClient{
-			localExists: map[string]bool{"B@feat@thing": true},
-			bySlug:      map[string]*git.BranchRef{"B": {IssueSlug: "B", BranchName: "B@feat@thing"}},
+			bySlug: map[string]*git.BranchRef{"B": {IssueSlug: "B", BranchName: "B@feat@thing"}},
 		}
 		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat", Title: "thing"}
-		if _, err := MaterializeAndTrack(t.Context(), s, c, picked); err != nil {
-			t.Fatalf("MaterializeAndTrack: %v", err)
+		if _, err := TrackCandidate(t.Context(), s, c, picked); err != nil {
+			t.Fatalf("TrackCandidate: %v", err)
 		}
 		if s.inserted[0].issue.TrackerType != nil {
 			t.Errorf("issue TrackerType = %v, want nil (manual)", *s.inserted[0].issue.TrackerType)
@@ -239,11 +310,11 @@ func TestMaterializeAndTrack(t *testing.T) {
 		t.Parallel()
 		existing := store.BranchRow{IssueID: 3, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat"}
 		s := &fakeCandStore{all: []store.BranchRow{existing}}
-		c := &fakeCandClient{localExists: map[string]bool{"B@feat@thing": true}}
+		c := &fakeCandClient{}
 		picked := store.BranchRow{IssueID: 0, IssueSlug: "B", BranchName: "B@feat@thing", Type: "feat", Title: "thing"}
-		got, err := MaterializeAndTrack(t.Context(), s, c, picked)
+		got, err := TrackCandidate(t.Context(), s, c, picked)
 		if err != nil {
-			t.Fatalf("MaterializeAndTrack: %v", err)
+			t.Fatalf("TrackCandidate: %v", err)
 		}
 		if len(s.inserted) != 0 {
 			t.Errorf("expected no insert; inserted=%v", s.inserted)

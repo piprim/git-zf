@@ -99,6 +99,14 @@ type mergeContext struct {
 	baseBranch   string
 	cfg          *config.AppConfig
 	store        *store.Store
+
+	// materialized is true when the picked branch was created by this close
+	// run (ref-derived pick). Strategies use it to widen their abort rollback:
+	// residue that is worth keeping for a locally-started branch (e.g. the
+	// staged squash diff) is discarded for a materialized one, because the
+	// branch itself is about to be rolled back and everything is reproducible
+	// from origin.
+	materialized bool
 }
 
 func (i Issue) getCloseCmd() *cobra.Command {
@@ -160,18 +168,58 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	// A ref-derived pick (reviewer/teammate closing a branch they never started)
-	// has IssueID == 0: materialize the feature branch from origin and track it
-	// so the rest of the flow — which reads the store and needs a local feature
-	// branch — behaves exactly as for a locally-started branch.
-	promoted, err := issueflow.MaterializeAndTrack(ctx, deps.store, deps.client, *picked)
+	// has IssueID == 0: materialize the feature branch from origin so the rest
+	// of the flow — reviewPreflight and the merge both need a local feature
+	// branch — behaves exactly as for a locally-started branch. Store tracking
+	// is deferred until the merge commit lands (see TrackCandidate below) so an
+	// aborted close inserts no spurious in-progress rows.
+	createdBranch := false
+	if picked.IssueID == 0 {
+		created, err := issueflow.MaterializeBranch(ctx, deps.client, *picked)
+		if err != nil {
+			return err
+		}
+		createdBranch = created
+	}
+
+	// Roll back the just-materialized branch when the close ends before the
+	// merge commit lands (conflict dry-run, cancel at the confirm prompt, any
+	// preflight error), so an aborted reviewer-initiated close leaves the
+	// clone exactly as it found it. The abort may have left HEAD on the
+	// materialized branch (rebase/classic preflight checkout, review
+	// fast-forward), so delete via the base-switching helper; the abort may
+	// also stem from a canceled context, so detach the cleanup from it.
+	mergeCommitted := false
+	defer func() {
+		if !createdBranch || mergeCommitted {
+			return
+		}
+		cleanupCtx := context.WithoutCancel(ctx)
+		if delErr := deps.client.DeleteLocalBranchSafe(cleanupCtx, picked.BranchName, true, deps.cfg.Branch.Base); delErr != nil {
+			fmt.Fprintf(deps.client.IO().Err, "warning: rollback materialized branch %q: %v\n",
+				picked.BranchName, delErr)
+
+			return
+		}
+		fmt.Fprintf(deps.client.IO().Err, "Rolled back: materialized branch %q removed\n", picked.BranchName)
+	}()
+
+	reviewCleanup, err := reviewPreflight(ctx, deps, picked)
 	if err != nil {
 		return err
 	}
-	picked = &promoted
 
-	if err := reviewPreflight(ctx, deps, picked); err != nil {
-		return err
-	}
+	// The destructive review cleanup (local/remote review branch + review ref)
+	// runs only once the merge commit has landed. Until then those refs are the
+	// only durable home of the reviewer commits reviewPreflight just merged into
+	// the feature branch — an abort must leave them intact so the rollback above
+	// can safely force-delete the materialized branch and a retry can re-run the
+	// incorporation from scratch.
+	defer func() {
+		if mergeCommitted && reviewCleanup != nil {
+			reviewCleanup(context.WithoutCancel(ctx))
+		}
+	}()
 
 	base, err := resolveDefaultBase(ctx, deps, picked)
 	if err != nil {
@@ -209,11 +257,18 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		baseBranch:   base,
 		cfg:          deps.cfg,
 		store:        deps.store,
+		materialized: createdBranch,
 	}
 
 	strategy, aborted, err := doMerge(ctx, mc, prompter)
 	if err != nil {
 		if errors.Is(err, errFastForwardDeferred) {
+			// The commit landed on the feature branch — keep it, and track the
+			// ref-derived candidate so the store mirrors a locally-started
+			// branch awaiting its manual fast-forward.
+			mergeCommitted = true
+			picked = trackPickedCandidate(ctx, deps, picked)
+
 			return nil
 		}
 
@@ -226,6 +281,13 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return nil
 	}
 
+	// The merge commit landed — track the ref-derived candidate now (deferred
+	// from the pick) so updateClosedStatus below has a real IssueID to mark
+	// merged. Failures past this point are non-fatal: the merge is committed,
+	// so warn and continue like the rest of the post-merge bookkeeping.
+	mergeCommitted = true
+	picked = trackPickedCandidate(ctx, deps, picked)
+
 	updateClosedStatus(ctx, deps, picked, prompter)
 
 	if err := doDeleteBranch(ctx, deps.client, picked, strategy, prompter); err != nil {
@@ -235,6 +297,24 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
 
 	return proposeClosePush(ctx, deps, base)
+}
+
+// trackPickedCandidate promotes a ref-derived pick (IssueID == 0) into tracked
+// store rows and returns the row carrying the real IssueID. Called only once
+// the merge commit has landed, so a tracking failure is a warning, not an
+// abort — picked is returned unchanged, the operator can re-track manually,
+// and updateClosedStatus degrades to per-step warnings on the untracked row.
+// No-op for picks that were already tracked (TrackCandidate returns them
+// unchanged).
+func trackPickedCandidate(ctx context.Context, deps closeDeps, picked *store.BranchRow) *store.BranchRow {
+	promoted, err := issueflow.TrackCandidate(ctx, deps.store, deps.client, *picked)
+	if err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: track branch %q: %v\n", picked.BranchName, err)
+
+		return picked
+	}
+
+	return &promoted
 }
 
 // resolveDefaultBase computes the smart-default merge target: the configured
@@ -295,14 +375,17 @@ func chooseMergeTarget(
 }
 
 // mergeTargetCandidates returns the branches offerable as merge targets: every
-// local branch except the one being closed, with defaultBase guaranteed present
-// (it may be a remote-only parent integration branch absent from locals).
-// defaultBase is placed first so it leads the picker list.
+// local branch except the one being closed and any @review branch (review
+// branches are merge sources, never targets — and one may still exist here
+// because its cleanup is deferred until the merge commit lands), with
+// defaultBase guaranteed present (it may be a remote-only parent integration
+// branch absent from locals). defaultBase is placed first so it leads the
+// picker list.
 func mergeTargetCandidates(locals []string, closing, defaultBase string) []string {
 	out := make([]string, 0, len(locals)+1)
 	seen := make(map[string]bool)
 	add := func(name string) {
-		if name == "" || name == closing || seen[name] {
+		if name == "" || name == closing || seen[name] || branch.IsReviewBranch(name) {
 			return
 		}
 		seen[name] = true
@@ -344,13 +427,20 @@ func baseBranchResolves(c *git.Client, name string) (bool, error) {
 // reviewPreflight checks whether the issue has an active review. Returns an
 // error if close should be refused. When status is approved and the review
 // branch has reviewer commits, it fast-forwards the feature branch to
-// incorporate them and cleans up the review branch and ref.
+// incorporate them.
+//
+// The destructive cleanup (local/remote review branch + review ref) is NOT
+// performed here: it is returned as a closure (nil when there is nothing to
+// clean up) that runClose invokes only after the merge commit lands. Running
+// it earlier would destroy the only remaining source of the just-incorporated
+// reviewer commits if the close subsequently aborts and rolls back the
+// feature branch.
 //
 // The git ref (refs/zf/reviews/<IssueID>) is the source of truth. The local
 // store is a cache that may lag behind the reviewer's machine. reviewPreflight
 // always fetches and reads the ref first so the developer never has to run a
 // manual git fetch before closing.
-func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRow) error {
+func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRow) (func(context.Context), error) {
 	// Fetch review refs (best-effort) so we see the reviewer's latest decision
 	// even if the developer has not fetched since submitting for review.
 	_ = deps.client.FetchReviewRefs(ctx)
@@ -358,13 +448,13 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 	// Read the ref — authoritative source of truth.
 	ref, _, refErr := deps.client.ReadReviewRef(ctx, picked.IssueSlug)
 	if refErr != nil {
-		return fmt.Errorf("read review ref: %w", refErr)
+		return nil, fmt.Errorf("read review ref: %w", refErr)
 	}
 
 	if ref == nil {
 		// No active review ref — either no review was submitted, or it was
 		// already cleaned up after a previous close. Proceed.
-		return nil
+		return nil, nil
 	}
 
 	// Reconcile local store from ref so downstream store reads are consistent.
@@ -376,13 +466,13 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 
 	switch store.ReviewStatus(ref.Status) {
 	case store.ReviewStatusInReview:
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"branch %q is locked for review (issue %q, round %d) — awaiting reviewer decision.\n"+
 				"Run `git zf review list` to check review status: %w",
 			picked.BranchName, picked.IssueSlug, ref.Round, ErrBranchLockedForReview)
 
 	case store.ReviewStatusChangesRequested:
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"reviewer requested changes on issue %q (round %d).\n"+
 				"Address feedback and run `git zf review request` for round %d: %w",
 			picked.IssueSlug, ref.Round, ref.Round+1, ErrReviewChangesRequested)
@@ -395,7 +485,7 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 		// (reviewer pushed or force-pushed after the developer's checkout).
 		pending, pendErr := issueflow.PendingReviewCommits(ctx, deps.client, picked.IssueSlug, picked.BranchName)
 		if pendErr != nil {
-			return fmt.Errorf("detect pending review commits: %w", pendErr)
+			return nil, fmt.Errorf("detect pending review commits: %w", pendErr)
 		}
 
 		localExists, _ := deps.client.BranchExists(reviewBranch)
@@ -409,7 +499,7 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 		if pending != nil {
 			m, mErr := deps.client.CommitsAhead(ctx, picked.BranchName, pending.EffectiveRef)
 			if mErr != nil {
-				return fmt.Errorf("check review divergence: %w", mErr)
+				return nil, fmt.Errorf("check review divergence: %w", mErr)
 			}
 			switch {
 			case m == 0:
@@ -418,22 +508,22 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 					"Incorporating %d reviewer commit(s) from %s into %s...\n",
 					pending.Commits, pending.EffectiveRef, picked.BranchName)
 				if err := deps.client.FastForwardOnly(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
-					return fmt.Errorf("fast-forward %s to %s: %w", picked.BranchName, pending.EffectiveRef, err)
+					return nil, fmt.Errorf("fast-forward %s to %s: %w", picked.BranchName, pending.EffectiveRef, err)
 				}
 			default:
 				// Diverged: dry-run first; close never leaves MERGE_HEAD behind.
 				conflicts, dryErr := deps.client.MergeDryRun(ctx, pending.EffectiveRef, picked.BranchName)
 				if dryErr != nil {
-					return fmt.Errorf("review merge dry-run: %w", dryErr)
+					return nil, fmt.Errorf("review merge dry-run: %w", dryErr)
 				}
 				if len(conflicts) > 0 {
-					return fmt.Errorf(
+					return nil, fmt.Errorf(
 						"reviewer commits on %s conflict with %q (%s).\n"+
 							"Run 'git zf review sync', resolve the conflicts, then close: %w",
 						pending.EffectiveRef, picked.BranchName, strings.Join(conflicts, ", "), ErrReviewSyncNeeded)
 				}
 				if dirty, dErr := deps.client.IsDirty(ctx); dErr == nil && dirty {
-					return fmt.Errorf(
+					return nil, fmt.Errorf(
 						"working tree has uncommitted changes — cannot incorporate %s.\n"+
 							"Run 'git stash', then retry the close: %w", pending.EffectiveRef, ErrReviewSyncNeeded)
 				}
@@ -442,31 +532,35 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 					pending.Commits, pending.EffectiveRef, picked.BranchName)
 				if err := deps.client.MergeForward(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
 					_ = deps.client.AbortMerge(ctx)
-					return fmt.Errorf("merge %s into %s: %w", pending.EffectiveRef, picked.BranchName, err)
+					return nil, fmt.Errorf("merge %s into %s: %w", pending.EffectiveRef, picked.BranchName, err)
 				}
 			}
 		}
 
-		// Cleanup mirrors today's behavior: delete the local review branch when it
-		// exists, and push a remote delete when any review branch was known.
-		if localExists {
-			if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
-				fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
+		// Cleanup mirrors the pre-deferral behavior: delete the local review
+		// branch when it exists, push a remote delete when any review branch was
+		// known, and always drop the review ref. Deferred to the caller (post
+		// merge-commit) so an aborted close keeps the reviewer commits' source.
+		return func(ctx context.Context) {
+			if localExists {
+				if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
+					fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
+				}
 			}
-		}
-		if localExists || remoteTrackingExists {
-			_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
-		}
-		// Always clean up the review ref (local + remote) on close, regardless
-		// of whether a review branch existed.
-		_ = deps.client.DeleteReviewRef(ctx, picked.IssueSlug)
-		return nil
+			if localExists || remoteTrackingExists {
+				_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
+			}
+			// Always clean up the review ref (local + remote) on close, regardless
+			// of whether a review branch existed.
+			_ = deps.client.DeleteReviewRef(ctx, picked.IssueSlug)
+		}, nil
 	}
 
-	return nil
+	return nil, nil
 }
 
-// getPickedBranch returns (nil, nil) when there are no in-progress branches.
+// getPickedBranch returns (nil, nil) when there are no closable branches
+// (neither store-tracked in-progress rows nor ref-derived candidates).
 func getPickedBranch(
 	ctx context.Context,
 	s *store.Store,
@@ -483,7 +577,7 @@ func getPickedBranch(
 	}
 
 	if len(branches) == 0 {
-		fmt.Fprintln(client.IO().Out, "No in-progress branches.")
+		fmt.Fprintln(client.IO().Out, "No branches available to close.")
 
 		return nil, nil
 	}
@@ -567,9 +661,12 @@ func doMerge(
 // (which stages the merge but does not commit), then opens the commit form
 // pre-filled with type/scope and a "Squashed merge of <bsha> into <basesha>."
 // subject. The author dropdown defaults to the current git identity. Esc/Ctrl+C
-// in the form aborts the close; staged changes are left in place so the operator
-// can inspect or `git reset` them.
-func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter) error {
+// in the form aborts the close; for a locally-started branch the staged changes
+// are left in place so the operator can inspect or `git reset` them. For a
+// materialized pick (mc.materialized) they are discarded instead — the branch
+// is about to be rolled back too, and the diff is reproducible from origin, so
+// keeping it would leave the clone dirtier than the close found it.
+func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter) (err error) {
 	branchHash, err := mc.client.ResolveRef("refs/heads/" + mc.pickedBranch.BranchName)
 	if err != nil {
 		return fmt.Errorf("resolve branch %q: %w", mc.pickedBranch.BranchName, err)
@@ -591,6 +688,24 @@ func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter
 	if err := mc.client.MergeSquash(ctx, mc.pickedBranch.BranchName, mc.baseBranch); err != nil {
 		return fmt.Errorf("merge squash: %w", err)
 	}
+
+	// From here on the squash diff is staged on base. On abort (compose Esc,
+	// commit failure) discard it for a materialized pick so the outer rollback
+	// really does leave the clone as the close found it. The base tip is
+	// unchanged (nothing committed), so a hard reset only clears index +
+	// working tree.
+	defer func() {
+		if err == nil || !mc.materialized {
+			return
+		}
+		if rbErr := mc.client.ResetHard(ctx, baseHash.String()); rbErr != nil {
+			fmt.Fprintf(mc.client.IO().Err, "warning: discard staged squash changes: %v\n", rbErr)
+
+			return
+		}
+		fmt.Fprintf(mc.client.IO().Err,
+			"Rolled back: staged squash changes on %q discarded\n", mc.baseBranch)
+	}()
 
 	mergeInfo := commitpkg.IssueCloseInfo{FromHash: branchHash, ToHash: baseHash, Strategy: commitpkg.MergeStrategySquash}
 

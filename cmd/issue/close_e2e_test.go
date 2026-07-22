@@ -427,8 +427,8 @@ func TestClose_NoInProgressBranches(t *testing.T) {
 	}
 
 	t.Run("stdout shows the empty-list message", func(t *testing.T) {
-		if got := stdout.String(); !strings.Contains(got, "No in-progress branches") {
-			t.Errorf("stdout = %q, want it to contain 'No in-progress branches'", got)
+		if got := stdout.String(); !strings.Contains(got, "No branches available to close") {
+			t.Errorf("stdout = %q, want it to contain 'No branches available to close'", got)
 		}
 	})
 }
@@ -1632,7 +1632,7 @@ func TestClose_ReviewPreflight_DivergedCleanAutoMerges(t *testing.T) {
 
 	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
 
-	err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
+	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
 
 	t.Run("preflight succeeds via real merge", func(t *testing.T) {
 		if err != nil {
@@ -1646,6 +1646,18 @@ func TestClose_ReviewPreflight_DivergedCleanAutoMerges(t *testing.T) {
 			t.Fatalf("want 0 pending, got %d", n)
 		}
 	})
+	t.Run("cleanup deferred: review ref survives until the merge lands", func(t *testing.T) {
+		ref, _, _ := rig.client.ReadReviewRef(t.Context(), slug)
+		if ref == nil {
+			t.Fatal("review ref must survive until the returned cleanup runs")
+		}
+	})
+
+	if cleanup == nil {
+		t.Fatal("reviewPreflight returned nil cleanup for an approved review")
+	}
+	cleanup(t.Context())
+
 	t.Run("review ref cleaned up", func(t *testing.T) {
 		ref, _, _ := rig.client.ReadReviewRef(t.Context(), slug)
 		if ref != nil {
@@ -1676,7 +1688,7 @@ func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T)
 
 	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
 
-	err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
 
 	t.Run("refused with ErrReviewSyncNeeded", func(t *testing.T) {
 		if !errors.Is(err, ErrReviewSyncNeeded) {
@@ -1702,13 +1714,30 @@ func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T)
 	})
 }
 
-// TestClose_ReviewerInitiated verifies a reviewer/teammate can close an issue
-// they did not start: an empty local store, the feature branch present only as
-// origin/<feature>, and only refs/zf/branches/<slug> to go on. The close flow
-// must surface the ref-derived candidate, materialize the feature branch, track
-// it, merge it, and stamp the ref merged=true.
-func TestClose_ReviewerInitiated(t *testing.T) {
-	t.Parallel()
+// reviewerCloseRig is the shared fixture for reviewer-initiated close tests: a
+// bare origin seeded by a developer (main + pushed ABC-1@feat@thing + published
+// refs/zf/branches/ABC-1, manual issue with no tracker origin), plus Carol's
+// clone with an empty store and no local feature branch.
+type reviewerCloseRig struct {
+	deps   closeDeps
+	client *git.Client
+	store  *store.Store
+	dir    string
+	stdout *bytes.Buffer
+	stderr *bytes.Buffer
+}
+
+// refDerivedRow returns the candidate row the close picker synthesizes from
+// refs/zf/branches/ABC-1 — IssueID 0 is the "not yet tracked" marker.
+func (r *reviewerCloseRig) refDerivedRow() *store.BranchRow {
+	return &store.BranchRow{
+		IssueID: 0, IssueSlug: "ABC-1", Title: "thing",
+		BranchName: "ABC-1@feat@thing", Type: "feat", Status: store.BranchStatusInProgress,
+	}
+}
+
+func newReviewerCloseRig(t *testing.T) *reviewerCloseRig {
+	t.Helper()
 
 	originDir := filepath.Join(t.TempDir(), "origin.git")
 	carolDir := t.TempDir()
@@ -1770,8 +1799,9 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 	// ABC-1@feat@thing deliberately NOT checked out locally.
 
 	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
 	carolClient, err := git.NewClientAt(&pkg.IO{
-		In: bytes.NewReader(nil), Out: stdout, Err: &bytes.Buffer{},
+		In: bytes.NewReader(nil), Out: stdout, Err: stderr,
 	}, carolDir)
 	if err != nil {
 		t.Fatalf("carol NewClientAt: %v", err)
@@ -1785,22 +1815,40 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
-	deps := closeDeps{client: carolClient, store: carolStore, cfg: cfg}
+
+	return &reviewerCloseRig{
+		deps:   closeDeps{client: carolClient, store: carolStore, cfg: cfg},
+		client: carolClient,
+		store:  carolStore,
+		dir:    carolDir,
+		stdout: stdout,
+		stderr: stderr,
+	}
+}
+
+// TestClose_ReviewerInitiated verifies a reviewer/teammate can close an issue
+// they did not start: an empty local store, the feature branch present only as
+// origin/<feature>, and only refs/zf/branches/<slug> to go on. The close flow
+// must surface the ref-derived candidate, materialize the feature branch,
+// merge it, track it once the merge commit lands, and stamp the ref
+// merged=true.
+func TestClose_ReviewerInitiated(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewerCloseRig(t)
 
 	// The picker returns the ref-derived candidate (IssueID 0). runClose must
-	// promote it via MaterializeAndTrack before merging.
+	// materialize the feature branch before merging (MaterializeBranch) and
+	// promote it into store rows after the merge commits (TrackCandidate).
 	prompter := &scriptedPrompter{
-		Branch: &store.BranchRow{
-			IssueID: 0, IssueSlug: "ABC-1", Title: "thing",
-			BranchName: "ABC-1@feat@thing", Type: "feat", Status: store.BranchStatusInProgress,
-		},
+		Branch:       rig.refDerivedRow(),
 		Strategy:     commitpkg.MergeStrategySquash,
 		Confirm:      true,
 		Message:      []byte("feat(thing): reviewer closes ABC-1\n"),
 		DeleteBranch: false,
 	}
 
-	if err := runClose(t.Context(), deps, prompter); err != nil {
+	if err := runClose(t.Context(), rig.deps, prompter); err != nil {
 		t.Fatalf("runClose: %v", err)
 	}
 
@@ -1817,7 +1865,7 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 	})
 
 	t.Run("feature branch materialized locally", func(t *testing.T) {
-		exists, err := carolClient.BranchExists("ABC-1@feat@thing")
+		exists, err := rig.client.BranchExists("ABC-1@feat@thing")
 		if err != nil {
 			t.Fatalf("BranchExists: %v", err)
 		}
@@ -1827,11 +1875,11 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 	})
 
 	t.Run("main HEAD carries the close commit", func(t *testing.T) {
-		assertHeadSubject(t, carolDir, "main", "feat(thing): reviewer closes ABC-1")
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): reviewer closes ABC-1")
 	})
 
 	t.Run("store now tracks ABC-1 as merged", func(t *testing.T) {
-		merged, err := carolStore.ListBranches(t.Context(), store.BranchStatusMerged)
+		merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -1841,12 +1889,327 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 	})
 
 	t.Run("branch ref stamped merged=true", func(t *testing.T) {
-		ref, err := carolClient.ReadBranchRef(t.Context(), "ABC-1")
+		ref, err := rig.client.ReadBranchRef(t.Context(), "ABC-1")
 		if err != nil {
 			t.Fatalf("ReadBranchRef: %v", err)
 		}
 		if ref == nil || !ref.Merged {
 			t.Errorf("branch ref = %+v, want Merged=true", ref)
+		}
+	})
+}
+
+// TestClose_ReviewerInitiated_AbortRollsBack verifies the "aborts without
+// touching anything" invariant for the reviewer path: when the close stops
+// before the merge commit lands (here: the reviewer declines at the confirm
+// prompt), the materialized feature branch is removed again and no store rows
+// are inserted — the clone ends up exactly as the close found it.
+func TestClose_ReviewerInitiated_AbortRollsBack(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewerCloseRig(t)
+
+	prompter := &scriptedPrompter{
+		Branch:   rig.refDerivedRow(),
+		Strategy: commitpkg.MergeStrategySquash,
+		Confirm:  false, // decline at the merge confirm prompt
+	}
+
+	if err := runClose(t.Context(), rig.deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("stdout shows the abort message", func(t *testing.T) {
+		if got := rig.stdout.String(); !strings.Contains(got, "Aborted.") {
+			t.Errorf("stdout = %q, want it to contain 'Aborted.'", got)
+		}
+	})
+
+	t.Run("materialized feature branch rolled back", func(t *testing.T) {
+		exists, err := rig.client.BranchExists("ABC-1@feat@thing")
+		if err != nil {
+			t.Fatalf("BranchExists: %v", err)
+		}
+		if exists {
+			t.Errorf("local ABC-1@feat@thing still exists, want it rolled back")
+		}
+	})
+
+	t.Run("rollback reported on stderr", func(t *testing.T) {
+		if got := rig.stderr.String(); !strings.Contains(got, "Rolled back: materialized branch") {
+			t.Errorf("stderr = %q, want it to report the branch rollback", got)
+		}
+	})
+
+	t.Run("no store rows inserted", func(t *testing.T) {
+		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
+		if err != nil {
+			t.Fatalf("ListBranches: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Errorf("store rows = %+v, want none after an aborted close", rows)
+		}
+	})
+
+	t.Run("branch ref not stamped merged", func(t *testing.T) {
+		ref, err := rig.client.ReadBranchRef(t.Context(), "ABC-1")
+		if err != nil {
+			t.Fatalf("ReadBranchRef: %v", err)
+		}
+		if ref == nil || ref.Merged {
+			t.Errorf("branch ref = %+v, want Merged=false (close aborted)", ref)
+		}
+	})
+}
+
+// TestClose_ReviewerInitiated_AbortAfterCheckoutRollsBack covers the abort
+// paths that fail AFTER a strategy has checked out the materialized branch
+// (rebase/classic preflight, Esc in the commit form): HEAD is on the branch
+// the rollback must delete, so the rollback has to switch back to base first.
+// The failure is injected as a ComposeMessage error inside the Rebase
+// strategy — by then rebasePreflight has checked out ABC-1@feat@thing.
+func TestClose_ReviewerInitiated_AbortAfterCheckoutRollsBack(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewerCloseRig(t)
+
+	composeErr := errors.New("compose aborted")
+	prompter := &scriptedPrompter{
+		Branch:     rig.refDerivedRow(),
+		Strategy:   commitpkg.MergeStrategyRebase,
+		Confirm:    true,
+		MessageErr: composeErr, // fails inside the strategy, HEAD on the feature branch
+	}
+
+	err := runClose(t.Context(), rig.deps, prompter)
+
+	t.Run("runClose surfaces the compose error", func(t *testing.T) {
+		if !errors.Is(err, composeErr) {
+			t.Fatalf("runClose error = %v, want it to wrap the compose error", err)
+		}
+	})
+
+	t.Run("HEAD restored to base", func(t *testing.T) {
+		cur, curErr := rig.client.CurrentBranch()
+		if curErr != nil {
+			t.Fatalf("CurrentBranch: %v", curErr)
+		}
+		if cur != "main" {
+			t.Errorf("HEAD on %q, want main after rollback", cur)
+		}
+	})
+
+	t.Run("materialized feature branch rolled back", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@feat@thing")
+	})
+
+	t.Run("rollback reported on stderr", func(t *testing.T) {
+		if got := rig.stderr.String(); !strings.Contains(got, "Rolled back: materialized branch") {
+			t.Errorf("stderr = %q, want it to report the branch rollback", got)
+		}
+	})
+
+	t.Run("no store rows inserted", func(t *testing.T) {
+		rows, listErr := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
+		if listErr != nil {
+			t.Fatalf("ListBranches: %v", listErr)
+		}
+		if len(rows) != 0 {
+			t.Errorf("store rows = %+v, want none after an aborted close", rows)
+		}
+	})
+}
+
+// TestClose_ReviewerInitiated_SquashComposeAbortRestoresCleanTree covers the
+// squash variant of the compose-abort: `git merge --squash` has already staged
+// the merge onto base when the commit form is cancelled. For a locally-started
+// branch that staged diff is deliberately kept for inspection, but for a
+// materialized pick the rollback must discard it too — branch and diff are both
+// reproducible from origin, and the clone must end exactly as the close found
+// it.
+func TestClose_ReviewerInitiated_SquashComposeAbortRestoresCleanTree(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewerCloseRig(t)
+
+	composeErr := errors.New("compose aborted")
+	prompter := &scriptedPrompter{
+		Branch:     rig.refDerivedRow(),
+		Strategy:   commitpkg.MergeStrategySquash,
+		Confirm:    true,
+		MessageErr: composeErr, // Esc in the commit form, squash diff already staged
+	}
+
+	err := runClose(t.Context(), rig.deps, prompter)
+
+	t.Run("runClose surfaces the compose error", func(t *testing.T) {
+		if !errors.Is(err, composeErr) {
+			t.Fatalf("runClose error = %v, want it to wrap the compose error", err)
+		}
+	})
+
+	t.Run("working tree left clean (staged squash discarded)", func(t *testing.T) {
+		out, sErr := exec.CommandContext(t.Context(), "git", "-C", rig.dir,
+			"status", "--porcelain").Output()
+		if sErr != nil {
+			t.Fatalf("git status: %v", sErr)
+		}
+		if len(bytes.TrimSpace(out)) != 0 {
+			t.Errorf("git status --porcelain = %q, want empty after rollback", out)
+		}
+	})
+
+	t.Run("base tip unchanged", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "chore: init")
+	})
+
+	t.Run("materialized feature branch rolled back", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@feat@thing")
+	})
+
+	t.Run("both rollbacks reported on stderr", func(t *testing.T) {
+		got := rig.stderr.String()
+		if !strings.Contains(got, "staged squash changes") {
+			t.Errorf("stderr = %q, want it to report the discarded squash changes", got)
+		}
+		if !strings.Contains(got, "Rolled back: materialized branch") {
+			t.Errorf("stderr = %q, want it to report the branch rollback", got)
+		}
+	})
+
+	t.Run("no store rows inserted", func(t *testing.T) {
+		rows, listErr := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
+		if listErr != nil {
+			t.Fatalf("ListBranches: %v", listErr)
+		}
+		if len(rows) != 0 {
+			t.Errorf("store rows = %+v, want none after an aborted close", rows)
+		}
+	})
+}
+
+// TestClose_ReviewerInitiated_AbortKeepsReviewerCommitSources guards against
+// losing reviewer commits in the abort window: reviewPreflight merges the
+// pending reviewer commits into the just-materialized feature branch, the
+// user then declines at the confirm prompt, and the rollback force-deletes
+// that branch. The review branch and review ref — the only other home of
+// those commits — must survive the abort (their destructive cleanup is
+// deferred until the merge commit lands), so a retry can redo the
+// incorporation and close cleanly.
+func TestClose_ReviewerInitiated_AbortKeepsReviewerCommitSources(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewerCloseRig(t)
+
+	// Carol reviewed the branch herself: local ABC-1@review with one fix
+	// commit on top of the feature branch, pushed to origin, plus an approved
+	// review ref. The ref is pushed because FetchReviewRefs prunes local
+	// review refs missing from the remote.
+	mustRunGitAt(t, rig.dir, "checkout", "-b", "ABC-1@review", "origin/ABC-1@feat@thing")
+	writeFileAt(t, rig.dir, "feature.txt", "feature\nreviewer fix\n")
+	mustRunGitAt(t, rig.dir, "add", "feature.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "fix: reviewer nit")
+	mustRunGitAt(t, rig.dir, "push", "origin", "ABC-1@review")
+	mustRunGitAt(t, rig.dir, "checkout", "main")
+
+	featureSHA, err := rig.client.ResolveRef("refs/remotes/origin/ABC-1@feat@thing")
+	if err != nil {
+		t.Fatalf("resolve feature: %v", err)
+	}
+	if _, err := rig.client.WriteReviewRef(t.Context(), "ABC-1", git.ReviewRef{
+		Status: "approved", Round: 1,
+		FeatureSHA: featureSHA.String(),
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}, ""); err != nil {
+		t.Fatalf("WriteReviewRef: %v", err)
+	}
+	mustRunGitAt(t, rig.dir, "push", "--force", "origin", "refs/zf/reviews/ABC-1")
+
+	// ----- abort: decline at the confirm prompt, AFTER incorporation -----
+	abort := &scriptedPrompter{
+		Branch:   rig.refDerivedRow(),
+		Strategy: commitpkg.MergeStrategySquash,
+		Confirm:  false,
+	}
+	if err := runClose(t.Context(), rig.deps, abort); err != nil {
+		t.Fatalf("runClose (abort): %v", err)
+	}
+
+	t.Run("materialized feature branch rolled back despite being checked out", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@feat@thing")
+		cur, curErr := rig.client.CurrentBranch()
+		if curErr != nil {
+			t.Fatalf("CurrentBranch: %v", curErr)
+		}
+		if cur != "main" {
+			t.Errorf("HEAD on %q, want main after rollback", cur)
+		}
+	})
+
+	t.Run("local review branch survives the abort", func(t *testing.T) {
+		exists, bErr := rig.client.BranchExists("ABC-1@review")
+		if bErr != nil {
+			t.Fatalf("BranchExists: %v", bErr)
+		}
+		if !exists {
+			t.Error("ABC-1@review deleted by an aborted close — reviewer commits lost")
+		}
+	})
+
+	t.Run("remote review branch survives the abort", func(t *testing.T) {
+		if !rig.client.RemoteBranchExists(t.Context(), "ABC-1@review") {
+			t.Error("origin/ABC-1@review deleted by an aborted close")
+		}
+	})
+
+	t.Run("review ref survives the abort", func(t *testing.T) {
+		ref, _, rErr := rig.client.ReadReviewRef(t.Context(), "ABC-1")
+		if rErr != nil {
+			t.Fatalf("ReadReviewRef: %v", rErr)
+		}
+		if ref == nil {
+			t.Fatal("review ref deleted by an aborted close")
+		}
+	})
+
+	// ----- retry: same close, confirmed — must redo incorporation and land -----
+	retry := &scriptedPrompter{
+		Branch:       rig.refDerivedRow(),
+		Strategy:     commitpkg.MergeStrategySquash,
+		Confirm:      true,
+		Message:      []byte("feat(thing): close ABC-1 after review\n"),
+		DeleteBranch: false,
+	}
+	if err := runClose(t.Context(), rig.deps, retry); err != nil {
+		t.Fatalf("runClose (retry): %v", err)
+	}
+
+	t.Run("retry lands the close commit on main", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1 after review")
+	})
+
+	t.Run("retry lands the reviewer fix on main", func(t *testing.T) {
+		out, sErr := exec.CommandContext(t.Context(), "git", "-C", rig.dir,
+			"show", "main:feature.txt").Output()
+		if sErr != nil {
+			t.Fatalf("git show main:feature.txt: %v", sErr)
+		}
+		if !strings.Contains(string(out), "reviewer fix") {
+			t.Errorf("main:feature.txt = %q, want the reviewer fix included", out)
+		}
+	})
+
+	t.Run("review branch cleaned up after the successful close", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@review")
+	})
+
+	t.Run("review ref cleaned up after the successful close", func(t *testing.T) {
+		ref, _, rErr := rig.client.ReadReviewRef(t.Context(), "ABC-1")
+		if rErr != nil {
+			t.Fatalf("ReadReviewRef: %v", rErr)
+		}
+		if ref != nil {
+			t.Fatalf("review ref = %+v, want it deleted once the merge landed", ref)
 		}
 	})
 }

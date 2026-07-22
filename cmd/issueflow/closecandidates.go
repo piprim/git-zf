@@ -31,7 +31,8 @@ type CandidateClient interface {
 // in-progress branch from the store, unioned with every refs/zf/branches/*
 // entry (merged=false) that has no store row and whose feature branch resolves
 // locally or via origin. Ref-derived rows carry IssueID == 0 as the
-// "not yet tracked in this store" marker; MaterializeAndTrack promotes them.
+// "not yet tracked in this store" marker; the close flow promotes them via
+// MaterializeBranch (before the merge) and TrackCandidate (after it commits).
 //
 // Reads local refs only — callers should FetchBranchRefs first (getPickedBranch
 // does so via ReconcileMergedFromRefs). Mirrors the cross-machine ref fallback
@@ -95,39 +96,55 @@ var (
 	_ CandidateClient = (*git.Client)(nil)
 )
 
-// MaterializeAndTrack promotes a ref-derived close candidate (IssueID == 0) into
-// a tracked branch: it materializes the local feature branch from origin when
-// absent, inserts the issue + branch rows, then returns the now-tracked
-// BranchRow (with a real IssueID) for the rest of the close flow. A candidate
-// that is already tracked (IssueID != 0) is returned unchanged.
+// MaterializeBranch creates the local feature branch for a ref-derived close
+// candidate when it is absent, starting from the ref the candidate resolved
+// against (local or origin). Returns created=true when this call created the
+// branch, so the close flow can roll it back if the close aborts before the
+// merge commit lands. No store writes happen here — tracking is deferred to
+// TrackCandidate so an aborted close leaves no spurious in-progress rows.
+func MaterializeBranch(
+	ctx context.Context, c CandidateClient, picked store.BranchRow,
+) (created bool, err error) {
+	exists, err := c.BranchExists(picked.BranchName)
+	if err != nil {
+		return false, fmt.Errorf("check branch %q exists: %w", picked.BranchName, err)
+	}
+	if exists {
+		return false, nil
+	}
+
+	h, err := c.ResolveBranchRef(picked.BranchName)
+	if err != nil {
+		return false, fmt.Errorf("resolve feature branch %q: %w", picked.BranchName, err)
+	}
+	if err := c.CreateLocalBranch(ctx, picked.BranchName, h.String()); err != nil {
+		return false, fmt.Errorf("materialize feature branch %q: %w", picked.BranchName, err)
+	}
+
+	return true, nil
+}
+
+// TrackCandidate promotes a ref-derived close candidate (IssueID == 0) into a
+// tracked branch: it inserts the issue + branch rows and returns the
+// now-tracked BranchRow (with a real IssueID) for post-merge bookkeeping. A
+// candidate that is already tracked (IssueID != 0) is returned unchanged.
+//
+// runClose calls this only after the merge commit lands, so a close that
+// aborts on conflict or cancel never inserts rows — preserving the documented
+// "aborts without touching anything" invariant for reviewer-initiated closes.
 //
 // The inserted issue's TrackerType is read from the branch ref so
 // `git zf issue list` classifies it correctly; the tracker-update gate in the
 // close flow reads TrackerType from the ref + config, not this row, so an empty
 // value here does not change tracker behavior.
-func MaterializeAndTrack(
+func TrackCandidate(
 	ctx context.Context, s CandidateStore, c CandidateClient, picked store.BranchRow,
 ) (store.BranchRow, error) {
 	if picked.IssueID != 0 {
 		return picked, nil // already tracked; developer started it locally
 	}
 
-	// 1. Materialize the local feature branch from origin when it is absent.
-	exists, err := c.BranchExists(picked.BranchName)
-	if err != nil {
-		return store.BranchRow{}, fmt.Errorf("check branch %q exists: %w", picked.BranchName, err)
-	}
-	if !exists {
-		h, resolveErr := c.ResolveBranchRef(picked.BranchName)
-		if resolveErr != nil {
-			return store.BranchRow{}, fmt.Errorf("resolve feature branch %q: %w", picked.BranchName, resolveErr)
-		}
-		if createErr := c.CreateLocalBranch(ctx, picked.BranchName, h.String()); createErr != nil {
-			return store.BranchRow{}, fmt.Errorf("materialize feature branch %q: %w", picked.BranchName, createErr)
-		}
-	}
-
-	// 2. Auto-track (idempotent): skip the insert when the branch is already tracked.
+	// Idempotent: skip the insert when the branch is already tracked.
 	all, err := s.ListBranches(ctx, store.BranchStatusAll)
 	if err != nil {
 		return store.BranchRow{}, fmt.Errorf("list branches: %w", err)

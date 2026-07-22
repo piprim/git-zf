@@ -156,8 +156,10 @@ func (c *Client) ListBranchRefs(ctx context.Context) ([]BranchRef, error) {
 		"for-each-ref", "--format=%(objectname) %(refname)", branchRefPrefix)
 	out, err := cmd.Output()
 	if err != nil {
-		// No refs exist yet — return empty slice, not an error.
-		return []BranchRef{}, nil
+		// Genuine git failure. for-each-ref exits 0 with empty output when no
+		// refs match, so "no refs yet" never lands here — callers that want
+		// best-effort behavior (CloseCandidates) degrade on this error.
+		return nil, fmt.Errorf("for-each-ref %s: %w", branchRefPrefix, err)
 	}
 
 	result := []BranchRef{}
