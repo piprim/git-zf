@@ -68,6 +68,23 @@ prompt:
     git zf branch prune --yes
 
 
+### Testing the merge flow
+
+The shared merge engine (`cmd/mergeflow`) is unit-tested in
+`cmd/mergeflow/mergeflow_test.go` (real on-disk repo, scripted
+`mergeflow.Prompter`, one path per strategy plus conflict / abort / materialized
+rollback). The `branch merge` command is end-to-end tested in
+`cmd/branch/merge_e2e_test.go` with a `scriptedMergePrompter`.
+
+    mise exec -- go test ./cmd/mergeflow/... -v
+    mise exec -- go test ./cmd/branch/... -run "^TestRunMerge_" -v
+
+`issue close` and `branch merge` share `cmd/mergeflow` as their merge engine.
+`branch merge` REFUSES issue branches as the source (it redirects to `issue
+close`). When changing the refusal or the shared engine, keep the close E2E
+suite green — it is the regression net for the extraction.
+
+
 ## Architecture
 
 Three packages under `github.com/piprim/git-zf`:
@@ -88,7 +105,7 @@ Config file: `.git-zf.json` at repo root or `$HOME`. Repo root takes priority. T
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (2121 symbols, 10175 relationships, 179 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (2262 symbols, 10917 relationships, 191 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

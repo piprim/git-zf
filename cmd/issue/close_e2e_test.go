@@ -433,6 +433,157 @@ func TestClose_NoInProgressBranches(t *testing.T) {
 	})
 }
 
+// TestClose_EmptyState_RedirectsToBranchMerge verifies that when there are no
+// close candidates and HEAD is on a non-issue branch with unmerged commits,
+// close points the user at `git zf branch merge` instead of the bare
+// "No branches available to close." message.
+func TestClose_EmptyState_RedirectsToBranchMerge(t *testing.T) {
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@test.com")
+	runGit("config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base.txt: %v", err)
+	}
+	runGit("add", "base.txt")
+	runGit("commit", "-m", "chore: init")
+
+	// A non-issue branch with an unmerged commit; leave HEAD on it.
+	runGit("checkout", "-b", "hotfix")
+	if err := os.WriteFile(filepath.Join(dir, "hotfix.txt"), []byte("hotfix\n"), 0o644); err != nil {
+		t.Fatalf("write hotfix.txt: %v", err)
+	}
+	runGit("add", "hotfix.txt")
+	runGit("commit", "-m", "fix: urgent")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	ioStreams := &pkg.IO{In: bytes.NewReader(nil), Out: stdout, Err: stderr}
+
+	client, err := git.NewClientAt(ioStreams, dir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	s, err := store.Open(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+
+	deps := closeDeps{client: client, store: s, cfg: cfg}
+
+	// PickBranch must never be called — no candidates exist.
+	prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch should not be called when no candidates exist")}
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("suggests branch merge", func(t *testing.T) {
+		if got := stdout.String(); !strings.Contains(got, "git zf branch merge") {
+			t.Errorf("stdout = %q, want it to suggest 'git zf branch merge'", got)
+		}
+	})
+	t.Run("does not print the plain empty-list message", func(t *testing.T) {
+		if got := stdout.String(); strings.Contains(got, "No branches available to close") {
+			t.Errorf("stdout should redirect, not show the plain empty message; got %q", got)
+		}
+	})
+}
+
+// TestClose_EmptyState_OnUntrackedIssueBranch_DoesNotRedirect guards the
+// misfire fixed in getPickedBranch: an issue-shaped branch with unmerged
+// commits but no store row and no refs/zf/branches ref (a fresh local issue
+// branch, or a reviewer clone pre-reconciliation) yields zero close
+// candidates and lands in the empty-state block. The `branch merge` nudge
+// must NOT fire there — it claims the branch "isn't an issue branch" (false)
+// and `branch merge` refuses issue branches on the same branch.Parse gate,
+// which would bounce the user straight back to `issue close`.
+func TestClose_EmptyState_OnUntrackedIssueBranch_DoesNotRedirect(t *testing.T) {
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@test.com")
+	runGit("config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base.txt: %v", err)
+	}
+	runGit("add", "base.txt")
+	runGit("commit", "-m", "chore: init")
+
+	// An issue-shaped branch (parses under branch.Parse) with an unmerged
+	// commit, but deliberately NO store row and NO branch ref. Leave HEAD on it.
+	runGit("checkout", "-b", "DEF-9@feat@fresh")
+	if err := os.WriteFile(filepath.Join(dir, "fresh.txt"), []byte("fresh\n"), 0o644); err != nil {
+		t.Fatalf("write fresh.txt: %v", err)
+	}
+	runGit("add", "fresh.txt")
+	runGit("commit", "-m", "feat: fresh")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	ioStreams := &pkg.IO{In: bytes.NewReader(nil), Out: stdout, Err: stderr}
+
+	client, err := git.NewClientAt(ioStreams, dir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	s, err := store.Open(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	cfg := &config.AppConfig{}
+	cfg.Branch.Base = "main"
+
+	deps := closeDeps{client: client, store: s, cfg: cfg}
+
+	// PickBranch must never be called — no candidates exist.
+	prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch should not be called when no candidates exist")}
+
+	if err := runClose(t.Context(), deps, prompter); err != nil {
+		t.Fatalf("runClose: %v", err)
+	}
+
+	t.Run("does not misfire the branch merge nudge", func(t *testing.T) {
+		if got := stdout.String(); strings.Contains(got, "git zf branch merge") {
+			t.Errorf("stdout should not redirect an issue branch to `branch merge`; got %q", got)
+		}
+	})
+	t.Run("prints the plain empty-list message", func(t *testing.T) {
+		if got := stdout.String(); !strings.Contains(got, "No branches available to close") {
+			t.Errorf("stdout = %q, want it to contain 'No branches available to close'", got)
+		}
+	})
+}
+
 func TestClose_UserAbortsAtConfirm(t *testing.T) {
 	t.Parallel()
 

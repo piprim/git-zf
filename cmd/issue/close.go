@@ -11,12 +11,11 @@ import (
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
+	"github.com/piprim/git-zf/cmd/mergeflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/commit"
-	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/convert"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
@@ -73,11 +72,6 @@ func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConf
 	return deps, nil
 }
 
-// errFastForwardDeferred signals that the rebase commit landed on feature but
-// local base could not fast-forward (diverged from origin/<base>). closeRunE
-// uses it to skip post-merge bookkeeping while still exiting cleanly.
-var errFastForwardDeferred = errors.New("commit created, fast-forward deferred")
-
 // ErrBranchLockedForReview is returned by reviewPreflight when the branch is
 // locked because a review is in progress. Use errors.Is to detect it.
 var ErrBranchLockedForReview = errors.New("branch locked for review")
@@ -90,24 +84,6 @@ var ErrReviewChangesRequested = errors.New("reviewer requested changes")
 // the @review branch conflict with the feature branch (or the tree is dirty)
 // and the developer must run `git zf review sync` before closing.
 var ErrReviewSyncNeeded = errors.New("review sync needed")
-
-// mergeContext bundles inputs for doMerge / doSquashCommit so each helper
-// stays under the revive argument-limit while keeping inputs immutable.
-type mergeContext struct {
-	client       *git.Client
-	pickedBranch *store.BranchRow
-	baseBranch   string
-	cfg          *config.AppConfig
-	store        *store.Store
-
-	// materialized is true when the picked branch was created by this close
-	// run (ref-derived pick). Strategies use it to widen their abort rollback:
-	// residue that is worth keeping for a locally-started branch (e.g. the
-	// staged squash diff) is discarded for a materialized one, because the
-	// branch itself is about to be rolled back and everything is reproducible
-	// from origin.
-	materialized bool
-}
 
 func (i Issue) getCloseCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -251,31 +227,37 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 			picked.IssueSlug, children)
 	}
 
-	mc := mergeContext{
-		client:       deps.client,
-		pickedBranch: picked,
-		baseBranch:   base,
-		cfg:          deps.cfg,
-		store:        deps.store,
-		materialized: createdBranch,
+	// The issue-flavored commit-message prefill is the one thing the shared
+	// engine cannot know: it is built from this issue's slug/type/title.
+	prefill := func(s commit.MergeStrategy, sourceTip, targetTip plumbing.Hash) map[string]any {
+		return commit.IssueHint{
+			IssueID:      picked.IssueSlug,
+			BranchType:   picked.Type,
+			IssueSubject: picked.Title,
+			Closing:      &commit.IssueCloseInfo{FromHash: sourceTip, ToHash: targetTip, Strategy: s},
+		}.Prefill(deps.cfg.CommitMessage)
 	}
 
-	strategy, aborted, err := doMerge(ctx, mc, prompter)
+	res, err := mergeflow.Run(ctx, deps.client, mergeflow.Params{
+		Source:             picked.BranchName,
+		Target:             base,
+		SourceMaterialized: createdBranch,
+	}, prompter, prefill)
 	if err != nil {
-		if errors.Is(err, errFastForwardDeferred) {
-			// The commit landed on the feature branch — keep it, and track the
-			// ref-derived candidate so the store mirrors a locally-started
-			// branch awaiting its manual fast-forward.
-			mergeCommitted = true
-			picked = trackPickedCandidate(ctx, deps, picked)
-
-			return nil
-		}
-
 		return err
 	}
 
-	if aborted {
+	if res.FastForwardDeferred {
+		// The commit landed on the feature branch — keep it, and track the
+		// ref-derived candidate so the store mirrors a locally-started
+		// branch awaiting its manual fast-forward.
+		mergeCommitted = true
+		picked = trackPickedCandidate(ctx, deps, picked)
+
+		return nil
+	}
+
+	if res.Aborted {
 		fmt.Fprintln(deps.client.IO().Out, "Aborted.")
 
 		return nil
@@ -290,7 +272,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 
 	updateClosedStatus(ctx, deps, picked, prompter)
 
-	if err := doDeleteBranch(ctx, deps.client, picked, strategy, prompter); err != nil {
+	if err := doDeleteBranch(ctx, deps.client, picked, res.Strategy, prompter); err != nil {
 		return err
 	}
 
@@ -577,6 +559,29 @@ func getPickedBranch(
 	}
 
 	if len(branches) == 0 {
+		// Best-effort nudge: a user standing on a non-issue branch that still
+		// has unmerged commits almost certainly wants `branch merge`, not
+		// `issue close`. Any probe error degrades to the plain message.
+		if cur, curErr := client.CurrentBranch(); curErr == nil && cur != "" {
+			// Only nudge when cur is genuinely NOT an issue branch. An issue
+			// branch with no store row and no ref (fresh local branch, or a
+			// reviewer clone pre-reconciliation) also lands here with zero
+			// candidates — but the nudge's claim would be false, and `branch
+			// merge` refuses issue branches on the same branch.Parse gate,
+			// bouncing the user straight back to `issue close`. Match that gate.
+			if _, parseErr := branch.Parse(cur); parseErr != nil {
+				if base, baseErr := client.DefaultBaseBranch(); baseErr == nil {
+					if merged, mErr := client.IsMergedInto(cur, base); mErr == nil && !merged {
+						fmt.Fprintf(client.IO().Out,
+							"You're on %q, which has unmerged commits but isn't an issue branch.\n"+
+								"To merge it:  git zf branch merge\n", cur)
+
+						return nil, nil
+					}
+				}
+			}
+		}
+
 		fmt.Fprintln(client.IO().Out, "No branches available to close.")
 
 		return nil, nil
@@ -594,122 +599,6 @@ func getPickedBranch(
 	}
 
 	return picked, nil
-}
-
-// doMerge runs the full merge flow: dry-run, strategy picker, confirm, then
-// the actual merge. aborted is true when the user cancelled at the confirm prompt.
-func doMerge(
-	ctx context.Context,
-	mc mergeContext,
-	prompter ClosePrompter) (strategy commit.MergeStrategy, aborted bool, err error) {
-	// The base branch may not exist locally (e.g. a parent integration branch
-	// that Bob never checked out). LocalOrRemoteRef falls back to origin/<base>
-	// so merge-tree can resolve it from the remote tracking ref.
-	dryRunBase := mc.client.LocalOrRemoteRef(mc.baseBranch)
-	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, dryRunBase)
-	if err != nil {
-		return "", false, fmt.Errorf("merge dry-run: %w", err)
-	}
-
-	if len(conflicts) > 0 {
-		fmt.Fprintln(mc.client.IO().Out, "Conflicts detected:")
-		for _, f := range conflicts {
-			fmt.Fprintln(mc.client.IO().Out, "  "+f)
-		}
-		fmt.Fprintln(mc.client.IO().Out, "Aborting.")
-
-		return "", false, fmt.Errorf("merge conflicts in branch %q", mc.pickedBranch.BranchName)
-	}
-
-	strategy, err = prompter.PickStrategy(ctx)
-	if err != nil {
-		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
-		return "", false, err
-	}
-
-	confirmed, err := prompter.ConfirmMerge(ctx, mc.pickedBranch.BranchName, mc.baseBranch, strategy)
-	if err != nil {
-		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
-		return "", false, err
-	}
-
-	if !confirmed {
-		return strategy, true, nil
-	}
-
-	switch strategy {
-	case commitpkg.MergeStrategyClassic:
-		if err := doClassicClose(ctx, mc, prompter); err != nil {
-			return strategy, false, err
-		}
-	case commitpkg.MergeStrategySquash:
-		if err := doSquashCommit(ctx, mc, prompter); err != nil {
-			return strategy, false, err
-		}
-	case commitpkg.MergeStrategyRebase:
-		if err := doRebaseClose(ctx, mc, prompter); err != nil {
-			return strategy, false, err
-		}
-	default:
-		return strategy, false, fmt.Errorf("unknown strategy %q", strategy)
-	}
-
-	return strategy, false, nil
-}
-
-// doSquashCommit resolves the source and base tip SHAs, runs `git merge --squash`
-// (which stages the merge but does not commit), then opens the commit form
-// pre-filled with type/scope and a "Squashed merge of <bsha> into <basesha>."
-// subject. The author dropdown defaults to the current git identity. Esc/Ctrl+C
-// in the form aborts the close; for a locally-started branch the staged changes
-// are left in place so the operator can inspect or `git reset` them. For a
-// materialized pick (mc.materialized) they are discarded instead — the branch
-// is about to be rolled back too, and the diff is reproducible from origin, so
-// keeping it would leave the clone dirtier than the close found it.
-func doSquashCommit(ctx context.Context, mc mergeContext, prompter ClosePrompter) (err error) {
-	branchHash, err := mc.client.ResolveRef("refs/heads/" + mc.pickedBranch.BranchName)
-	if err != nil {
-		return fmt.Errorf("resolve branch %q: %w", mc.pickedBranch.BranchName, err)
-	}
-
-	// Fast-forward local base to origin/<base> before squashing so the squash
-	// commit lands on the current remote tip. Without this, a teammate's push
-	// to the integration branch (e.g. Bob closing X.2) leaves the local base
-	// stale; the squash would diverge from origin and the post-close push fails.
-	if remote, _ := mc.client.Remote(); remote != "" {
-		_ = mc.client.FastForwardOnly(ctx, remote+"/"+mc.baseBranch, mc.baseBranch)
-	}
-
-	baseHash, err := mc.client.ResolveBranchRef(mc.baseBranch)
-	if err != nil {
-		return fmt.Errorf("resolve base %q: %w", mc.baseBranch, err)
-	}
-
-	if err := mc.client.MergeSquash(ctx, mc.pickedBranch.BranchName, mc.baseBranch); err != nil {
-		return fmt.Errorf("merge squash: %w", err)
-	}
-
-	// From here on the squash diff is staged on base. On abort (compose Esc,
-	// commit failure) discard it for a materialized pick so the outer rollback
-	// really does leave the clone as the close found it. The base tip is
-	// unchanged (nothing committed), so a hard reset only clears index +
-	// working tree.
-	defer func() {
-		if err == nil || !mc.materialized {
-			return
-		}
-		if rbErr := mc.client.ResetHard(ctx, baseHash.String()); rbErr != nil {
-			fmt.Fprintf(mc.client.IO().Err, "warning: discard staged squash changes: %v\n", rbErr)
-
-			return
-		}
-		fmt.Fprintf(mc.client.IO().Err,
-			"Rolled back: staged squash changes on %q discarded\n", mc.baseBranch)
-	}()
-
-	mergeInfo := commitpkg.IssueCloseInfo{FromHash: branchHash, ToHash: baseHash, Strategy: commitpkg.MergeStrategySquash}
-
-	return composeAndCommit(ctx, mc, prompter, &mergeInfo)
 }
 
 // updateClosedStatus marks the branch and issue as merged in the store and,
@@ -773,225 +662,6 @@ func doDeleteBranch(
 	return nil
 }
 
-// doRebaseClose runs the Rebase strategy: pre-flights the working tree, fetches
-// the configured remote (no-op when none), validates the merge endpoint with
-// merge-tree, performs a real `git merge <remote>/<base>` (submodule-safe —
-// falls back to local <base> when no remote), soft-resets feature back to the
-// same ref so the merged diff is staged, drives the commitizen TUI form,
-// commits, and fast-forwards local base. Rollback uses a named-return closure:
-// any failure between the soft-reset and a successful commit triggers
-// `git reset --hard <featureOrigSHA>` to atomically restore the feature ref.
-// The post-commit FF failure is signalled with errFastForwardDeferred so the
-// caller can skip post-merge bookkeeping without rolling back the new commit.
-func doRebaseClose(ctx context.Context, mc mergeContext, prompter ClosePrompter) (err error) {
-	plan, err := rebasePreflight(ctx, mc)
-	if err != nil {
-		return err
-	}
-
-	if err := mc.client.MergeRebase(ctx, mc.pickedBranch.BranchName, mc.baseBranch); err != nil {
-		return fmt.Errorf("merge rebase: %w", err)
-	}
-
-	defer func() {
-		if err == nil || errors.Is(err, errFastForwardDeferred) {
-			return
-		}
-
-		if rbErr := mc.client.ResetHard(ctx, plan.featureOrigSHA.String()); rbErr != nil {
-			err = fmt.Errorf("rollback after %w failed: %v", err, rbErr)
-
-			return
-		}
-
-		fmt.Fprintf(mc.client.IO().Err,
-			"Rolled back: feature branch %q restored to %s\n",
-			mc.pickedBranch.BranchName, plan.featureOrigSHA.String()[:7])
-	}()
-
-	baseRef := "refs/remotes/" + plan.remoteBase
-	if plan.remoteName == "" {
-		baseRef = "refs/heads/" + mc.baseBranch
-	}
-	baseOriginSHA, err := mc.client.ResolveRef(baseRef)
-	if err != nil {
-		return fmt.Errorf("resolve %s: %w", baseRef, err)
-	}
-
-	mergeInfo := commitpkg.IssueCloseInfo{
-		FromHash: plan.featureOrigSHA,
-		ToHash:   baseOriginSHA,
-		Strategy: commitpkg.MergeStrategyRebase,
-	}
-
-	if err := composeAndCommit(ctx, mc, prompter, &mergeInfo); err != nil {
-		return err
-	}
-
-	if ffErr := mc.client.FastForwardOnly(ctx, mc.pickedBranch.BranchName, mc.baseBranch); ffErr != nil {
-		fmt.Fprintf(mc.client.IO().Err,
-			"Commit created on %q but local %s has diverged from %s.\n"+
-				"Run `git pull --ff-only` on %s, then `git merge --ff-only %s` to land it.\n",
-			mc.pickedBranch.BranchName, mc.baseBranch, plan.remoteBase,
-			mc.baseBranch, mc.pickedBranch.BranchName)
-
-		return errFastForwardDeferred
-	}
-
-	return nil
-}
-
-// doClassicClose drives the Classic strategy: shared rebasePreflight,
-// FF-sync of local base against origin/<base> (or direct checkout when no
-// remote), real --no-ff --no-commit merge on base, commitizen form,
-// commit. Rollback on any failure between MergeNoFFNoCommit and a
-// successful Commit runs `git merge --abort` to clear MERGE_HEAD /
-// MERGE_MSG and restore the working tree. The defer uses a named return
-// + closure so it observes the actual err at function exit.
-func doClassicClose(ctx context.Context, mc mergeContext, prompter ClosePrompter) (err error) {
-	// rebasePreflight is reused verbatim: dirty check, feature checkout +
-	// SHA, remote detection, fetch, remoteBase computation, ancestor check,
-	// dry-run — all needed by Classic too. The rebasePlan's featureOrigSHA
-	// is used here only for the prefill subject (no rollback role since
-	// Classic uses AbortMerge instead of ResetHard).
-	plan, err := rebasePreflight(ctx, mc)
-	if err != nil {
-		return err
-	}
-
-	// Step 2: sync local base with origin/<base> (no-op when no remote).
-	if plan.remoteName != "" {
-		if err := mc.client.FastForwardOnly(ctx, plan.remoteBase, mc.baseBranch); err != nil {
-			return fmt.Errorf("local %s diverged from %s — `git pull --ff-only` first: %w",
-				mc.baseBranch, plan.remoteBase, err)
-		}
-	} else {
-		if err := mc.client.Checkout(ctx, mc.baseBranch); err != nil {
-			return fmt.Errorf("checkout %s: %w", mc.baseBranch, err)
-		}
-	}
-
-	// Step 3: resolve integration target SHA for the prefill subject.
-	baseSHA, err := mc.client.ResolveRef("refs/heads/" + mc.baseBranch)
-	if err != nil {
-		return fmt.Errorf("resolve %s: %w", mc.baseBranch, err)
-	}
-
-	// Step 4: stage the merge without committing.
-	if err := mc.client.MergeNoFFNoCommit(ctx, mc.pickedBranch.BranchName, mc.baseBranch); err != nil {
-		return fmt.Errorf("merge --no-ff --no-commit: %w", err)
-	}
-
-	defer func() {
-		if err == nil {
-			return
-		}
-
-		if abErr := mc.client.AbortMerge(ctx); abErr != nil {
-			err = fmt.Errorf("merge --abort after %w failed: %v", err, abErr)
-
-			return
-		}
-
-		fmt.Fprintf(mc.client.IO().Err,
-			"Rolled back: working tree on %q restored to pre-merge state\n",
-			mc.baseBranch)
-	}()
-
-	mergeInfo := commitpkg.IssueCloseInfo{FromHash: plan.featureOrigSHA, ToHash: baseSHA, Strategy: commitpkg.MergeStrategyClassic}
-
-	// No post-commit fast-forward: unlike Rebase, the merge commit lands
-	// directly on base (MergeNoFFNoCommit checked out base before merging),
-	// so base is already at the new HEAD. No errFastForwardDeferred path.
-	return composeAndCommit(ctx, mc, prompter, &mergeInfo)
-}
-
-// rebasePlan captures the state computed by rebasePreflight and consumed by
-// doRebaseClose. remoteBase is "<remote>/<base>" when a remote is configured,
-// otherwise "<base>"; remoteName is "" in the no-remote case so callers can
-// pick the correct ref namespace.
-type rebasePlan struct {
-	featureOrigSHA plumbing.Hash
-	remoteName     string
-	remoteBase     string
-}
-
-// rebasePreflight runs the read-only checks that precede MergeRebase: dirty
-// tree, checkout, resolve HEAD + remote, fetch, compute the merge endpoint,
-// ancestor check, and merge dry-run.
-func rebasePreflight(ctx context.Context, mc mergeContext) (rebasePlan, error) {
-	dirty, err := mc.client.IsDirty(ctx)
-	if err != nil {
-		return rebasePlan{}, fmt.Errorf("dirty check: %w", err)
-	}
-
-	if dirty {
-		return rebasePlan{},
-			errors.New("working tree has uncommitted modifications — commit or stash before closing")
-	}
-
-	if err := mc.client.Checkout(ctx, mc.pickedBranch.BranchName); err != nil {
-		return rebasePlan{}, fmt.Errorf("checkout %s: %w", mc.pickedBranch.BranchName, err)
-	}
-
-	featureOrigSHA, err := mc.client.ResolveRef("HEAD")
-	if err != nil {
-		return rebasePlan{}, fmt.Errorf("resolve HEAD: %w", err)
-	}
-
-	remoteName, err := mc.client.Remote()
-	if err != nil {
-		return rebasePlan{}, fmt.Errorf("resolve remote: %w", err)
-	}
-
-	if err := mc.client.Fetch(ctx); err != nil {
-		return rebasePlan{}, fmt.Errorf("fetch: %w", err)
-	}
-
-	remoteBase := mc.baseBranch
-	if remoteName != "" {
-		remoteBase = remoteName + "/" + mc.baseBranch
-	}
-
-	integrated, err := mc.client.IsAncestor(ctx, mc.pickedBranch.BranchName, remoteBase)
-	if err != nil {
-		return rebasePlan{}, fmt.Errorf("ancestor check: %w", err)
-	}
-
-	if integrated {
-		return rebasePlan{}, fmt.Errorf("%q has no commits ahead of %s",
-			mc.pickedBranch.BranchName, remoteBase)
-	}
-
-	if err := mergeDryRun(ctx, mc, remoteBase); err != nil {
-		return rebasePlan{}, err
-	}
-
-	return rebasePlan{
-		featureOrigSHA: featureOrigSHA,
-		remoteName:     remoteName,
-		remoteBase:     remoteBase,
-	}, nil
-}
-
-func mergeDryRun(ctx context.Context, mc mergeContext, remoteBase string) error {
-	conflicts, err := mc.client.MergeDryRun(ctx, mc.pickedBranch.BranchName, remoteBase)
-	if err != nil {
-		return fmt.Errorf("merge dry-run: %w", err)
-	}
-
-	if len(conflicts) > 0 {
-		fmt.Fprintln(mc.client.IO().Out, "Conflicts detected:")
-		for _, f := range conflicts {
-			fmt.Fprintln(mc.client.IO().Out, "  "+f)
-		}
-
-		return fmt.Errorf("merge conflicts vs %s in %q", remoteBase, mc.pickedBranch.BranchName)
-	}
-
-	return nil
-}
-
 // reconcileChildrenFromRefs reads refs/zf/branches/<childSlug> for every
 // in-progress child of parentSlug. When a ref has Merged=true (written by the
 // child's close in another clone), the local store is updated to merged so the
@@ -1018,38 +688,6 @@ func reconcileChildrenFromRefs(ctx context.Context, deps closeDeps, parentSlug s
 			issueflow.MarkMergedFromRef(ctx, deps.store, deps.client, b, now)
 		}
 	}
-}
-
-// composeAndCommit builds the prefill from issue context + a strategy subject,
-// drives the commit form, and commits. strategy labels the commit error (e.g.
-// "squash", "rebase", "classic").
-func composeAndCommit(
-	ctx context.Context,
-	mc mergeContext,
-	prompter ClosePrompter,
-	issueInfo *commit.IssueCloseInfo) error {
-	if issueInfo == nil {
-		return errors.New("issue information can not be nil")
-	}
-
-	hint := commitpkg.IssueHint{
-		IssueID:      mc.pickedBranch.IssueSlug,
-		BranchType:   mc.pickedBranch.Type,
-		IssueSubject: mc.pickedBranch.Title,
-		Closing:      issueInfo}
-	prefill := hint.Prefill(mc.cfg.CommitMessage)
-	// prefill["subject"] = subject
-
-	msg, opts, err := prompter.ComposeMessage(ctx, prefill)
-	if err != nil {
-		return err //nolint:wrapcheck // prompter error already wrapped
-	}
-
-	if err := mc.client.Commit(ctx, msg, convert.CommitOptionsFromTUI(opts)); err != nil {
-		return fmt.Errorf("commit %s: %w", issueInfo.Strategy, err)
-	}
-
-	return nil
 }
 
 // proposeClosePush offers to push the merge target (base) after a successful

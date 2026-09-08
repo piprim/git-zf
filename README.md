@@ -243,6 +243,8 @@ $ git zf branch prune-tracker  # reap branches whose tracker issue is closed
 
 `branch new` is the same flow as `issue start` but pre-selects manual input. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
+`branch merge` picks a local **or** remote-only branch and merges it into the current branch (rebase / squash / classic), then offers to delete the source (local + remote) and propose a push. Issue branches are refused — use `git zf issue close` for those, so the review-incorporation, sub-task, and tracker steps still run. `issue close` and `branch merge` share the same merge engine (`cmd/mergeflow`).
+
 `branch list` flags:
 ```
 --status string   filter by status: in_progress, merged, closed, all (default: in_progress)

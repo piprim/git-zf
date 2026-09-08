@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/cmd/mergeflow"
 	"github.com/piprim/git-zf/commit"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
@@ -55,6 +56,10 @@ type ClosePrompter interface {
 
 // Compile-time check.
 var _ ClosePrompter = (*huhPrompter)(nil)
+
+// The generic subset of ClosePrompter also drives the shared merge engine, so
+// the same production prompter satisfies mergeflow.Prompter.
+var _ mergeflow.Prompter = (*huhPrompter)(nil)
 
 // huhPrompter is the production ClosePrompter. It is constructed once per
 // `issue close` invocation and holds the dependencies needed to drive the

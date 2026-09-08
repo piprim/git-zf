@@ -41,7 +41,7 @@ func (b Branch) GetRootCmd() *cobra.Command {
 		Short: "Manage local branches",
 		RunE:  b.runE,
 	}
-	cmd.AddCommand(listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), mergeCmd())
+	cmd.AddCommand(listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd())
 
 	return cmd
 }
@@ -396,20 +396,6 @@ func executePrune(ctx context.Context, w io.Writer, s *store.Store, result prune
 	}
 
 	fmt.Fprintf(w, "Pruned: %d deleted, %d marked merged.\n", len(result.toDelete), len(result.toMerge))
-
-	return nil
-}
-
-func mergeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "merge",
-		Short: "Merge a branch",
-		RunE:  mergeRunE,
-	}
-}
-
-func mergeRunE(cmd *cobra.Command, _ []string) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
 
 	return nil
 }
