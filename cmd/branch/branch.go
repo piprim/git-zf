@@ -65,6 +65,11 @@ func (b Branch) runE(cmd *cobra.Command, _ []string) error {
 		return b.pruneRunE(cmd, pruneFlags{})
 	case tui.BranchActionNamePruneTracker:
 		return b.pruneTrackerRunE(cmd, pruneTrackerFlags{})
+	case tui.BranchActionNameMerge:
+		// Interactive path: the push/no-push flags live on the `merge`
+		// subcommand, not this root command; mergeRunE reads them via
+		// pushflow.ReadFlags, which tolerates their absence (→ prompt for push).
+		return b.mergeRunE(cmd, nil)
 	default:
 		fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
 
