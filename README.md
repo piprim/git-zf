@@ -81,7 +81,7 @@ $ git zf issue list
 $ git zf issue close
 ```
 
-**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine), or enter an issue ID, title, and type manually. A properly named branch is created and checked out, **or a git worktree is created** so the main working tree stays untouched. Branch/worktree state is tracked in `.git/git-zf.db`. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
+**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine, GitHub, Forgejo/Gitea), or enter an issue ID, title, and type manually. A properly named branch is created and checked out, **or a git worktree is created** so the main working tree stays untouched. Branch/worktree state is tracked in `.git/git-zf.db`. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
 After the issue is selected, a prompt asks whether to create a plain branch or a worktree. When a worktree is created the command prints the path and a `cd` hint since the shell cannot change directory automatically:
 
@@ -478,7 +478,7 @@ desc = "Breaking changes and referenced issues:"
 form = "multiline"
 ```
 
-`ref-format` and `close-format` are Go `fmt.Sprintf` patterns; the single `%s` verb is replaced by the issue ID (e.g. `ABC-42` for Redmine/Jira or `123` for GitHub).
+`ref-format` and `close-format` are Go `fmt.Sprintf` patterns; the single `%s` verb is replaced by the issue ID (e.g. `ABC-42` for Redmine/Jira or `123` for GitHub/Forgejo).
 
 | Key | Default | When used |
 |-----|---------|-----------|
@@ -489,7 +489,7 @@ Examples for common trackers:
 
 | Tracker | `ref-format` | `close-format` |
 |---------|-------------|----------------|
-| Redmine / GitHub / GitLab | `"Refs #%s"` *(default)* | `"Closes #%s"` *(default)* |
+| Redmine / GitHub / Forgejo / Gitea / GitLab | `"Refs #%s"` *(default)* | `"Closes #%s"` *(default)* |
 | Jira | `"Refs: %s"` | `"Fixes: %s"` |
 ```
 
@@ -559,7 +559,7 @@ Set `branch.remote` whenever your primary remote is not named `"origin"` or when
 
 ### Tracker integration
 
-`git zf issue start` and `issue list` can fetch open issues assigned to you from a project tracker. Supported trackers: **Redmine** and **GitHub**.
+`git zf issue start` and `issue list` can fetch open issues assigned to you from a project tracker. Supported trackers: **Redmine**, **GitHub**, and **Forgejo** (also **Gitea**).
 
 Add an `issue-tracker` section to `.git-zf.json`:
 
@@ -587,12 +587,28 @@ Add an `issue-tracker` section to `.git-zf.json`:
 
 For GitHub Enterprise, set `url` to your instance API root, e.g. `https://github.example.com/api/v3/`.
 
+**Forgejo / Gitea** (Codeberg or any self-hosted instance)
+```json
+{
+  "issue-tracker": {
+    "type": "forgejo",
+    "url": "https://codeberg.org",
+    "token": "your_access_token",
+    "projects": ["owner/repo"]
+  }
+}
+```
+
+`url` is the instance root; `/api/v1` is appended automatically (a URL that already ends in `/api/v1` is accepted too). Use `"type": "gitea"` for a Gitea instance — both names select the same adapter since the two APIs are identical for issue listing and state changes. The token needs read/write access to issues (`issue` scope).
+
+**Instance behind an HTTP Basic auth gate** (e.g. a reverse proxy protecting the whole site): put the gate credentials in the URL, `"url": "https://user:password@forgejo.example.org"`. They are sent as `Authorization: Basic` for the proxy, and the Forgejo token is passed as the `token` query parameter instead, which Forgejo/Gitea accept unless the admin has set `[security] DISABLE_QUERY_AUTH_TOKEN = true`. Note that a token in the query string can end up in the proxy's access logs.
+
 | Key | Description |
 |-----|-------------|
-| `type` | Tracker type: `"redmine"` or `"github"`. |
-| `url` | Base URL of the tracker API. For GitHub use `https://api.github.com`. |
-| `token` | API key (Redmine) or personal access token with `repo` scope (GitHub). |
-| `projects` | Optional list of projects to show. Redmine: project slugs or numeric IDs. GitHub: `"owner/repo"` strings. When omitted all assigned issues are shown. |
+| `type` | Tracker type: `"redmine"`, `"github"`, `"forgejo"`, or `"gitea"`. |
+| `url` | Base URL of the tracker API. For GitHub use `https://api.github.com`; for Forgejo/Gitea use the instance root, e.g. `https://codeberg.org`. |
+| `token` | API key (Redmine), personal access token with `repo` scope (GitHub), or access token with the `issue` scope (Forgejo/Gitea). |
+| `projects` | Optional list of projects to show. Redmine: project slugs or numeric IDs. GitHub / Forgejo / Gitea: `"owner/repo"` strings. When omitted all assigned issues are shown. |
 
 **Filtering by project**
 
@@ -609,7 +625,7 @@ Use `projects` to limit which repositories or Redmine projects appear in `issue 
 }
 ```
 
-> **Note for `UpdateIssueStatus` via GitHub:** because GitHub's update endpoint requires the `owner/repo`, exactly one entry must be present in `projects` when using `issue close` with a GitHub tracker.
+> **Note for `UpdateIssueStatus` via GitHub / Forgejo / Gitea:** because these trackers' issue endpoints are scoped to a single `owner/repo`, exactly one entry must be present in `projects` when using `issue close` (or any other status update) with one of them.
 
 When a tracker is configured:
 1. `issue start` asks whether to fetch issues from the tracker.
