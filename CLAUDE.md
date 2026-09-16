@@ -68,6 +68,23 @@ prompt:
     git zf branch prune --yes
 
 
+### Testing the menus
+
+`git zf` (no subcommand) and `git zf review` open an action menu built on
+`cmdutil.RunMenu` (`cmd/cmdutil/menu.go`): it takes the parent command, a
+title, the ordered subcommands to offer, and a `MenuPrompter`. The picked
+subcommand's `RunE` runs with the *parent* command (cobra v1.1.3 has no
+`SetContext`), so it sees its flags as unset and runs interactively. No TTY on
+stdin → the group's help is printed; Esc → quiet exit.
+
+    mise exec -- go test ./cmd/cmdutil/... -run "^TestRunMenu|^TestMenuOptions" -v
+    mise exec -- go test ./cmd/ -run "^TestGetRootCmd_menu" -v
+    mise exec -- go test ./cmd/review/... -run "^TestReviewRootCmd" -v
+
+To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`) or
+`Review.menuSubs` (`cmd/review/review.go`) and extend the matching test. The
+`branch` / `issue` menus predate `RunMenu` and still hand-roll their select.
+
 ### Testing the merge flow
 
 The shared merge engine (`cmd/mergeflow`) is unit-tested in

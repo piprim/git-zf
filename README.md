@@ -46,6 +46,13 @@ git zf version
 
 ## Usage
 
+### Menu
+```
+$ git zf
+```
+
+Run without a subcommand, `git zf` opens a menu of the workflow commands — **Commit**, **Issue**, **Branch**, **Review** — and runs the one you pick with its interactive defaults. `git zf issue`, `git zf branch` and `git zf review` do the same one level down. Esc / ctrl+c leaves the `git zf` and `git zf review` menus quietly, and when stdin is not a terminal (scripts, CI) those two skip the menu and print the usual `--help` text instead. Setup commands (`init`, `install`, `uninstall`, `config`, `completion`, `version`) are not in the menu; use them from the command line.
+
 ### Commit
 ```
 $ git zf commit
@@ -282,6 +289,7 @@ $ git zf branch prune-tracker --force-delete --base main
 
 ### Review
 ```
+$ git zf review           # pick an action from a menu
 $ git zf review start     # reviewer: create <IssueID>@review from the locked snapshot
 $ git zf review request   # developer: submit an issue branch for review (locks it)
 $ git zf review approve   # reviewer: approve — the branch is ready to close
@@ -399,6 +407,7 @@ Take a look at the [Cobra Shell-Specific Configuration](https://cobra.dev/docs/h
 ### All commands
 ```txt
 Usage:
+  git-zf [flags]
   git-zf [command]
 
 Available Commands:

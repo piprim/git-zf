@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/piprim/git-zf/cmd/branch"
+	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/commit"
 	"github.com/piprim/git-zf/cmd/completion"
 	cfgcmd "github.com/piprim/git-zf/cmd/config"
@@ -28,6 +29,12 @@ var (
 
 	isDebug   bool
 	appConfig *config.AppConfig
+
+	// rootMenu lists, in display order, the workflow commands offered by the
+	// menu that `git zf` opens when run without a subcommand. Setup commands
+	// (install, uninstall, init, config, completion, version) are deliberately
+	// absent: they are one-shot and stay CLI-only, listed by --help.
+	rootMenu = []string{"commit", "issue", "branch", "review"}
 )
 
 // GetRootCmd builds and returns the root Cobra command.
@@ -43,6 +50,9 @@ func GetRootCmd() (*cobra.Command, error) {
 	rootCmd := &cobra.Command{
 		Use:  appConfig.ProgName,
 		Long: `Command line utility to standardize git commit messages, golang version.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmdutil.RunMenu(cmd, appConfig.ProgName+":", menuSubs(cmd), cmdutil.NewHuhMenuPrompter())
+		},
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			cmd.SilenceUsage = true
 			cmd.SilenceErrors = true
@@ -83,6 +93,24 @@ func GetRootCmd() (*cobra.Command, error) {
 	)
 
 	return rootCmd, nil
+}
+
+// menuSubs resolves rootMenu against root's registered subcommands, keeping
+// rootMenu's order. Names that are not registered are skipped rather than
+// failing, so the menu can never reference a command the CLI does not have.
+func menuSubs(root *cobra.Command) []*cobra.Command {
+	subs := make([]*cobra.Command, 0, len(rootMenu))
+	for _, name := range rootMenu {
+		for _, c := range root.Commands() {
+			if c.Name() == name {
+				subs = append(subs, c)
+
+				break
+			}
+		}
+	}
+
+	return subs
 }
 
 // initConfig loads the .git-zf.toml config file via Viper, then parses the full
