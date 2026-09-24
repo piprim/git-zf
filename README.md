@@ -4,7 +4,7 @@
   <img src="./assets/git-zf-logo.webp" alt="Logo git-zf" width="272" />
 </p>
 
-> A TUI powered CLI that wraps a git-flow workflow (issue → branch → commit → close) with optional issue-tracker integration.
+> A TUI powered CLI that wraps a git-flow workflow (issue → branch → commit → review → close) with optional issue-tracker integration.
 
 ## Getting Started
 
@@ -13,7 +13,9 @@
 - [Go 1.25+](https://go.dev/dl/)
 - Git
 
-### Install from source
+### Install
+
+From source:
 
 ```bash
 git clone https://github.com/piprim/git-zf.git
@@ -22,281 +24,124 @@ make
 sudo make install      # copies binary to $(git --exec-path)
 ```
 
-> On macOS with Homebrew Git the exec-path is user-writable; omit `sudo`.
-
-### Install via `go install`
+Or via `go install`:
 
 ```bash
 go install github.com/piprim/git-zf@latest
 sudo git-zf install    # copies binary to $(git --exec-path)
 ```
 
-> If `git --exec-path` is user-writable, omit `sudo`.
+> If `git --exec-path` is user-writable (e.g. Homebrew Git on macOS), omit `sudo`.
 
-### Verify
+Check with `git zf version`. Remove with `git zf uninstall`.
 
-```bash
-git zf version
-```
-
-### Uninstall
-
-`git zf uninstall`
-
+Then, once per repository (and per submodule), run `git zf init` from the main checkout to install the review hooks (see [Init](#init)).
 
 ## Usage
 
-### Menu
-```
-$ git zf
-```
+Every command is interactive by default. Passing a flag skips the corresponding prompt, and `--help` lists the flags of any command.
 
-Run without a subcommand, `git zf` opens a menu of the workflow commands — **Commit**, **Issue**, **Branch**, **Review** — and runs the one you pick with its interactive defaults. `git zf issue`, `git zf branch` and `git zf review` do the same one level down. Esc / ctrl+c leaves the `git zf` and `git zf review` menus quietly, and when stdin is not a terminal (scripts, CI) those two skip the menu and print the usual `--help` text instead. Setup commands (`init`, `install`, `uninstall`, `config`, `completion`, `version`) are not in the menu; use them from the command line.
+### Menu
+
+`git zf` without a subcommand opens a menu of the workflow commands — **Commit**, **Issue**, **Branch**, **Review** — and runs the one you pick with its interactive defaults. `git zf issue`, `git zf branch` and `git zf review` do the same one level down. Esc / ctrl+c leaves the menu quietly, and when stdin is not a terminal (scripts, CI) the menu is skipped and the usual `--help` text is printed. Setup commands (`init`, `install`, `uninstall`, `config`, `completion`, `version`) are not in the menu.
 
 ### Commit
+
 ```
 $ git zf commit
 ```
 
-```
-Usage:
-  git-zf commit [flags]
+Opens a commitizen-style form (type, scope, subject, body, footer — see [Commit message](#commit-message)) followed by an options page (stage all, amend, sign-off, hooks, push…). Every option has a flag (`-a`, `--amend`, `-s`, `-n`, `--push`, `--no-push`, `-y`…); if any commit flag is passed the options page is skipped and the flags are used directly.
 
-Flags:
-  -a, --all                 stage all tracked modified/deleted files before committing
-      --allow-empty         allow a commit with no changes
-      --amend               replace the tip of the current branch
-      --author string       override commit author as "Name <email>"
-  -h, --help                help for commit
-  -u, --include-untracked   stage untracked files before committing
-      --no-push             skip the post-action push proposal
-  -n, --no-verify           bypass pre-commit and commit-msg hooks
-      --push                push the resulting branch to the remote after the action (skips the prompt)
-  -s, --signoff             add Signed-off-by trailer to the commit message
-  -y, --yes                 skip the commit options form and assume defaults
-```
+On an issue branch the form is pre-filled from the branch name (see [Commit auto-fill](#commit-auto-fill-from-issue-branch)).
 
-If any commit flag is passed, the options page of the TUI form is skipped and the flags are used directly.
-
-**Review guard** — if the current branch is a feature branch (not `<IssueID>@review`) with unincorporated reviewer commits (a decided review — `approved` or `changes_requested` — where `<IssueID>@review` carries commits not yet in your branch), `git zf commit` offers to merge them in before opening the commit form. Declining aborts the commit with a hint to run `git zf review sync` first. `--no-verify` skips the guard entirely, same as it bypasses the pre-commit hook (see [Init](#init)).
+**Review guard** — on a feature branch whose review decision left reviewer commits on `<IssueID>@review` that are not yet in your branch, `git zf commit` offers to merge them in before opening the form. Declining aborts with a hint to run `git zf review sync`. `--no-verify` skips the guard, as it does the pre-commit hook.
 
 ### Issue
+
 ```
-$ git zf issue
 $ git zf issue start
 $ git zf issue list
 $ git zf issue close
 ```
 
-**`issue start`** — start work on an issue: optionally fetch open issues from a tracker (Redmine, GitHub, Forgejo/Gitea), or enter an issue ID, title, and type manually. A properly named branch is created and checked out, **or a git worktree is created** so the main working tree stays untouched. Branch/worktree state is tracked in `.git/git-zf.db`. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
+**`issue start`** — start work on an issue: fetch your open issues from the configured tracker (Redmine, GitHub, Forgejo/Gitea), or enter ID, title and type by hand. A branch named `{issue-id}@{type}@{slug}` (see [Branch naming](#branch-naming)) is created and checked out, **or a git worktree is created** so the main working tree stays untouched. A prompt asks which; pin the choice with `branch.use-worktree` in the config. When a worktree is created the command prints its path and a `cd` hint, since the shell cannot change directory for you. With a tracker configured, you can move the issue to "In Progress" in the same step. Branch and worktree state is tracked in a local SQLite store shared by all worktrees of the repository.
 
-After the issue is selected, a prompt asks whether to create a plain branch or a worktree. When a worktree is created the command prints the path and a `cd` hint since the shell cannot change directory automatically:
+Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
-```
-Created worktree "feat/ABC-42-add-login" at "/home/user/code/myapp--feat-ABC-42-add-login" (based on "main")
-Run 'cd /home/user/code/myapp--feat-ABC-42-add-login' to begin working.
-```
+**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured; the local store is the fallback. Columns: Issue ID · [Project] · Title · Branch · Local Status · Tracker Status · Created. `∅` means no local branch yet; `N.A.` means no tracker configured.
 
-The choice can be pinned via `branch.use-worktree` in the config (see [Branch naming](#branch-naming)).
+In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycles the status filter (Open → Closed → All), **`p`** opens the project picker, **`q`** quits. Flags: `--status open|closed|all`, `--stdout` (plain table), `--json`.
 
-If a tracker is configured, `issue start` pre-selects fetching from the tracker; after picking an issue you can update its status to "In Progress" in one step.
+**`issue close`** — close an in-progress issue. Pick a branch (the current one is pre-selected), then:
 
-**`issue list`** — list issues enriched with local branch data. When a tracker is configured it is the primary source; the local store is used as fallback.
+1. **Reviewer commits** left on `<IssueID>@review` by an approved or rejected review are incorporated (fast-forward or merge); a conflicting merge refuses with a hint to run `git zf review sync`. A parent issue with open sub-tasks is refused.
+2. **Conflict dry-run** via `git merge-tree` against the target (`--base <branch>` overrides the default: the parent branch for a sub-task, otherwise the configured base). Conflicts abort the command before anything is touched.
+3. **Pick a merge strategy** — Rebase (default), Squash or Classic (see [Merge strategies](#merge-strategies)) — and compose the final commit in the commitizen form, pre-filled from the issue.
+4. **Confirm.** The branch is marked `merged` and the issue `closed` in the local store.
+5. **Tracker status** picker, if a tracker is configured (or skip).
+6. **Worktree removal**, if the branch was started in one. Never forced: a worktree with modified or untracked files is left in place. A `cd` hint back to the main checkout is printed when you ran the command from inside the removed worktree.
+7. **Branch deletion**, locally and on the remote, then a push proposal. Classic uses `git branch -d`; Squash and Rebase need `-D` since neither preserves ancestry. A branch still held by a kept worktree is not deleted.
 
-Columns: Issue ID · [Project] · Title · Branch · Local Status · Tracker Status · Created. The Project column appears automatically when issues span more than one project. `"∅"` means the issue has no local branch yet; `"N.A."` means no tracker is configured.
+The picker also lists branches known only from fetched `refs/zf/branches/*` refs, so a teammate can close an issue they did not start: the branch is materialized from `origin/<branch>` and tracked automatically.
 
-`issue list` flags:
-```
---status string   filter by status: open, closed, all (default: open)
---stdout          print table to stdout without TUI
---json            print JSON array to stdout
-```
+Closing works from inside a linked worktree. Rebase runs its steps in the worktree holding the branch and fast-forwards the base from the main checkout; Squash and Classic run in the main checkout. Git refuses the close when the *base* branch is checked out in another linked worktree.
 
-In the interactive TUI:
-- **`/`** — filter rows in real time (matches any column, case-insensitive); **`Enter`** to confirm, **`Esc`** to clear
-- **`tab`** — cycle status filter (Open → Closed → All)
-- **`p`** — open the project picker (↑/↓ or j/k to navigate, **`Enter`** to confirm, **`Esc`** to cancel)
-- **`q`** — quit
+#### Sub-tasks
 
-**`issue close`** — close an in-progress issue: pick from the list of in-progress branches (the currently checked-out branch is pre-selected), merge into the base branch, update the local store, and optionally update the tracker status, remove the worktree if the branch was started in one, and delete the branch locally and on the remote.
+An issue branch can serve as the integration branch for sub-tasks. Start one with `git zf issue start --parent=<parent-issue-slug>`, or simply pick the parent's branch in the base-branch picker that `issue start` shows when more than one candidate branch exists. A sub-task then:
 
-The picker also lists branches known only from fetched `refs/zf/branches/*` refs, so a reviewer or teammate can close an issue they did not start without running `git zf issue track` first — the feature branch is materialized from `origin/<branch>` and tracked automatically before the merge.
+- branches from and closes into the parent branch instead of the configured base,
+- gets parent drift merged in by `git zf review sync`,
+- must be closed before its parent can be closed.
 
-The close flow:
-1. A conflict dry-run is performed via `git merge-tree` — if conflicts are detected the command aborts without touching anything.
-2. Choose merge strategy: **Rebase** (default, recommended — single clean commit, submodule-safe), **Squash** (`git merge --squash`, fast but not submodule-safe), or **Classic** (`--no-ff`, preserves full history). For all three strategies the final commit is composed through the commitizen TUI form, pre-filled from the branch's issue ID and type.
-3. Confirm the merge. After a successful merge the branch is marked as `merged` in the local store and the issue is marked as `closed`.
-4. If a tracker is configured, a status picker lets you update the remote issue status (or skip).
-5. If the branch was started as a **worktree**, a prompt offers to remove it (`git worktree remove`, never forced: a worktree with modified or untracked files is left in place with a hint). When you ran the command from inside that worktree, a `cd` hint back to the main checkout is printed, since your shell is now in a deleted directory.
-6. Optionally delete the branch **locally and on the remote**. Safe delete (`-d`) is used for classic merges; force delete (`-D`) for Squash and Rebase (neither preserves ancestry, so git requires `-D`). A branch still held by a kept worktree is not deleted locally.
-
-`issue close`, `branch merge` and the other store-backed workflow commands work from inside a linked worktree: the local store lives in the repository's common `.git` directory, so every worktree shares it (rows written from inside a worktree by older versions live in `.git/worktrees/<name>/git-zf.db` and are not migrated). Closing a worktree-held issue runs the Rebase strategy's steps in that worktree and fast-forwards the base from the main checkout; Squash and Classic run in the main checkout. Closing is refused by git when the *base* branch is checked out in another linked worktree. The one exception is **`git zf init`**: git reads hooks from the common git dir, but inside a linked worktree `git rev-parse --git-dir` resolves to the per-worktree dir, so run `git zf init` from the main checkout (see the Roadmap).
+The parent relation is stored locally and in `refs/zf/branches/<slug>`, so it survives a fresh clone.
 
 #### Merge strategies
 
 | Strategy | Mechanism | History on base | Submodule-safe |
 |---|---|---|---|
-| **Rebase** *(default)* | Real `git merge <remote>/<base>` + `git reset --soft <remote>/<base>` | one clean commit | ✅ yes |
-| **Squash** | `git merge --squash` | one commit, no merge parent | ⚠️ no — `--squash` is known to mishandle submodule gitlinks |
-| **Classic** | `git merge --no-ff --no-commit` + commitizen form (FF-syncs local base against `origin/<base>` first) | merge commit + full feature history | ✅ yes |
+| **Rebase** *(default)* | Real `git merge <remote>/<base>` + `git reset --soft`, one commit | one clean commit | ✅ yes |
+| **Squash** | `git merge --squash` | one commit, no merge parent | ⚠️ no — `--squash` mishandles submodule gitlinks |
+| **Classic** | `git merge --no-ff --no-commit`, local base FF-synced against `<remote>/<base>` first | merge commit + full feature history | ✅ yes |
 
-#### Rebase strategy — detailed flow
+- **Rebase** — your repo has submodules, or you want a clean linear history with one commit per issue. Recommended default. Any failure before the commit lands (form abort, hook rejection, signing failure) rolls the feature branch back to its original tip.
+- **Squash** — no submodules involved and you want plain `git merge --squash` semantics (fewer git operations).
+- **Classic** — you want the feature's full commit history on the base branch behind a merge commit (large features, bisect surface, audit trail). Refuses to merge into a local base that has diverged from the remote; run `git pull --ff-only` and retry. A failure before the commit runs `git merge --abort` automatically.
 
-Rebase produces the same end state as Squash (one clean commit on the local base branch) but uses a different mechanic under the hood that correctly handles submodule pointers. The work happens on your feature branch, then fast-forwards onto local base. Concretely:
-
-```
-1. Pre-flight
-   - `git status --porcelain --untracked-files=no` → abort if dirty.
-     (Untracked files are intentionally ignored — they survive rollback
-     and don't put your work at risk.)
-
-2. Setup
-   - Checkout the feature branch (idempotent — no `post-checkout` hook
-     fires if you're already there).
-   - Capture the feature tip SHA for safe rollback.
-   - `git fetch <remote>` to pick up the latest remote base (no-op when
-     no remote is configured — see `branch.remote` below).
-   - `git merge-base --is-ancestor feature <remote>/<base>` → if feature
-     has no commits ahead of `<remote>/<base>`, abort cleanly
-     ("already integrated?"). Avoids producing an empty commit.
-   - `git merge-tree` dry-run against `<remote>/<base>` → abort with the
-     conflict file list if the endpoint can't merge cleanly.
-
-3. Execute
-   - `git merge --no-edit <remote>/<base>` — a *real* merge, which handles
-     submodule gitlinks correctly. `--no-edit` suppresses $EDITOR for
-     the transient merge-commit message. When no remote is configured,
-     merges against the local `<base>` branch directly.
-   - `git reset --soft <remote>/<base>` — collapse the merge into one
-     staged diff. HEAD moves back, working tree stays at the merged state,
-     the index is fully staged.
-
-4. TUI commit form
-   - The commitizen form opens pre-filled with type, scope, and the
-     subject `Squashed close of <feature-tip> into <base-tip>.`
-   - Submit → `git commit` lands one clean commit on the feature branch.
-   - Esc / Ctrl+C / hook rejection → atomic rollback: feature is reset
-     to its captured original tip via `git reset --hard`. You see
-     `Rolled back: feature branch "<name>" restored to <sha>` on stderr.
-
-5. Deploy
-   - Checkout local `<base>` (idempotent).
-   - `git merge --ff-only feature` to land the new commit.
-
-6. Bookkeeping
-   - Update local store and (if configured) tracker; prompt to delete
-     the feature branch.
-```
-
-##### Why a real `git merge` instead of `git rebase`
-
-A `git rebase` mechanism would have replayed the feature's commits one at a time. If commit #2 conflicts but commit #4 fixes it, the merge-tree dry-run reports the endpoint as clean — but the rebase still halts mid-way on commit #2, dumping you into a detached HEAD with conflict markers. A real merge looks at the *endpoint* of both branches, which is exactly what merge-tree predicts, so the dry-run's "clean" verdict is a guarantee.
-
-Submodules are handled correctly because the gitlink quirk only affects `merge --squash`. Plain `git merge` resolves submodule pointers three-way like any other file.
-
-##### Rollback semantics
-
-The rebase orchestrator captures the feature ref's SHA *before* mutating anything. From that point until the final commit lands, any failure — TUI abort, pre-commit hook rejection, commit-msg hook rejection, signing failure — triggers `git reset --hard <featureOrigSHA>` on the feature branch. The feature is restored atomically and you see a `Rolled back: …` message on stderr. If the rollback itself fails, both the original error and the rollback error are surfaced so you know the repo is in a half-state and why.
-
-The *post-commit* failure mode is treated differently. If the commit landed on the feature branch but `git merge --ff-only` refuses (because local `<base>` has diverged from the remote), the commit is **not** rolled back — it already exists as a clean, valid commit on the feature branch. Instead you see:
-
-```
-Commit created on "<feature>" but local <base> has diverged from <remote>/<base>.
-Run `git pull --ff-only` on <base>, then `git merge --ff-only <feature>` to land it.
-```
-
-The store and tracker are not updated, the delete-branch prompt is skipped, and the close exits cleanly. You reconcile local base manually and FF the feature commit yourself.
-
-#### Classic strategy — detailed flow
-
-1. **Pre-flight** (shared with Rebase):
-   - Refuses if the working tree has tracked modifications or staged changes.
-   - Checks out the feature branch, captures its tip SHA.
-   - Detects the configured remote and runs `git fetch <remote>` (no-op when no remote is configured).
-   - Computes `remoteBase` as `<remote>/<base>` (or `<base>` when local-only).
-   - Aborts if the feature branch has no commits ahead of `remoteBase` (already integrated).
-   - Runs a `merge-tree` dry-run of feature vs `remoteBase`; aborts with the conflict file list if any conflict is predicted.
-
-2. **Sync local base** (skipped when no remote):
-   - Checks out the local base branch.
-   - Runs `git merge --ff-only <remoteBase>` to bring local base up to `origin/<base>`.
-   - Refuses with a remediation message if local base has diverged from `origin/<base>` — the operator runs `git pull --ff-only` and retries.
-
-3. **Resolve integration target**: looks up `refs/heads/<base>` for the prefill subject SHA.
-
-4. **Stage the merge**: runs `git merge --no-ff --no-commit <feature>`. `MERGE_HEAD` / `MERGE_MSG` are left in place; nothing is committed yet.
-
-5. **TUI form** (pre-filled):
-   - subject: `Merge <feature-tip-short> into <base-tip-short>.`
-   - type / scope / authors default from the branch metadata, identical to Rebase / Squash.
-
-6. **Commit**: `git commit -F <msgfile>` plus options from the form. Because `MERGE_HEAD` is present, Git produces a two-parent merge commit on base with the form-supplied message.
-
-7. **Bookkeeping**: updates the local store and (optionally) the tracker, then offers the delete-branch prompt — unchanged from the other strategies. Classic uses safe delete (`-d`) since feature is now an ancestor of base.
-
-If any step between 4 and a successful commit fails — TUI abort, pre-commit hook rejection, signing failure — `git merge --abort` is run automatically to clear `MERGE_HEAD` / `MERGE_MSG` and restore the working tree. The operator is left on base in a clean state.
-
-##### When to choose each strategy
-
-- **Rebase** — your repo has submodules, or you want a clean linear history with one commit per issue. Recommended default.
-- **Squash** — no submodules involved, you want the existing `git merge --squash` semantics (fast, fewer git operations).
-- **Classic** — you want to preserve the feature's full commit history on the base branch via a merge commit. The merge commit's message is composed through the commitizen TUI form (same UX as Rebase/Squash). Local base is FF-synced against `origin/<base>` before the merge; Classic refuses to merge into a base that has diverged from origin (operator runs `git pull --ff-only` and retries). Use when intermediate commits have value (large features, bisect surface, audit trail).
+All three compose the final commit through the commitizen form. The mechanics, rollback rules and the reason Rebase is not `git rebase` are documented in [docs/merge-strategies.md](docs/merge-strategies.md).
 
 ### Branch
+
 ```
 $ git zf branch new            # create a branch with manual input
 $ git zf branch list           # list tracked branches
 $ git zf branch merge          # merge a branch via TUI
-$ git zf branch prune          # clean up stale DB records (local-only)
+$ git zf branch prune          # clean up stale store records (local-only)
 $ git zf branch prune-tracker  # reap branches whose tracker issue is closed
 ```
 
-`branch new` is the same flow as `issue start` but pre-selects manual input. Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
+**`branch new`** — the `issue start` flow with manual input pre-selected. Accepts `--variant=<label>` too.
 
-`branch merge` picks a local **or** remote-only branch and merges it into the current branch (rebase / squash / classic), then offers to delete the source (local + remote) and propose a push. Issue branches are refused — use `git zf issue close` for those, so the review-incorporation, sub-task, and tracker steps still run. `issue close` and `branch merge` share the same merge engine (`cmd/mergeflow`).
+**`branch list`** — tracked branches with their store status. Flags: `--status in_progress|merged|closed|all`, `--stdout`, `--json`.
 
-A source branch checked out in another working tree can be merged too, whether that tree is a linked worktree or, when you run the command from inside a worktree, the main checkout: the merge runs against the tree that holds the source. When that tree is a linked worktree you are offered to remove it after the commit lands, before the usual delete-source step; the main checkout is never removed. A branch held by a stale worktree entry (directory deleted by hand) is refused with a `git worktree prune` hint.
+**`branch merge`** — pick a local or remote-only branch and merge it into the current branch with one of the [merge strategies](#merge-strategies), then offer to delete the source (local + remote) and propose a push. Issue branches are refused: use `git zf issue close` for those, so the review, tracker and store steps still run. A source branch checked out in another working tree is merged in place; when that tree is a linked worktree you are offered to remove it after the commit lands (the main checkout is never removed). A branch held by a stale worktree entry is refused with a `git worktree prune` hint.
 
-`branch list` flags:
+**`branch prune`** — compare each in-progress store row against the local refs and remove rows whose branch is gone or already merged into the base. Flags: `--base <branch>`, `--dry-run`, `--yes` (skip the confirmation, for CI).
+
+**`branch prune-tracker`** — find local branches whose issue ID (parsed from the branch name) is closed in the configured tracker, then offer a per-branch action: safe-delete (default), force-delete or skip. Successful reaps flip the store row to `closed`. Branches whose name does not parse are skipped silently; tracker lookup failures print a `WARN:` line and skip that branch. For non-interactive use pass exactly one of `--safe-delete`, `--force-delete` or `--skip-delete` to apply it to every candidate; `--dry-run` previews with no prompts or mutations.
+
 ```
---status string   filter by status: in_progress, merged, closed, all (default: in_progress)
---stdout          print table to stdout without TUI
---json            print JSON array to stdout
-```
-
-`branch prune` flags:
-```
---base string   base branch for merge detection (default: auto-detected)
---dry-run       show what would be pruned without executing
-```
-
-`branch prune-tracker` discovers local branches whose issue ID (regex-extracted from the branch name) is closed in the configured tracker, then offers per-branch reap actions. Successful reaps flip the corresponding store row to status `closed` (distinct from `merged` — which only the local `branch prune` produces when the tip is reachable from base).
-
-By default, an interactive huh form is presented with one selector per candidate (safe-delete / force-delete / skip), with `safe-delete` pre-selected. Pass `--safe-delete`, `--force-delete`, or `--skip-delete` to apply that action to every candidate non-interactively (CI / scripting). The three action flags are mutually exclusive.
-
-The discovery is per-issue — one tracker lookup per local branch whose name parses as an issue ID. Branches that don't parse are silently skipped; tracker lookup failures (404 / transport / auth) print a `WARN:` line and skip that branch without aborting the run.
-
-`branch prune-tracker` flags:
-```
---base string     base branch name to exclude from candidate discovery (default: auto-detect)
---dry-run         show what would be done; no prompts, no mutations
---safe-delete     non-interactive: apply `git branch -d` to every match
---force-delete    non-interactive: apply `git branch -D` to every match
---skip-delete     non-interactive: never touch refs; only flip store status to closed
-```
-
-Examples:
-```
-$ git zf branch prune-tracker --dry-run                # preview only
-$ git zf branch prune-tracker --safe-delete            # CI: safe-delete every closed-issue branch
-$ git zf branch prune-tracker --force-delete --base main
+$ git zf branch prune-tracker --dry-run
+$ git zf branch prune-tracker --safe-delete --base main   # CI
 ```
 
 ### Review
+
 ```
 $ git zf review           # pick an action from a menu
-$ git zf review start     # reviewer: create <IssueID>@review from the locked snapshot
 $ git zf review request   # developer: submit an issue branch for review (locks it)
+$ git zf review start     # reviewer: create <IssueID>@review from the locked snapshot
 $ git zf review approve   # reviewer: approve — the branch is ready to close
 $ git zf review reject    # reviewer: request changes — unlocks the branch
 $ git zf review list      # list issues currently in review or approved
@@ -306,169 +151,87 @@ $ git zf review sync      # bring a branch up to date: reviewer commits + parent
 $ git zf review track     # register a branch created with plain git checkout
 ```
 
-Peer-to-peer code review with no server-side component. Review state lives in git refs under `refs/zf/reviews/<IssueID>` — a JSON blob holding the status, the round number, the feature HEAD SHA captured at lock time, and the reviewer identity — pushed to and fetched from the remote. The refs are the source of truth; the local SQLite store is only a cache. Ref writes and pushes use compare-and-swap, so two machines cannot silently overwrite each other's decision.
+Peer-to-peer code review with no server-side component. Review state lives in git refs under `refs/zf/reviews/<IssueID>` — a JSON blob with the status, round number, the feature HEAD SHA captured at lock time and the reviewer identity — pushed to and fetched from the remote. The refs are the source of truth; the local store is a cache. Ref writes and pushes use compare-and-swap, so two machines cannot silently overwrite each other's decision.
 
 A review round:
 
-1. **Developer** — `git zf review request`. A picker lists in-progress branches not already in review; the chosen issue gets a review ref with status `in_review`. The feature branch is now **locked**: the pre-push hook installed by [`git zf init`](#init) rejects pushes to it until the reviewer decides (bypass: `git push --no-verify`).
-2. **Reviewer** — `git fetch && git zf review start`. A picker lists issues awaiting review; git-zf creates `<IssueID>@review` at the exact SHA captured at lock time and records the reviewer identity in the ref. Review the code; optionally commit fixes on the `@review` branch.
+1. **Developer** — `git zf review request`. Pick an in-progress branch; its review ref becomes `in_review` and the branch is **locked**: the pre-push hook installed by [`git zf init`](#init) rejects pushes to it until the reviewer decides (bypass: `git push --no-verify`).
+2. **Reviewer** — `git fetch && git zf review start`. Pick an issue awaiting review; git-zf creates `<IssueID>@review` at the SHA captured at lock time and records your identity in the ref. Review the code; optionally commit fixes on the `@review` branch and push them.
 3. **Reviewer decides**:
-   - `review approve` — status becomes `approved`; the developer can now run `git zf issue close`. Commits the reviewer pushed on the `@review` branch are incorporated on close: a fast-forward when the feature branch hasn't moved, or an automatic merge when it has diverged and merges cleanly. If the diverged merge conflicts, close refuses with a hint to run `git zf review sync`, resolve, and retry — close never leaves a merge in progress.
-   - `review reject` — status becomes `changes_requested` and the feature branch is unlocked. An empty `@review` branch is deleted (locally and on the remote); if it carries reviewer commits it is kept so the developer can inspect (`git log <feature>..<IssueID>@review`) and cherry-pick before the next round. After a reject that leaves reviewer commits behind, **new commits on the feature branch are blocked** (the commit guard and the pre-commit hook installed by [`git zf init`](#init) both refuse) until `git zf review sync` incorporates them; bypass: `git commit --no-verify` / `git zf commit --no-verify`.
-4. **Next round** — the developer pushes fixes and runs `git zf review request` again: the round counter increments and any stale `@review` branch from the previous round is removed. If that branch still carries unincorporated reviewer commits, the request refuses to delete them; an interactive run offers to merge them on the spot before proceeding.
+   - `review approve` — status `approved`; the developer can run `git zf issue close`, which incorporates any reviewer commits (see [Issue](#issue)).
+   - `review reject` — status `changes_requested`, the branch is unlocked. An empty `@review` branch is deleted (locally and on the remote); one carrying reviewer commits is kept for the developer to inspect (`git log <feature>..<IssueID>@review`). While such commits await incorporation, **new commits on the feature branch are blocked** by the commit guard and the pre-commit hook until `git zf review sync` merges them in (bypass: `--no-verify`).
+4. **Next round** — the developer pushes fixes and runs `review request` again: the round counter increments and the stale `@review` branch is removed. If it still carries unincorporated reviewer commits the request refuses to delete them and offers to merge them first.
 
-If an issue tracker is configured and the issue originated from it, `request`, `approve`, and `reject` also propose updating the issue's tracker status after the action.
+`request`, `approve` and `reject` accept `--push` / `--no-push`, and propose a tracker status update when the issue came from a tracker.
 
-`review request`, `review approve` and `review reject` flags:
-```
---no-push   skip the post-action push proposal
---push      push the resulting branch to the remote after the action (skips the prompt)
-```
-
-**`review list`** — reads `refs/zf/reviews/*` directly (works on a fresh clone with an empty store) and prints every issue whose status is `in_review` or `approved`, with its round number.
-
-**`review status`** — picker over issues with review history, then a round-by-round listing: status, reviewer, opened/resolved timestamps, and whether the reviewer pushed commits. The latest round is reconciled from the ref, so decisions made on another machine show up.
-
-**`review fetch`** — fetch `refs/zf/reviews/*` from the remote (pruning refs deleted remotely) and reconcile the local store. The interactive review commands fetch on their own; use this before scripting around review state.
-
-**`review sync`** — brings any in-progress branch up to date; the picker pre-selects the branch you're currently on. Two steps run in order:
-
-1. **Reviewer commits** — if a decision (`approved` or `changes_requested`) says `<IssueID>@review` carries commits not yet in the feature branch, they are merged in directly, without a confirm prompt (unlike the offer flow in [Commit](#commit), sync is picker-driven, not interactive). On conflicts the merge is left in progress with conflict markers in the working tree — resolve them, then run `git zf commit` to conclude the merge.
-2. **Parent drift** — for sub-task branches only: merges the parent integration branch (read as `origin/<parent>` to catch teammates' pushes) into the sub-task. On conflicts the merge is aborted and reported — nothing is left half-merged.
-
-A dirty working tree refuses step 1 outright, with a `git stash` → `git zf review sync` → `git stash pop` hint; a parent-only sync (step 2) is not pre-flighted for a dirty tree.
-
-**`review track`** — register the current branch in the git-zf store without creating anything. Use it when the branch was created with plain `git checkout` instead of `git zf issue start` / `git zf review start`, so the review commands can find it.
-
-There are also two hidden internal subcommands. `review guard <branch>` — the pre-push hook calls it for every pushed branch, and it exits non-zero when the branch is locked (`in_review`). `review guard-commit` — the pre-commit hook calls it before every commit, and it exits non-zero when the current branch has reviewer commits on `<IssueID>@review` awaiting incorporation. Both fail open on store or fetch errors; `review guard-commit` also exempts `@review` branches themselves and commits that conclude an in-progress merge (that's exactly how incorporation happens).
+- **`review list`** reads `refs/zf/reviews/*` directly (works on a fresh clone with an empty store) and prints every `in_review` or `approved` issue with its round number.
+- **`review status`** shows a round-by-round history for an issue: status, reviewer, timestamps, whether the reviewer pushed commits. The latest round is reconciled from the ref, so decisions made elsewhere show up.
+- **`review fetch`** fetches `refs/zf/reviews/*` (pruning refs deleted remotely) and reconciles the store. The interactive commands fetch on their own; use this before scripting around review state.
+- **`review sync`** brings an in-progress branch up to date (the current one is pre-selected). First it merges pending reviewer commits from `<IssueID>@review`; on conflict the merge is left in progress for you to resolve, then `git zf commit` concludes it. Then, for sub-task branches only, it merges the parent branch (`origin/<parent>`) into the sub-task; a conflict there is aborted and reported. A dirty working tree is refused for the first step (`git stash` first).
+- **`review track`** registers the current branch in the store without creating anything, for branches made with plain `git checkout`.
 
 ### Init
+
 ```
 $ git zf init
 ```
 
-Install the git-zf pre-push and pre-commit hooks into the current repository (see [Review](#review)):
+Installs two hooks in the current repository:
 
-- **pre-push** calls `git zf review guard` before every push, blocking pushes to branches that are locked for code review. Bypass: `git push --no-verify`.
-- **pre-commit** calls `git zf review guard-commit` before every commit, blocking commits on a feature branch while reviewer commits on `<IssueID>@review` await incorporation. Bypass: `git commit --no-verify`.
+- **pre-push** blocks pushes to branches locked for review. Bypass: `git push --no-verify`.
+- **pre-commit** blocks commits on a feature branch while reviewer commits await incorporation. Bypass: `git commit --no-verify`.
 
-Both hooks share the same install policy:
-
-- Run `git zf install` first so the `git zf` binary is available in the git exec-path, then run `git zf init` once per repository (and per submodule).
-- Works correctly in git submodules: each hook is written to the submodule's real git directory (resolved via `git rev-parse --git-dir`), not the parent repo. **Run `git zf init` from the main checkout, not from a linked worktree**: inside a linked worktree `--git-dir` is the per-worktree git dir while git reads hooks from the common one, so the hooks would be installed where git never looks (see the Roadmap).
-- Re-running the command is safe: a hook that is already installed and up to date is left untouched (idempotent, checked independently per hook).
-- If a foreign hook already exists for either file, it is **not** overwritten; a warning prints the snippet to add to your existing hook instead (`git zf review guard "..."` for pre-push, `git zf review guard-commit || exit 1` for pre-commit).
+Run it once per repository and per submodule (hooks go to the submodule's own git directory). **Run it from the main checkout, not from a linked worktree**: git reads hooks from the common git dir, and inside a worktree they would be written where git never looks (see [ROADMAP.md](ROADMAP.md)). Re-running is safe and idempotent. A foreign hook is never overwritten; a warning prints the snippet to add to it instead.
 
 ### Config
-```
-$ git zf config show
-$ git zf config init
-```
 
-**`config show`** — print the active config file path followed by the effective configuration as formatted JSON. The `issue-tracker.token` field is masked as `***` so the output is safe to share or paste into issues.
-
-Example output:
 ```
-Config file: /home/user/.git-zf.json
-
-{
-  "commit-types": [...],
-  ...
-  "issue-tracker": {
-    "type": "redmine",
-    "url": "https://redmine.example.com",
-    "token": "***"
-  }
-}
+$ git zf config show   # active config path + effective config as JSON, token masked
+$ git zf config init   # write the default config file interactively
 ```
 
-If no config file is found the header reads `no config file found (built-in defaults apply)`.
-
-**`config init`** — interactively write the default config file. The destination is chosen based on context:
-
-- **Outside a git repo, no home config**: the home path is selected automatically without a prompt.
-- **Inside a git repo or a home config already exists**: a TUI picker lets you choose between `$HOME/.git-zf.json` and `<repo>/.git/.git-zf.json`. The repo-level file lives inside `.git/` so it is never committed and cannot leak secrets. It takes precedence over the home file when present.
-
-If the target file already exists a confirmation prompt is shown before overwriting.
+`config init` writes to `$HOME/.git-zf.toml` when run outside a repo with no home config, otherwise a picker offers the home file or `<repo>/.git/.git-zf.toml`. An existing file is only overwritten after confirmation.
 
 ### Completion
 
-For `Bash` users, set up completion with these steps:
-
-1. **Generate Completion Script**  
-   `git zf completion bash > ~/git-zf-completion.bash`
-2. **Install System-Wide (recommended)**  
-   `sudo mv ~/git-zf-completion.bash /etc/bash_completion.d/`
-2. **Or Install User-Only**  
-   ```bash
-   mkdir -p ~/.local/share/bash-completion/completions
-   mv ~/git-zf-completion.bash ~/.local/share/bash-completion/completions/git-zf
-   ```
-3. **Reload Your Shell**  
-   `source ~/.bashrc`
-
-Take a look at the [Cobra Shell-Specific Configuration](https://cobra.dev/docs/how-to-guides/shell-completion/) for the other supported shells.
-
-### All commands
-```txt
-Usage:
-  git-zf [flags]
-  git-zf [command]
-
-Available Commands:
-  branch      Manage local branches
-  commit      Record changes to the repository
-  completion  Generate completion script
-  config      Manage git-zf configuration
-  help        Help about any command
-  init        Initialize git-zf in the current repository (installs the pre-push and pre-commit hooks)
-  install     Install this tool to git-core as zf
-  issue       Manage issues
-  review      Manage the code review lifecycle for an issue branch
-  uninstall   uninstall zf from git-core
-  version     Print version information and quit
-
-Flags:
-  -d, --debug   debug mode, print debug info to stdout
-  -h, --help    help for git-zf
+```bash
+git zf completion bash > ~/.local/share/bash-completion/completions/git-zf   # user-only
+# or: sudo sh -c 'git zf completion bash > /etc/bash_completion.d/git-zf'   # system-wide
+source ~/.bashrc
 ```
+
+See the [Cobra shell-completion guide](https://cobra.dev/docs/how-to-guides/shell-completion/) for zsh, fish and PowerShell.
 
 ## Configuration
 
-Config file: `.git-zf.json` (JSON). Two locations are supported; the repo-level file takes precedence over the home file:
+The config file is TOML. Two locations are supported; the repo-level file takes precedence:
 
 | Location | Path | Notes |
 |----------|------|-------|
-| Home | `$HOME/.git-zf.json` | Applied everywhere |
-| Repo | `<repo>/.git/.git-zf.json` | Inside `.git/` — never committed, can contain secrets |
+| Home | `$HOME/.git-zf.toml` | Applied everywhere |
+| Repo | `<repo>/.git/.git-zf.toml` | Inside `.git/` — never committed, can hold secrets |
 
-Use `git zf config init` to create the file interactively, or `git zf config show` to inspect the currently active configuration.
-
-The default configuration is embedded in [`config/default.toml`](https://github.com/piprim/git-zf/blob/master/config/default.toml).
+`git zf config init` creates it, `git zf config show` prints the effective result. Every key is optional; the defaults are in [`config/default.toml`](config/default.toml).
 
 ### Commit types
 
-Override the list of commit types shown in the type selector:
+```toml
+[[commit-types]]
+name = "feat"
+desc = "A new feature"
 
-```json
-{
-  "commit-types": [
-    { "name": "feat",  "desc": "A new feature" },
-    { "name": "fix",   "desc": "A bug fix" },
-    { "name": "chore", "desc": "Build process or tooling changes" }
-  ]
-}
+[[commit-types]]
+name = "fix"
+desc = "A bug fix"
 ```
 
 ### Commit message
 
-Override the form fields, the message template, and/or the issue-reference formats:
-
 ```toml
 [commit-message]
-template    = "{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}{{with .body}}\n\n{{.}}{{end}}{{with .footer}}\n\n{{.}}{{end}}"
-ref-format   = "Refs #%s"   # footer text when committing on an issue branch (not closing)
-close-format = "Closes #%s"  # footer text when closing an issue via `issue close`
+template     = "{{.type}}{{with .scope}}({{.}}){{end}}: {{.subject}}{{with .body}}\n\n{{.}}{{end}}{{with .footer}}\n\n{{.}}{{end}}"
+ref-format   = "Refs #%s"    # footer on regular commits on an issue branch
+close-format = "Closes #%s"  # footer on the commit produced by `issue close`
 
 [[commit-message.items]]
 name     = "scope"
@@ -492,177 +255,81 @@ desc = "Breaking changes and referenced issues:"
 form = "multiline"
 ```
 
-`ref-format` and `close-format` are Go `fmt.Sprintf` patterns; the single `%s` verb is replaced by the issue ID (e.g. `ABC-42` for Redmine/Jira or `123` for GitHub/Forgejo).
-
-| Key | Default | When used |
-|-----|---------|-----------|
-| `ref-format` | `"Refs #%s"` | Regular commits on an issue branch (`git zf commit`) |
-| `close-format` | `"Closes #%s"` | Merge commits produced by `git zf issue close` |
-
-Examples for common trackers:
-
-| Tracker | `ref-format` | `close-format` |
-|---------|-------------|----------------|
-| Redmine / GitHub / Forgejo / Gitea / GitLab | `"Refs #%s"` *(default)* | `"Closes #%s"` *(default)* |
-| Jira | `"Refs: %s"` | `"Fixes: %s"` |
-```
+`template` is a Go `text/template` over the item names. `ref-format` and `close-format` are `fmt.Sprintf` patterns where `%s` is the issue ID (`ABC-42` for Redmine/Jira, `123` for GitHub/Forgejo). The defaults suit Redmine, GitHub, Forgejo, Gitea and GitLab; for Jira use `"Refs: %s"` and `"Fixes: %s"`.
 
 ### Branch naming
 
-Branch names follow the format `{issue-id}@{type}@{slugified-title}`, e.g.:
-
-```
-ABC-42@feat@add-oauth-login
-```
-
-The slugified-title is capped at 50 characters (with any dangling trailing hyphen
-stripped) so the full ref stays comfortably under 100 characters in the worst case.
-
-#### Parallel branches per issue
-
-The default branch name is unique per issue. When you genuinely need two branches
-on the same issue (a throwaway spike, parallel approach exploration, etc.), pass
-`--variant=<label>`:
-
-```bash
-git zf issue start --variant=spike
-# → ABC-42@feat@add-oauth-login@spike
-
-git zf branch new --variant=approach-b
-# → ABC-42@feat@add-oauth-login@approach-b
-```
-
-The label is lowercased and slugged (letters, digits, and hyphens only); it must
-be non-empty after slugging.
-
-When a default name collides with an existing branch, an interactive prompt
-offers three choices: **Checkout** the existing branch, **Create a variant**
-(asks for a label), or **Abort**. Legacy branches with random-hex suffixes (from
-git-zf versions before this change) keep parsing without any conversion needed.
-
-To override the base branch, remote name, or worktree behaviour:
+Branches are named `{issue-id}@{type}@{slugified-title}`, e.g. `ABC-42@feat@add-oauth-login`. The slug is capped at 50 characters so the ref stays under 100.
 
 ```toml
 [branch]
 base         = "develop"     # default: auto-detected from <remote>/HEAD, then "main", then "master"
 remote       = "upstream"    # default: auto-detected (see below)
 use-worktree = true          # omit = ask at runtime; true = always worktree; false = always branch
-worktree-dir = "~/worktrees" # omit = sibling of repo root
+worktree-dir = "~/worktrees" # omit = sibling of the repo root, named <repo>--<branch>
 ```
 
-`use-worktree` is a three-state setting:
+The default worktree path is a sibling of the repository root, `<repo>--<branch>` (e.g. `~/code/myapp--feat-123-login`). The repo name is taken from the remote URL when possible, so it is right even inside containers whose working directory is named differently.
 
-| Value | Behaviour |
-|-------|-----------|
-| omitted | A TUI prompt asks at runtime (default) |
-| `true` | Always create a worktree, skip the prompt |
-| `false` | Always create a plain branch, skip the prompt |
-
-When `worktree-dir` is omitted the worktree is placed as a sibling of the repository root, named `<repo>--<branch>` (e.g. `~/code/myapp--feat-123-login`). The repo name is resolved from the remote URL when possible, so the path is correct even inside Docker containers where the working directory name may differ from the actual repository name.
-
-**Remote auto-detection** — when `branch.remote` is not set, git-zf resolves the remote as follows:
+**Remote auto-detection**, when `branch.remote` is not set:
 
 | Repo state | Remote used |
 |---|---|
-| No remotes | Local-only mode — fetch is skipped, branches merged against local base |
-| Exactly one remote | That remote, regardless of its name |
-| Multiple remotes, one named `"origin"` | `"origin"` (standard git convention) |
-| Multiple remotes, none named `"origin"` | **Error** — set `branch.remote` explicitly |
+| No remotes | Local-only mode — fetch is skipped, merges target the local base |
+| Exactly one remote | That remote, whatever its name |
+| Several remotes, one named `origin` | `origin` |
+| Several remotes, none named `origin` | **Error** — set `branch.remote` |
 
-Set `branch.remote` whenever your primary remote is not named `"origin"` or when you have multiple remotes and want to pin one explicitly.
+#### Parallel branches per issue
+
+The default name is unique per issue. For a second branch on the same issue (a spike, a parallel approach) pass `--variant=<label>` to `issue start` or `branch new`:
+
+```bash
+git zf issue start --variant=spike     # → ABC-42@feat@add-oauth-login@spike
+```
+
+The label is lowercased and slugged (letters, digits, hyphens) and must not be empty afterwards. When the default name collides with an existing branch, a prompt offers to **checkout** it, **create a variant**, or **abort**.
+
+### Push
+
+```toml
+[push]
+propose = true   # false disables the post-action "push now?" proposal everywhere
+```
+
+`--push` / `--no-push` on a command override the proposal for that run.
 
 ### Tracker integration
 
-`git zf issue start` and `issue list` can fetch open issues assigned to you from a project tracker. Supported trackers: **Redmine**, **GitHub**, and **Forgejo** (also **Gitea**).
+`issue start`, `issue list`, `issue close`, `branch prune-tracker` and the review commands can talk to **Redmine**, **GitHub** or **Forgejo / Gitea**:
 
-Add an `issue-tracker` section to `.git-zf.json`:
-
-**Redmine**
-```json
-{
-  "issue-tracker": {
-    "type": "redmine",
-    "url": "https://redmine.example.com",
-    "token": "YOUR_API_KEY"
-  }
-}
+```toml
+[issue-tracker]
+type     = "forgejo"                # "redmine", "github", "forgejo" or "gitea"
+url      = "https://codeberg.org"
+token    = "your_access_token"
+projects = ["owner/repo"]           # optional filter; required for status updates on GitHub/Forgejo/Gitea
 ```
-
-**GitHub** (public or GitHub Enterprise)
-```json
-{
-  "issue-tracker": {
-    "type": "github",
-    "url": "https://api.github.com",
-    "token": "ghp_yourPersonalAccessToken"
-  }
-}
-```
-
-For GitHub Enterprise, set `url` to your instance API root, e.g. `https://github.example.com/api/v3/`.
-
-**Forgejo / Gitea** (Codeberg or any self-hosted instance)
-```json
-{
-  "issue-tracker": {
-    "type": "forgejo",
-    "url": "https://codeberg.org",
-    "token": "your_access_token",
-    "projects": ["owner/repo"]
-  }
-}
-```
-
-`url` is the instance root; `/api/v1` is appended automatically (a URL that already ends in `/api/v1` is accepted too). Use `"type": "gitea"` for a Gitea instance — both names select the same adapter since the two APIs are identical for issue listing and state changes. The token needs read/write access to issues (`issue` scope).
-
-**Instance behind an HTTP Basic auth gate** (e.g. a reverse proxy protecting the whole site): put the gate credentials in the URL, `"url": "https://user:password@forgejo.example.org"`. They are sent as `Authorization: Basic` for the proxy, and the Forgejo token is passed as the `token` query parameter instead, which Forgejo/Gitea accept unless the admin has set `[security] DISABLE_QUERY_AUTH_TOKEN = true`. Note that a token in the query string can end up in the proxy's access logs.
 
 | Key | Description |
 |-----|-------------|
-| `type` | Tracker type: `"redmine"`, `"github"`, `"forgejo"`, or `"gitea"`. |
-| `url` | Base URL of the tracker API. For GitHub use `https://api.github.com`; for Forgejo/Gitea use the instance root, e.g. `https://codeberg.org`. |
-| `token` | API key (Redmine), personal access token with `repo` scope (GitHub), or access token with the `issue` scope (Forgejo/Gitea). |
-| `projects` | Optional list of projects to show. Redmine: project slugs or numeric IDs. GitHub / Forgejo / Gitea: `"owner/repo"` strings. When omitted all assigned issues are shown. |
+| `type` | `"redmine"`, `"github"`, `"forgejo"` or `"gitea"` (the last two share one adapter). |
+| `url` | Redmine: instance URL. GitHub: `https://api.github.com`, or `https://github.example.com/api/v3/` for Enterprise. Forgejo/Gitea: instance root, `/api/v1` is appended. |
+| `token` | Redmine API key; GitHub personal access token with `repo` scope; Forgejo/Gitea access token with the `issue` scope. |
+| `projects` | Optional list limiting which projects appear. Redmine: slugs or numeric IDs. GitHub/Forgejo/Gitea: `"owner/repo"`. Omitted = all issues assigned to you. **Exactly one entry is required** to update issue status on GitHub/Forgejo/Gitea, whose issue endpoints are scoped to one repository. |
 
-**Filtering by project**
+**Instance behind an HTTP Basic auth gate** (a reverse proxy protecting the whole site): put the gate credentials in the URL, `url = "https://user:password@forgejo.example.org"`. They are sent as `Authorization: Basic` for the proxy and the Forgejo token is passed as the `token` query parameter instead, which Forgejo/Gitea accept unless `[security] DISABLE_QUERY_AUTH_TOKEN = true` is set. A token in the query string can end up in the proxy's access logs.
 
-Use `projects` to limit which repositories or Redmine projects appear in `issue list`:
-
-```json
-{
-  "issue-tracker": {
-    "type": "github",
-    "url": "https://api.github.com",
-    "token": "ghp_...",
-    "projects": ["myorg/backend", "myorg/frontend"]
-  }
-}
-```
-
-> **Note for `UpdateIssueStatus` via GitHub / Forgejo / Gitea:** because these trackers' issue endpoints are scoped to a single `owner/repo`, exactly one entry must be present in `projects` when using `issue close` (or any other status update) with one of them.
-
-When a tracker is configured:
-1. `issue start` asks whether to fetch issues from the tracker.
-2. If yes, open issues assigned to you are listed; type any key to filter the list, pick one and select a branch type.
-3. After the branch is created, a status picker shows the live list of statuses from the tracker; pick one or skip.
-4. If the tracker is unavailable or returns no issues, the flow falls back to manual input.
-5. `issue close` shows the same live status picker after merging, so you can move the issue to "Done", "Closed", or any other status in a single step.
+When the tracker is unavailable or returns no issues, `issue start` falls back to manual input. Status pickers (`issue start`, `issue close`, review commands) show the live list of statuses from the tracker.
 
 ### Commit auto-fill from issue branch
 
-When you run `git zf commit` on an issue branch (e.g. `ABC-42@feat@add-oauth`), the issue ID and branch type are automatically pre-filled into the commit form. The pre-fill is a hint only; you can edit or clear any field before confirming.
+On an issue branch such as `ABC-42@feat@add-oauth`, `git zf commit` and `issue close` pre-fill the form. The pre-fill is a hint; every field stays editable.
 
-**Regular commits** (`git zf commit`):
-- `scope` ← issue ID (if the field exists)
-- `footer` ← `ref-format % id` (e.g. `Refs #ABC-42`) — always set when the field exists, independent of scope
-- `subject` ← `(ABC-42)` — fallback only when neither `scope` nor `footer` exist
-
-**Closing commits** (`git zf issue close`):
-- `scope` ← issue ID (if the field exists)
-- `footer` ← `close-format % id` (e.g. `Closes #ABC-42`) — always set when the field exists
-- `subject` ← `(ABC-42)` — fallback only when neither `scope` nor `footer` exist
-
-The formats used for `footer` are configurable via `ref-format` and `close-format` (see [Commit message](#commit-message)).
+- `type` ← branch type
+- `scope` ← issue ID, when the field exists
+- `footer` ← `ref-format` (regular commit) or `close-format` (closing commit) applied to the issue ID, when the field exists
+- `subject` ← `(ABC-42)`, only when neither `scope` nor `footer` exist
 
 ---
 

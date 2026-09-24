@@ -119,7 +119,7 @@ Three packages under `github.com/piprim/git-zf`:
 
 ## Configuration
 
-Config file: `.git-zf.json` at repo root or `$HOME`. Repo root takes priority. The `message.items` array overrides the default form fields; `message.template` is a Go `text/template` string. If no config is found, the built-in `config/default.json` is used.
+Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.toml`) or `$HOME`. The repo-level file takes priority. The `commit-message.items` array overrides the default form fields; `commit-message.template` is a Go `text/template` string. If no config is found, the embedded `config/default.toml` is used.
 
 ## Go Toolchain
 
