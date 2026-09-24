@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +72,19 @@ func newCloseRig(t *testing.T) *closeTestRig {
 	runGit("commit", "-m", "feat: add thing")
 	runGit("checkout", "main")
 
+	return seedCloseRig(t, dir)
+}
+
+// seedCloseRig builds the rig around an already-created repo at dir whose
+// "main" and "ABC-1@feat@add-thing" branches exist: the IO buffers, a client
+// anchored on dir, an opened store seeded with the matching in-progress rows,
+// the tracker-born BranchRef, the app config and the fake tracker. Shared by
+// newCloseRig (feature branch in the main tree) and newWorktreeCloseRig
+// (feature branch in a linked worktree), which differ only in how they create
+// that branch.
+func seedCloseRig(t *testing.T, dir string) *closeTestRig {
+	t.Helper()
+
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	ioStreams := &pkg.IO{In: bytes.NewReader(nil), Out: stdout, Err: stderr}
@@ -126,7 +140,25 @@ func newCloseRig(t *testing.T) *closeTestRig {
 }
 
 func (r *closeTestRig) deps() closeDeps {
-	return closeDeps{client: r.client, store: r.store, cfg: r.cfg, tracker: r.tracker}
+	return closeDeps{
+		client: r.client, store: r.store, cfg: r.cfg, tracker: r.tracker,
+		// Mirrors buildCloseDeps for a command typed in the main tree: no
+		// invokedFrom, so the branch falls back to the main client's HEAD.
+		invokedBranch: invokedBranchFor(context.Background(), r.client, ""),
+	}
+}
+
+// cdHint rebuilds the exact needle RemoveWorktreeStep prints for dir: the
+// symlink-resolved (go-git) root, shell-quoted.
+func cdHint(t *testing.T, dir string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		resolved = dir
+	}
+
+	return "cd " + strconv.Quote(resolved)
 }
 
 // pickedBranchRow returns the BranchRow the picker would have returned for
@@ -152,6 +184,79 @@ func (r *closeTestRig) addBranch(t *testing.T, name string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git branch %s: %v\n%s", name, err, out)
 	}
+}
+
+// addOrigin wires a bare origin, pushes main and the seeded feature branch,
+// and re-opens the client so remote auto-detection sees it.
+func (r *closeTestRig) addOrigin(t *testing.T) string {
+	t.Helper()
+
+	originDir := filepath.Join(t.TempDir(), "origin.git")
+	if out, err := exec.CommandContext(t.Context(), "git", "init", "-q", "--bare", "--initial-branch=main", originDir).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+	mustRunGitAt(t, r.dir, "remote", "add", "origin", originDir)
+	mustRunGitAt(t, r.dir, "push", "-q", "origin", "main", "ABC-1@feat@add-thing")
+	r.rebuildClient(t)
+
+	return originDir
+}
+
+// rebuildClient re-opens the git client on the rig's repo (needed after the
+// remote set changes, since Remote() caches its detection).
+func (r *closeTestRig) rebuildClient(t *testing.T) {
+	t.Helper()
+
+	c, err := git.NewClientAt(&pkg.IO{In: bytes.NewReader(nil), Out: r.stdout, Err: r.stderr}, r.dir)
+	if err != nil {
+		t.Fatalf("git.NewClientAt: %v", err)
+	}
+	r.client = c
+}
+
+func lsRemoteHeads(t *testing.T, dir, branch string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", "ls-remote", "--heads", "origin", branch)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-remote: %v", err)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
+func TestClose_DeletesRemoteFeatureBranch(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+	rig.addOrigin(t)
+
+	prompter := &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      commitpkg.MergeStrategySquash,
+		Confirm:       true,
+		Message:       []byte("feat(thing): close ABC-1\n"),
+		TrackerStatus: "Closed",
+		DeleteBranch:  true,
+	}
+
+	err := runClose(t.Context(), rig.deps(), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("local feature branch deleted", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@feat@add-thing")
+	})
+	t.Run("remote feature branch deleted", func(t *testing.T) {
+		if got := lsRemoteHeads(t, rig.dir, "ABC-1@feat@add-thing"); got != "" {
+			t.Fatalf("origin still has the branch: %q", got)
+		}
+	})
 }
 
 // mustRunGitAt runs a git command in dir, failing the test on error. Shared
@@ -418,6 +523,7 @@ func TestClose_NoInProgressBranches(t *testing.T) {
 	cfg.Branch.Base = "main"
 
 	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps.invokedBranch = invokedBranchFor(t.Context(), client, "")
 
 	// PickBranch should never be called — but if runClose mis-routes, fail loudly.
 	prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch should not be called when no branches exist")}
@@ -486,6 +592,7 @@ func TestClose_EmptyState_RedirectsToBranchMerge(t *testing.T) {
 	cfg.Branch.Base = "main"
 
 	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps.invokedBranch = invokedBranchFor(t.Context(), client, "")
 
 	// PickBranch must never be called — no candidates exist.
 	prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch should not be called when no candidates exist")}
@@ -564,6 +671,7 @@ func TestClose_EmptyState_OnUntrackedIssueBranch_DoesNotRedirect(t *testing.T) {
 	cfg.Branch.Base = "main"
 
 	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps.invokedBranch = invokedBranchFor(t.Context(), client, "")
 
 	// PickBranch must never be called — no candidates exist.
 	prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch should not be called when no candidates exist")}
@@ -1572,7 +1680,8 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 
 	prompter := &scriptedPrompter{Branch: rig.pickedBranchRow()}
 
-	if _, err := getPickedBranch(t.Context(), rig.store, rig.client, prompter); err != nil {
+	invoked := invokedBranchFor(t.Context(), rig.client, "")
+	if _, err := getPickedBranch(t.Context(), rig.store, rig.client, invoked, prompter); err != nil {
 		t.Fatalf("getPickedBranch: %v", err)
 	}
 
@@ -1783,7 +1892,7 @@ func TestClose_ReviewPreflight_DivergedCleanAutoMerges(t *testing.T) {
 
 	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
 
-	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
+	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
 
 	t.Run("preflight succeeds via real merge", func(t *testing.T) {
 		if err != nil {
@@ -1839,7 +1948,7 @@ func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T)
 
 	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
 
-	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow())
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
 
 	t.Run("refused with ErrReviewSyncNeeded", func(t *testing.T) {
 		if !errors.Is(err, ErrReviewSyncNeeded) {
@@ -2362,5 +2471,454 @@ func TestClose_ReviewerInitiated_AbortKeepsReviewerCommitSources(t *testing.T) {
 		if ref != nil {
 			t.Fatalf("review ref = %+v, want it deleted once the merge landed", ref)
 		}
+	})
+}
+
+// newWorktreeCloseRig mirrors newCloseRig but creates the feature branch in a
+// linked worktree (as `issue start` does when the user picks "worktree") and
+// makes its commit there. rig.client stays on the main tree.
+func newWorktreeCloseRig(t *testing.T) (*closeTestRig, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	runGit := func(cwd string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	runGit(dir, "init", "-q", "-b", "main")
+	runGit(dir, "config", "user.name", "Test User")
+	runGit(dir, "config", "user.email", "test@test.com")
+	runGit(dir, "config", "commit.gpgsign", "false")
+	writeFileAt(t, dir, "base.txt", "base\n")
+	runGit(dir, "add", "base.txt")
+	runGit(dir, "commit", "-m", "chore: init")
+
+	wtDir := filepath.Join(t.TempDir(), "repo--ABC-1")
+	runGit(dir, "worktree", "add", "-q", "-b", "ABC-1@feat@add-thing", wtDir, "main")
+	writeFileAt(t, wtDir, "feature.txt", "feature\n")
+	runGit(wtDir, "add", "feature.txt")
+	runGit(wtDir, "commit", "-m", "feat: add thing")
+
+	return seedCloseRig(t, dir), wtDir
+}
+
+func worktreePrompter(rig *closeTestRig, strategy commitpkg.MergeStrategy, remove bool) *scriptedPrompter {
+	return &scriptedPrompter{
+		Branch:         rig.pickedBranchRow(),
+		Strategy:       strategy,
+		Confirm:        true,
+		Message:        []byte("feat(thing): close ABC-1\n"),
+		TrackerStatus:  "Closed",
+		DeleteBranch:   true,
+		RemoveWorktree: remove,
+	}
+}
+
+func assertDirGone(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("%s still exists (%v)", dir, err)
+	}
+}
+
+func assertDirPresent(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("%s missing: %v", dir, err)
+	}
+}
+
+func TestClose_Worktree_RebaseRemovesWorktreeAndBranch(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	rig.addOrigin(t)
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategyRebase, true)
+
+	err := runClose(t.Context(), rig.deps(), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("main carries the close commit", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1")
+	})
+	t.Run("remove prompt asked once", func(t *testing.T) {
+		if prompter.RemoveWorktreeCalls != 1 {
+			t.Fatalf("RemoveWorktreeCalls = %d", prompter.RemoveWorktreeCalls)
+		}
+	})
+	t.Run("worktree directory removed", func(t *testing.T) {
+		assertDirGone(t, wtDir)
+	})
+	t.Run("local branch deleted", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@feat@add-thing")
+	})
+	t.Run("remote branch deleted", func(t *testing.T) {
+		if got := lsRemoteHeads(t, rig.dir, "ABC-1@feat@add-thing"); got != "" {
+			t.Fatalf("origin still has the branch: %q", got)
+		}
+	})
+	t.Run("store records branch as merged", func(t *testing.T) {
+		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+		if err != nil {
+			t.Fatalf("ListBranches: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("merged rows = %d, want 1", len(rows))
+		}
+	})
+}
+
+func TestClose_Worktree_ClassicAndSquash(t *testing.T) {
+	t.Parallel()
+
+	for _, strategy := range []commitpkg.MergeStrategy{commitpkg.MergeStrategyClassic, commitpkg.MergeStrategySquash} {
+		t.Run(string(strategy), func(t *testing.T) {
+			t.Parallel()
+
+			rig, wtDir := newWorktreeCloseRig(t)
+			prompter := worktreePrompter(rig, strategy, true)
+
+			err := runClose(t.Context(), rig.deps(), prompter)
+
+			t.Run("no error", func(t *testing.T) {
+				if err != nil {
+					t.Fatalf("runClose: %v", err)
+				}
+			})
+			t.Run("main carries the close commit", func(t *testing.T) {
+				assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1")
+			})
+			t.Run("worktree directory removed", func(t *testing.T) {
+				assertDirGone(t, wtDir)
+			})
+			t.Run("local branch deleted", func(t *testing.T) {
+				assertBranchAbsent(t, rig.client, "ABC-1@feat@add-thing")
+			})
+		})
+	}
+}
+
+func TestClose_Worktree_RemovalDeclinedKeepsBranch(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategyRebase, false)
+
+	err := runClose(t.Context(), rig.deps(), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("worktree kept", func(t *testing.T) {
+		assertDirPresent(t, wtDir)
+		if !strings.Contains(rig.stdout.String(), "kept") {
+			t.Fatalf("stdout = %q, want 'kept'", rig.stdout.String())
+		}
+	})
+	t.Run("local branch kept with a warning", func(t *testing.T) {
+		exists, _ := rig.client.BranchExists("ABC-1@feat@add-thing")
+		if !exists {
+			t.Fatal("branch should still exist")
+		}
+		if !strings.Contains(rig.stderr.String(), "still checked out in its worktree") {
+			t.Fatalf("stderr = %q", rig.stderr.String())
+		}
+	})
+}
+
+func TestClose_Worktree_UntrackedFileBlocksRemoval(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	writeFileAt(t, wtDir, "scratch.txt", "keep me\n")
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategySquash, true)
+
+	err := runClose(t.Context(), rig.deps(), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("merge landed", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1")
+	})
+	t.Run("worktree and untracked file survive", func(t *testing.T) {
+		assertDirPresent(t, filepath.Join(wtDir, "scratch.txt"))
+	})
+	t.Run("force hint printed", func(t *testing.T) {
+		if !strings.Contains(rig.stderr.String(), "git worktree remove --force") {
+			t.Fatalf("stderr = %q", rig.stderr.String())
+		}
+	})
+	t.Run("local branch kept", func(t *testing.T) {
+		exists, _ := rig.client.BranchExists("ABC-1@feat@add-thing")
+		if !exists {
+			t.Fatal("branch should still exist")
+		}
+	})
+}
+
+func TestClose_Worktree_InvokedFromInsidePrintsCdHint(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	deps := rig.deps()
+	deps.invokedFrom = wtDir
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategyRebase, true)
+
+	err := runClose(t.Context(), deps, prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("worktree removed", func(t *testing.T) {
+		assertDirGone(t, wtDir)
+	})
+	t.Run("cd hint back to the main tree", func(t *testing.T) {
+		if want := cdHint(t, rig.dir); !strings.Contains(rig.stdout.String(), want) {
+			t.Fatalf("stdout = %q, want it to contain %q", rig.stdout.String(), want)
+		}
+	})
+}
+
+// invokedBranchFor is what gives the branch picker its pre-selection: deps.client
+// is anchored on the MAIN tree, so its own CurrentBranch() names the main
+// checkout's branch, not the branch the user is standing on inside a worktree.
+func TestInvokedBranchFor(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+
+	t.Run("from inside the linked worktree: the worktree's branch", func(t *testing.T) {
+		if got := invokedBranchFor(t.Context(), rig.client, wtDir); got != "ABC-1@feat@add-thing" {
+			t.Fatalf("invokedBranchFor = %q, want %q", got, "ABC-1@feat@add-thing")
+		}
+	})
+	t.Run("from a symlinked path to the worktree: the worktree's branch", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(wtDir, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		if got := invokedBranchFor(t.Context(), rig.client, link); got != "ABC-1@feat@add-thing" {
+			t.Fatalf("invokedBranchFor = %q, want %q", got, "ABC-1@feat@add-thing")
+		}
+	})
+	t.Run("from the main tree: the main checkout's branch", func(t *testing.T) {
+		if got := invokedBranchFor(t.Context(), rig.client, rig.dir); got != "main" {
+			t.Fatalf("invokedBranchFor = %q, want %q", got, "main")
+		}
+	})
+	t.Run("empty invokedFrom falls back to the main client's HEAD", func(t *testing.T) {
+		if got := invokedBranchFor(t.Context(), rig.client, ""); got != "main" {
+			t.Fatalf("invokedBranchFor = %q, want %q", got, "main")
+		}
+	})
+	t.Run("an unknown path falls back to the main client's HEAD", func(t *testing.T) {
+		if got := invokedBranchFor(t.Context(), rig.client, filepath.Join(t.TempDir(), "elsewhere")); got != "main" {
+			t.Fatalf("invokedBranchFor = %q, want %q", got, "main")
+		}
+	})
+}
+
+// The headline scenario: `git zf issue close` typed INSIDE the linked worktree
+// must still hand the picker the branch the user is standing on. Before the
+// fix the main-tree client's CurrentBranch() ("main") was passed instead, so
+// the picker opened with no row pre-selected.
+func TestClose_Worktree_InvokedFromInsidePreselectsWorktreeBranch(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	deps := rig.deps()
+	deps.invokedFrom = wtDir
+	deps.invokedBranch = invokedBranchFor(t.Context(), rig.client, wtDir)
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategyRebase, true)
+
+	err := runClose(t.Context(), deps, prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("deps carries the worktree's branch, not the main checkout's", func(t *testing.T) {
+		if deps.invokedBranch != "ABC-1@feat@add-thing" {
+			t.Fatalf("deps.invokedBranch = %q, want %q", deps.invokedBranch, "ABC-1@feat@add-thing")
+		}
+	})
+	t.Run("picker pre-selected the worktree's branch", func(t *testing.T) {
+		if prompter.PickBranchCurrent != "ABC-1@feat@add-thing" {
+			t.Fatalf("PickBranch current = %q, want %q", prompter.PickBranchCurrent, "ABC-1@feat@add-thing")
+		}
+	})
+}
+
+// A prunable entry (directory deleted by hand) makes git refuse to check out
+// or delete the branch until `git worktree prune`; the Rebase strategy would
+// fail mid-flow with a bare checkout error, so close refuses up front, before
+// anything is touched, with the command to run.
+func TestClose_Worktree_PrunableEntryRefusesWithPruneHint(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	if err := os.RemoveAll(wtDir); err != nil {
+		t.Fatalf("rm worktree dir: %v", err)
+	}
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategyRebase, true)
+
+	err := runClose(t.Context(), rig.deps(), prompter)
+
+	t.Run("error names git worktree prune", func(t *testing.T) {
+		if err == nil || !strings.Contains(err.Error(), "git worktree prune") {
+			t.Fatalf("runClose err = %v, want prune instruction", err)
+		}
+	})
+	t.Run("nothing merged", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "chore: init")
+	})
+	t.Run("no merge prompt asked", func(t *testing.T) {
+		if prompter.RemoveWorktreeCalls != 0 {
+			t.Fatalf("RemoveWorktreeCalls = %d, want 0", prompter.RemoveWorktreeCalls)
+		}
+	})
+	t.Run("store row still in progress", func(t *testing.T) {
+		rows, lerr := rig.store.ListBranches(t.Context(), store.BranchStatusInProgress)
+		if lerr != nil {
+			t.Fatalf("ListBranches: %v", lerr)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("in-progress rows = %d, want 1", len(rows))
+		}
+	})
+}
+
+// showFileAt returns the contents of path as recorded on branch, failing the
+// test when the blob is missing.
+func showFileAt(t *testing.T, dir, branch, path string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", "show", branch+":"+path)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git show %s:%s: %v", branch, path, err)
+	}
+
+	return string(out)
+}
+
+// seedApprovedReviewBranch creates ABC-1@review off the feature branch with one
+// reviewer commit and marks the review approved. The review branch is built in
+// the MAIN tree (a branch other than the feature branch may be checked out
+// there even while the feature branch lives in a linked worktree), and the main
+// tree is left back on "main".
+func seedApprovedReviewBranch(t *testing.T, rig *closeTestRig, file, content string) {
+	t.Helper()
+
+	mustRunGitAt(t, rig.dir, "checkout", "-q", "-b", "ABC-1@review", "ABC-1@feat@add-thing")
+	writeFileAt(t, rig.dir, file, content)
+	mustRunGitAt(t, rig.dir, "add", file)
+	mustRunGitAt(t, rig.dir, "commit", "-q", "-m", "fix: reviewer nit")
+	mustRunGitAt(t, rig.dir, "checkout", "-q", "main")
+
+	seedReviewRef(t, rig, "ABC-1", store.ReviewStatusApproved, 1)
+}
+
+// The feature branch lives in a linked worktree, so the reviewer-commit
+// incorporation in reviewPreflight has to run THERE: `git checkout
+// ABC-1@feat@add-thing` in the main tree is refused by git while the branch is
+// held by the worktree. This covers the fast-forward arm (the feature branch
+// has not moved since the review branch forked).
+func TestClose_Worktree_IncorporatesReviewerCommits(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	seedApprovedReviewBranch(t, rig, "feature.txt", "feature\nreviewer nit\n")
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategyRebase, true)
+
+	err := runClose(t.Context(), rig.deps(), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("reviewer change landed on main", func(t *testing.T) {
+		if got := showFileAt(t, rig.dir, "main", "feature.txt"); !strings.Contains(got, "reviewer nit") {
+			t.Fatalf("main:feature.txt = %q, want the reviewer line", got)
+		}
+	})
+	t.Run("main moved only via the close commit", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1")
+	})
+	t.Run("review branch cleaned up", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@review")
+	})
+	t.Run("review ref cleaned up", func(t *testing.T) {
+		ref, _, _ := rig.client.ReadReviewRef(t.Context(), "ABC-1")
+		if ref != nil {
+			t.Fatalf("want review ref deleted, got %+v", ref)
+		}
+	})
+	t.Run("worktree removed", func(t *testing.T) {
+		assertDirGone(t, wtDir)
+	})
+}
+
+// Same setup, but the developer commits again in the worktree after the review
+// branch forked, so reviewPreflight takes the diverged arm (MergeForward). That
+// merge must also run in the worktree.
+func TestClose_Worktree_MergesDivergedReviewerCommits(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	seedApprovedReviewBranch(t, rig, "reviewer-only.txt", "r\n")
+
+	// Developer keeps working — in the worktree, the only place the feature
+	// branch is checked out.
+	writeFileAt(t, wtDir, "dev-later.txt", "d\n")
+	mustRunGitAt(t, wtDir, "add", "dev-later.txt")
+	mustRunGitAt(t, wtDir, "commit", "-q", "-m", "feat: more work")
+
+	prompter := worktreePrompter(rig, commitpkg.MergeStrategySquash, true)
+
+	err := runClose(t.Context(), rig.deps(), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("reviewer file landed on main", func(t *testing.T) {
+		if got := showFileAt(t, rig.dir, "main", "reviewer-only.txt"); got != "r\n" {
+			t.Fatalf("main:reviewer-only.txt = %q, want %q", got, "r\n")
+		}
+	})
+	t.Run("developer's later commit landed on main", func(t *testing.T) {
+		if got := showFileAt(t, rig.dir, "main", "dev-later.txt"); got != "d\n" {
+			t.Fatalf("main:dev-later.txt = %q, want %q", got, "d\n")
+		}
+	})
+	t.Run("main moved only via the close commit", func(t *testing.T) {
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1")
+	})
+	t.Run("review branch cleaned up", func(t *testing.T) {
+		assertBranchAbsent(t, rig.client, "ABC-1@review")
+	})
+	t.Run("worktree removed", func(t *testing.T) {
+		assertDirGone(t, wtDir)
 	})
 }

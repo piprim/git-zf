@@ -36,6 +36,13 @@ When adding a new merge strategy or changing the merge/store/tracker
 sequencing, add a corresponding E2E test alongside the existing happy-path
 and failure-mode tests.
 
+Worktree-held branches are covered by `newWorktreeCloseRig` in the same file
+(feature branch checked out in a linked worktree). The engine-level worktree
+cases live in `cmd/mergeflow/mergeflow_worktree_test.go` (`newWorktreeRig`).
+
+    mise exec -- go test ./cmd/issue/... -run "^TestClose_Worktree" -v
+    mise exec -- go test ./cmd/mergeflow/... -run "Worktree" -v
+
 ### Testing the start flow
 
 The issue-start flow (used by both `issue start` and `branch new`) is
@@ -122,7 +129,7 @@ Config file: `.git-zf.json` at repo root or `$HOME`. Repo root takes priority. T
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (2262 symbols, 10926 relationships, 191 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (2372 symbols, 11270 relationships, 200 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

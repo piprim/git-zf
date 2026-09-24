@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/commit"
+	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/convert"
 )
 
@@ -64,7 +65,7 @@ func (r *run) squash(ctx context.Context) (err error) {
 
 	prefill := r.prefill(commit.MergeStrategySquash, branchHash, baseHash)
 
-	return r.composeAndCommit(ctx, prefill, commit.MergeStrategySquash)
+	return r.composeAndCommit(ctx, r.client, prefill, commit.MergeStrategySquash)
 }
 
 // rebase pre-flights the working tree, performs a real rebase of source onto
@@ -73,13 +74,34 @@ func (r *run) squash(ctx context.Context) (err error) {
 // between the rebase and a successful commit triggers `git reset --hard
 // <featureOrigSHA>`. A post-commit FF failure is signalled with
 // errFastForwardDeferred so the caller keeps the new commit.
+//
+// Note: MergeRebase runs `git merge <base>` on r.src, so a conflict there would
+// leave MERGE_HEAD in the SOURCE worktree, not in the main tree — the user's own
+// directory, which is where they would resolve it. rebasePreflight's merge
+// dry-run is what keeps that from happening in practice: it fails the whole
+// strategy before anything is checked out or merged.
 func (r *run) rebase(ctx context.Context) (err error) {
-	plan, err := r.rebasePreflight(ctx)
+	plan, err := r.rebasePreflight(ctx, r.src)
 	if err != nil {
 		return err
 	}
 
-	if err := r.client.MergeRebase(ctx, r.source, r.target); err != nil {
+	// The final fast-forward checks out target on the main tree, so that tree
+	// must be clean too when the source lives in a separate worktree.
+	if r.src != r.client {
+		dirty, err := r.client.IsDirty(ctx)
+		if err != nil {
+			return fmt.Errorf("dirty check (main tree): %w", err)
+		}
+
+		if dirty {
+			return errors.New("main working tree has uncommitted modifications — commit or stash before merging")
+		}
+	}
+
+	// MergeRebase checks out the source itself; on a worktree client that is
+	// a no-op because the worktree already has it checked out.
+	if err := r.src.MergeRebase(ctx, r.source, r.target); err != nil {
 		return fmt.Errorf("merge rebase: %w", err)
 	}
 
@@ -88,7 +110,7 @@ func (r *run) rebase(ctx context.Context) (err error) {
 			return
 		}
 
-		if rbErr := r.client.ResetHard(ctx, plan.featureOrigSHA.String()); rbErr != nil {
+		if rbErr := r.src.ResetHard(ctx, plan.featureOrigSHA.String()); rbErr != nil {
 			err = fmt.Errorf("rollback after %w failed: %v", err, rbErr)
 
 			return
@@ -109,7 +131,7 @@ func (r *run) rebase(ctx context.Context) (err error) {
 	}
 
 	prefill := r.prefill(commit.MergeStrategyRebase, plan.featureOrigSHA, baseOriginSHA)
-	if err := r.composeAndCommit(ctx, prefill, commit.MergeStrategyRebase); err != nil {
+	if err := r.composeAndCommit(ctx, r.src, prefill, commit.MergeStrategyRebase); err != nil {
 		return err
 	}
 
@@ -131,7 +153,7 @@ func (r *run) rebase(ctx context.Context) (err error) {
 // --no-ff --no-commit merge on target, compose+commit. Rollback on any failure
 // between MergeNoFFNoCommit and a successful Commit runs `git merge --abort`.
 func (r *run) classic(ctx context.Context) (err error) {
-	plan, err := r.rebasePreflight(ctx)
+	plan, err := r.rebasePreflight(ctx, r.client)
 	if err != nil {
 		return err
 	}
@@ -176,14 +198,16 @@ func (r *run) classic(ctx context.Context) (err error) {
 
 	// No post-commit fast-forward: the merge commit lands directly on target
 	// (MergeNoFFNoCommit checked out target before merging).
-	return r.composeAndCommit(ctx, prefill, commit.MergeStrategyClassic)
+	return r.composeAndCommit(ctx, r.client, prefill, commit.MergeStrategyClassic)
 }
 
-// rebasePreflight runs the read-only checks that precede MergeRebase: dirty
-// tree, checkout, resolve HEAD + remote, fetch, compute the merge endpoint,
-// ancestor check, and merge dry-run.
-func (r *run) rebasePreflight(ctx context.Context) (rebasePlan, error) {
-	dirty, err := r.client.IsDirty(ctx)
+// rebasePreflight runs the read-only checks that precede a Rebase or Classic
+// merge: dirty check on tree (the working tree the strategy is about to
+// modify), resolve the source tip by ref, remote, fetch, ancestor check, and
+// merge dry-run. It never checks out anything: the source may live in a
+// linked worktree that the main tree cannot check out.
+func (r *run) rebasePreflight(ctx context.Context, tree *git.Client) (rebasePlan, error) {
+	dirty, err := tree.IsDirty(ctx)
 	if err != nil {
 		return rebasePlan{}, fmt.Errorf("dirty check: %w", err)
 	}
@@ -193,13 +217,9 @@ func (r *run) rebasePreflight(ctx context.Context) (rebasePlan, error) {
 			errors.New("working tree has uncommitted modifications — commit or stash before merging")
 	}
 
-	if err := r.client.Checkout(ctx, r.source); err != nil {
-		return rebasePlan{}, fmt.Errorf("checkout %s: %w", r.source, err)
-	}
-
-	featureOrigSHA, err := r.client.ResolveRef("HEAD")
+	featureOrigSHA, err := r.client.ResolveRef("refs/heads/" + r.source)
 	if err != nil {
-		return rebasePlan{}, fmt.Errorf("resolve HEAD: %w", err)
+		return rebasePlan{}, fmt.Errorf("resolve %s: %w", r.source, err)
 	}
 
 	remoteName, err := r.client.Remote()
@@ -256,14 +276,17 @@ func (r *run) mergeDryRun(ctx context.Context, remoteBase string) error {
 }
 
 // composeAndCommit drives the commit-message form with the caller-supplied
-// prefill and commits the staged merge.
-func (r *run) composeAndCommit(ctx context.Context, prefill map[string]any, strategy commit.MergeStrategy) error {
+// prefill and commits the staged merge on tree (the client whose working tree
+// holds the staged result: src for Rebase, main for Squash/Classic).
+func (r *run) composeAndCommit(
+	ctx context.Context, tree *git.Client, prefill map[string]any, strategy commit.MergeStrategy,
+) error {
 	msg, opts, err := r.prompter.ComposeMessage(ctx, prefill)
 	if err != nil {
 		return err //nolint:wrapcheck // prompter already wraps
 	}
 
-	if err := r.client.Commit(ctx, msg, convert.CommitOptionsFromTUI(opts)); err != nil {
+	if err := tree.Commit(ctx, msg, convert.CommitOptionsFromTUI(opts)); err != nil {
 		return fmt.Errorf("commit %s: %w", strategy, err)
 	}
 

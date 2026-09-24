@@ -383,12 +383,13 @@ func parseSQLiteTime(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unrecognised datetime format %q", s)
 }
 
-// OpenRepo opens the local store inside the current git repository's .git
-// directory. Resolves the real git dir via git.Client.GitDir() so it works in
-// regular repos, submodules (where <worktree>/.git is a gitlink file), and
-// linked worktrees alike.
+// OpenRepo opens the local store inside the current git repository's common
+// .git directory. Resolves it via gitdir.Common() so regular repos, submodules
+// (where <worktree>/.git is a gitlink file), and linked worktrees all share one
+// store: inside a linked worktree the per-worktree dir (.git/worktrees/<name>)
+// would otherwise hold a separate, empty database.
 func OpenRepo(ctx context.Context) (*Store, error) {
-	d, err := gitdir.Get()
+	d, err := gitdir.Common()
 	if err != nil {
 		return nil, fmt.Errorf("not a git repository: %w", err)
 	}

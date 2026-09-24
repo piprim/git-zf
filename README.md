@@ -118,7 +118,7 @@ In the interactive TUI:
 - **`p`** — open the project picker (↑/↓ or j/k to navigate, **`Enter`** to confirm, **`Esc`** to cancel)
 - **`q`** — quit
 
-**`issue close`** — close an in-progress issue: pick from the list of in-progress branches (the currently checked-out branch is pre-selected), merge into the base branch, update the local store, and optionally update the tracker status and delete the local branch.
+**`issue close`** — close an in-progress issue: pick from the list of in-progress branches (the currently checked-out branch is pre-selected), merge into the base branch, update the local store, and optionally update the tracker status, remove the worktree if the branch was started in one, and delete the branch locally and on the remote.
 
 The picker also lists branches known only from fetched `refs/zf/branches/*` refs, so a reviewer or teammate can close an issue they did not start without running `git zf issue track` first — the feature branch is materialized from `origin/<branch>` and tracked automatically before the merge.
 
@@ -127,7 +127,10 @@ The close flow:
 2. Choose merge strategy: **Rebase** (default, recommended — single clean commit, submodule-safe), **Squash** (`git merge --squash`, fast but not submodule-safe), or **Classic** (`--no-ff`, preserves full history). For all three strategies the final commit is composed through the commitizen TUI form, pre-filled from the branch's issue ID and type.
 3. Confirm the merge. After a successful merge the branch is marked as `merged` in the local store and the issue is marked as `closed`.
 4. If a tracker is configured, a status picker lets you update the remote issue status (or skip).
-5. Optionally delete the local branch. Safe delete (`-d`) is used for classic merges; force delete (`-D`) for Squash and Rebase (neither preserves ancestry, so git requires `-D`).
+5. If the branch was started as a **worktree**, a prompt offers to remove it (`git worktree remove`, never forced: a worktree with modified or untracked files is left in place with a hint). When you ran the command from inside that worktree, a `cd` hint back to the main checkout is printed, since your shell is now in a deleted directory.
+6. Optionally delete the branch **locally and on the remote**. Safe delete (`-d`) is used for classic merges; force delete (`-D`) for Squash and Rebase (neither preserves ancestry, so git requires `-D`). A branch still held by a kept worktree is not deleted locally.
+
+`issue close`, `branch merge` and the other store-backed workflow commands work from inside a linked worktree: the local store lives in the repository's common `.git` directory, so every worktree shares it (rows written from inside a worktree by older versions live in `.git/worktrees/<name>/git-zf.db` and are not migrated). Closing a worktree-held issue runs the Rebase strategy's steps in that worktree and fast-forwards the base from the main checkout; Squash and Classic run in the main checkout. Closing is refused by git when the *base* branch is checked out in another linked worktree. The one exception is **`git zf init`**: git reads hooks from the common git dir, but inside a linked worktree `git rev-parse --git-dir` resolves to the per-worktree dir, so run `git zf init` from the main checkout (see the Roadmap).
 
 #### Merge strategies
 
@@ -252,6 +255,8 @@ $ git zf branch prune-tracker  # reap branches whose tracker issue is closed
 
 `branch merge` picks a local **or** remote-only branch and merges it into the current branch (rebase / squash / classic), then offers to delete the source (local + remote) and propose a push. Issue branches are refused — use `git zf issue close` for those, so the review-incorporation, sub-task, and tracker steps still run. `issue close` and `branch merge` share the same merge engine (`cmd/mergeflow`).
 
+A source branch checked out in another working tree can be merged too, whether that tree is a linked worktree or, when you run the command from inside a worktree, the main checkout: the merge runs against the tree that holds the source. When that tree is a linked worktree you are offered to remove it after the commit lands, before the usual delete-source step; the main checkout is never removed. A branch held by a stale worktree entry (directory deleted by hand) is refused with a `git worktree prune` hint.
+
 `branch list` flags:
 ```
 --status string   filter by status: in_progress, merged, closed, all (default: in_progress)
@@ -350,7 +355,7 @@ Install the git-zf pre-push and pre-commit hooks into the current repository (se
 Both hooks share the same install policy:
 
 - Run `git zf install` first so the `git zf` binary is available in the git exec-path, then run `git zf init` once per repository (and per submodule).
-- Works correctly in git submodules and linked worktrees: each hook is written to the repository's real git directory (resolved via `git rev-parse --git-dir`), not the parent repo.
+- Works correctly in git submodules: each hook is written to the submodule's real git directory (resolved via `git rev-parse --git-dir`), not the parent repo. **Run `git zf init` from the main checkout, not from a linked worktree**: inside a linked worktree `--git-dir` is the per-worktree git dir while git reads hooks from the common one, so the hooks would be installed where git never looks (see the Roadmap).
 - Re-running the command is safe: a hook that is already installed and up to date is left untouched (idempotent, checked independently per hook).
 - If a foreign hook already exists for either file, it is **not** overwritten; a warning prints the snippet to add to your existing hook instead (`git zf review guard "..."` for pre-push, `git zf review guard-commit || exit 1` for pre-commit).
 

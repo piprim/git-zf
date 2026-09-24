@@ -127,12 +127,19 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		}
 	}()
 
+	// A source checked out in a linked worktree cannot be checked out here;
+	// give the engine a client on that worktree instead.
+	srcClient, wt, err := mergeflow.SourceTree(ctx, d.client, source.Name)
+	if err != nil {
+		return err
+	}
+
 	prefill := func(_ commit.MergeStrategy, _, _ plumbing.Hash) map[string]any {
 		return map[string]any{"subject": fmt.Sprintf("Merge %q into %q", source.Name, target)}
 	}
 
 	res, err := mergeflow.Run(ctx, d.client, mergeflow.Params{
-		Source: source.Name, Target: target, SourceMaterialized: created,
+		Source: source.Name, Target: target, SourceMaterialized: created, SourceClient: srcClient,
 	}, prompter, prefill)
 	if err != nil {
 		return err
@@ -152,13 +159,30 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 	}
 	mergeCommitted = true
 
-	// Post-merge: offer to delete the source (local + remote), then propose push.
+	// Post-merge: offer to remove the source's worktree (when it has one), then
+	// to delete the source (local + remote), then propose push.
+	worktreeRemoved := false
+	if wt != nil {
+		// invokedFrom is "" on purpose: the target is the current branch, so the
+		// user cannot be standing in the source's worktree.
+		worktreeRemoved, err = mergeflow.RemoveWorktreeStep(ctx, d.client, wt, "", prompter.ConfirmRemoveWorktree)
+		if err != nil {
+			return err
+		}
+	}
+
 	if del, derr := prompter.ConfirmDeleteSource(ctx, source.Name); derr != nil {
 		return derr //nolint:wrapcheck // prompter already wraps
 	} else if del {
-		force := res.Strategy == commit.MergeStrategySquash || res.Strategy == commit.MergeStrategyRebase
-		if delErr := d.client.DeleteLocalBranch(ctx, source.Name, force); delErr != nil {
-			fmt.Fprintf(d.client.IO().Err, "warning: delete branch: %v\n", delErr)
+		if wt != nil && !worktreeRemoved {
+			fmt.Fprintf(d.client.IO().Err,
+				"warning: branch %q is still checked out in its worktree; delete it after `git worktree remove`\n",
+				source.Name)
+		} else {
+			force := res.Strategy == commit.MergeStrategySquash || res.Strategy == commit.MergeStrategyRebase
+			if delErr := d.client.DeleteLocalBranch(ctx, source.Name, force); delErr != nil {
+				fmt.Fprintf(d.client.IO().Err, "warning: delete branch: %v\n", delErr)
+			}
 		}
 		if d.client.RemoteBranchExists(ctx, source.Name) {
 			if rErr := d.client.DeleteRemoteBranch(ctx, source.Name); rErr != nil {

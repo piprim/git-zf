@@ -34,6 +34,18 @@ type closeDeps struct {
 	// the default/picker paths.
 	baseOverride string
 
+	// invokedFrom is the working-tree root the command was typed in. client is
+	// always anchored on the main tree; when invokedFrom is a linked worktree
+	// that gets removed, a cd hint back to the main tree is printed.
+	invokedFrom string
+
+	// invokedBranch is the branch checked out in the tree the command was typed
+	// in ("" when that tree has a detached HEAD). client is anchored on the main
+	// tree, so client.CurrentBranch() reports the MAIN checkout's branch — the
+	// wrong pre-selection for the branch picker and the wrong subject for the
+	// `branch merge` nudge whenever the user stands inside a linked worktree.
+	invokedBranch string
+
 	// push proposal wiring (Phase 1). pushConfirm is nil in tests that build
 	// closeDeps directly, which disables the push step there.
 	push, noPush bool
@@ -50,14 +62,20 @@ func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConf
 		return closeDeps{}, fmt.Errorf("failed to get store: %w", err)
 	}
 
-	client, err := cmdutil.NewClientForCmd(cmd, cfg)
+	client, invokedFrom, err := cmdutil.NewMainClientForCmd(cmd, cfg)
 	if err != nil {
 		_ = s.Close()
 
 		return closeDeps{}, err
 	}
 
-	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps := closeDeps{
+		client:        client,
+		store:         s,
+		cfg:           cfg,
+		invokedFrom:   invokedFrom,
+		invokedBranch: invokedBranchFor(ctx, client, invokedFrom),
+	}
 
 	if cfg.IssueTracker.Type != "" {
 		t, err := tracker.New(cfg.IssueTracker)
@@ -70,6 +88,33 @@ func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConf
 	}
 
 	return deps, nil
+}
+
+// invokedBranchFor resolves the branch checked out in the working tree the
+// command was typed in. client is anchored on the MAIN tree (see
+// cmdutil.NewMainClientForCmd), so its own CurrentBranch() answers for the main
+// checkout, not for the linked worktree the user may be standing in. Resolution
+// is by worktree listing: the entry whose Path is the same directory as
+// invokedFrom. Falls back to client.CurrentBranch() when invokedFrom is empty
+// or matches no entry, and returns "" when the invoking tree is on a detached
+// HEAD (no branch to pre-select).
+func invokedBranchFor(ctx context.Context, client *git.Client, invokedFrom string) string {
+	if invokedFrom != "" {
+		if list, err := client.Worktrees(ctx); err == nil {
+			for i := range list {
+				if git.SamePath(list[i].Path, invokedFrom) {
+					return list[i].Branch
+				}
+			}
+		}
+	}
+
+	cur, err := client.CurrentBranch()
+	if err != nil {
+		return ""
+	}
+
+	return cur
 }
 
 // ErrBranchLockedForReview is returned by reviewPreflight when the branch is
@@ -134,7 +179,7 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 //
 // Unexported because closeDeps is unexported (no cross-package caller).
 func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
-	picked, err := getPickedBranch(ctx, deps.store, deps.client, prompter)
+	picked, err := getPickedBranch(ctx, deps.store, deps.client, deps.invokedBranch, prompter)
 	if err != nil {
 		return err
 	}
@@ -180,7 +225,15 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		fmt.Fprintf(deps.client.IO().Err, "Rolled back: materialized branch %q removed\n", picked.BranchName)
 	}()
 
-	reviewCleanup, err := reviewPreflight(ctx, deps, picked)
+	// A branch started as a worktree is checked out there, and git refuses to
+	// check it out (or delete it) from the main tree. Hand the engine a client
+	// on that worktree; the worktree itself is only touched after the commit.
+	srcClient, wt, err := mergeflow.SourceTree(ctx, deps.client, picked.BranchName)
+	if err != nil {
+		return err
+	}
+
+	reviewCleanup, err := reviewPreflight(ctx, deps, picked, srcClient)
 	if err != nil {
 		return err
 	}
@@ -242,6 +295,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		Source:             picked.BranchName,
 		Target:             base,
 		SourceMaterialized: createdBranch,
+		SourceClient:       srcClient,
 	}, prompter, prefill)
 	if err != nil {
 		return err
@@ -272,7 +326,16 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 
 	updateClosedStatus(ctx, deps, picked, prompter)
 
-	if err := doDeleteBranch(ctx, deps.client, picked, res.Strategy, prompter); err != nil {
+	worktreeRemoved := false
+	if wt != nil {
+		worktreeRemoved, err = mergeflow.RemoveWorktreeStep(
+			ctx, deps.client, wt, deps.invokedFrom, prompter.ConfirmRemoveWorktree)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := doDeleteBranch(ctx, deps.client, picked, res.Strategy, prompter, wt != nil && !worktreeRemoved); err != nil {
 		return err
 	}
 
@@ -422,7 +485,16 @@ func baseBranchResolves(c *git.Client, name string) (bool, error) {
 // store is a cache that may lag behind the reviewer's machine. reviewPreflight
 // always fetches and reads the ref first so the developer never has to run a
 // manual git fetch before closing.
-func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRow) (func(context.Context), error) {
+func reviewPreflight(
+	ctx context.Context, deps closeDeps, picked *store.BranchRow, src *git.Client,
+) (func(context.Context), error) {
+	// The feature branch is checked out in src when it lives in a linked
+	// worktree; the fast-forward / merge below must run there.
+	tree := deps.client
+	if src != nil {
+		tree = src
+	}
+
 	// Fetch review refs (best-effort) so we see the reviewer's latest decision
 	// even if the developer has not fetched since submitting for review.
 	_ = deps.client.FetchReviewRefs(ctx)
@@ -489,7 +561,7 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 				fmt.Fprintf(deps.client.IO().Out,
 					"Incorporating %d reviewer commit(s) from %s into %s...\n",
 					pending.Commits, pending.EffectiveRef, picked.BranchName)
-				if err := deps.client.FastForwardOnly(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
+				if err := tree.FastForwardOnly(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
 					return nil, fmt.Errorf("fast-forward %s to %s: %w", picked.BranchName, pending.EffectiveRef, err)
 				}
 			default:
@@ -504,7 +576,7 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 							"Run 'git zf review sync', resolve the conflicts, then close: %w",
 						pending.EffectiveRef, picked.BranchName, strings.Join(conflicts, ", "), ErrReviewSyncNeeded)
 				}
-				if dirty, dErr := deps.client.IsDirty(ctx); dErr == nil && dirty {
+				if dirty, dErr := tree.IsDirty(ctx); dErr == nil && dirty {
 					return nil, fmt.Errorf(
 						"working tree has uncommitted changes — cannot incorporate %s.\n"+
 							"Run 'git stash', then retry the close: %w", pending.EffectiveRef, ErrReviewSyncNeeded)
@@ -512,8 +584,8 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 				fmt.Fprintf(deps.client.IO().Out,
 					"Merging %d reviewer commit(s) from %s into %s...\n",
 					pending.Commits, pending.EffectiveRef, picked.BranchName)
-				if err := deps.client.MergeForward(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
-					_ = deps.client.AbortMerge(ctx)
+				if err := tree.MergeForward(ctx, pending.EffectiveRef, picked.BranchName); err != nil {
+					_ = tree.AbortMerge(ctx)
 					return nil, fmt.Errorf("merge %s into %s: %w", pending.EffectiveRef, picked.BranchName, err)
 				}
 			}
@@ -543,10 +615,15 @@ func reviewPreflight(ctx context.Context, deps closeDeps, picked *store.BranchRo
 
 // getPickedBranch returns (nil, nil) when there are no closable branches
 // (neither store-tracked in-progress rows nor ref-derived candidates).
+//
+// invokedBranch is the branch checked out in the tree the command was typed in
+// (closeDeps.invokedBranch). It drives the picker's pre-selection and the
+// `branch merge` nudge; client is the main-tree client, so its CurrentBranch()
+// would name the wrong branch when the user is inside a linked worktree.
 func getPickedBranch(
 	ctx context.Context,
 	s *store.Store,
-	client *git.Client, prompter ClosePrompter) (*store.BranchRow, error) {
+	client *git.Client, invokedBranch string, prompter ClosePrompter) (*store.BranchRow, error) {
 	// A branch closed in a sibling clone carries Merged=true on its
 	// refs/zf/branches/<slug> ref (pushed by updateClosedStatus) but may still
 	// show in_progress in this clone's store. Reconcile from the refs first so
@@ -562,7 +639,7 @@ func getPickedBranch(
 		// Best-effort nudge: a user standing on a non-issue branch that still
 		// has unmerged commits almost certainly wants `branch merge`, not
 		// `issue close`. Any probe error degrades to the plain message.
-		if cur, curErr := client.CurrentBranch(); curErr == nil && cur != "" {
+		if cur := invokedBranch; cur != "" {
 			// Only nudge when cur is genuinely NOT an issue branch. An issue
 			// branch with no store row and no ref (fresh local branch, or a
 			// reviewer clone pre-reconciliation) also lands here with zero
@@ -587,12 +664,7 @@ func getPickedBranch(
 		return nil, nil
 	}
 
-	currentBranch, err := client.CurrentBranch()
-	if err != nil {
-		currentBranch = ""
-	}
-
-	picked, err := prompter.PickBranch(ctx, branches, currentBranch)
+	picked, err := prompter.PickBranch(ctx, branches, invokedBranch)
 	if err != nil {
 		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
 		return nil, err
@@ -639,11 +711,16 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.Branc
 	issueflow.ApplyTrackerStatus(ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug, deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
 }
 
+// doDeleteBranch offers to delete the merged feature branch locally and on the
+// remote (mirrors branch merge). heldByWorktree is true when the branch is
+// still checked out in a linked worktree that was kept: git would refuse the
+// local delete, so it is skipped with a warning while the remote delete still
+// runs.
 func doDeleteBranch(
 	ctx context.Context,
 	c *git.Client,
 	picked *store.BranchRow,
-	strategy commit.MergeStrategy, prompter ClosePrompter) error {
+	strategy commit.MergeStrategy, prompter ClosePrompter, heldByWorktree bool) error {
 	shouldDelete, err := prompter.ConfirmDeleteBranch(ctx, picked.BranchName)
 	if err != nil {
 		//nolint:wrapcheck // prompter error already wrapped by huhPrompter
@@ -654,9 +731,21 @@ func doDeleteBranch(
 		return nil
 	}
 
-	force := strategy == commit.MergeStrategySquash || strategy == commit.MergeStrategyRebase
-	if err := c.DeleteLocalBranch(ctx, picked.BranchName, force); err != nil {
-		fmt.Fprintf(c.IO().Err, "warning: delete branch: %v\n", err)
+	if heldByWorktree {
+		fmt.Fprintf(c.IO().Err,
+			"warning: branch %q is still checked out in its worktree; delete it after `git worktree remove`\n",
+			picked.BranchName)
+	} else {
+		force := strategy == commit.MergeStrategySquash || strategy == commit.MergeStrategyRebase
+		if err := c.DeleteLocalBranch(ctx, picked.BranchName, force); err != nil {
+			fmt.Fprintf(c.IO().Err, "warning: delete branch: %v\n", err)
+		}
+	}
+
+	if c.RemoteBranchExists(ctx, picked.BranchName) {
+		if err := c.DeleteRemoteBranch(ctx, picked.BranchName); err != nil {
+			fmt.Fprintf(c.IO().Err, "warning: delete remote branch: %v\n", err)
+		}
 	}
 
 	return nil

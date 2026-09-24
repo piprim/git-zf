@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mitchellh/go-homedir"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
@@ -16,6 +15,7 @@ import (
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
+	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -243,16 +243,16 @@ func createFlow(
 	picked *issue.Issue, creator createFlowCreator) error {
 	// Open a single store connection shared by prepareBranch (parent lookup)
 	// and InsertIssueRelation, avoiding two separate connections.
-	// Use the client's git dir so this works in tests (temp dirs) as well as
-	// production (CWD is the repo).
+	// Use the client's common git dir so this works in tests (temp dirs), production
+	// (CWD is the repo) and inside linked worktrees (which share the store).
 	var parentStore *store.Store
 	if deps.Flags.ParentIssueSlug != "" {
-		gitDir, gdErr := deps.Client.GitDir()
+		commonDir, gdErr := deps.Client.CommonDir()
 		if gdErr != nil {
-			return fmt.Errorf("resolve git dir for parent store: %w", gdErr)
+			return fmt.Errorf("resolve common git dir for parent store: %w", gdErr)
 		}
 		var openErr error
-		parentStore, openErr = store.Open(ctx, gitDir)
+		parentStore, openErr = store.Open(ctx, commonDir)
 		if openErr != nil {
 			return fmt.Errorf("open store for parent lookup: %w", openErr)
 		}
@@ -378,8 +378,7 @@ func worktreeCreator(
 
 	fmt.Fprintf(deps.Client.IO().Out, "Created worktree %q at %q (based on %q)\n", branchName, path, base)
 
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD700"))
-	fmt.Fprintln(deps.Client.IO().Out, hintStyle.Render("Run 'cd "+path+"' to begin working."))
+	fmt.Fprintln(deps.Client.IO().Out, tui.HintStyle.Render("Run 'cd "+path+"' to begin working."))
 
 	return true, "worktree", nil
 }
@@ -395,8 +394,8 @@ func worktreeCreator(
 // encodes the slug. Returns "" when the base is not a git-zf issue branch (e.g.
 // main), leaving the new branch parentless.
 func resolveParentSlug(ctx context.Context, c *git.Client, baseBranch string) string {
-	if gitDir, gdErr := c.GitDir(); gdErr == nil {
-		if s, openErr := store.Open(ctx, gitDir); openErr == nil {
+	if commonDir, gdErr := c.CommonDir(); gdErr == nil {
+		if s, openErr := store.Open(ctx, commonDir); openErr == nil {
 			defer func() { _ = s.Close() }()
 			if rows, listErr := s.ListBranches(ctx, store.BranchStatusAll); listErr == nil {
 				for _, r := range rows {

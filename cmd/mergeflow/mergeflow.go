@@ -26,6 +26,13 @@ type Params struct {
 	// origin). close sets this for ref-derived picks; branch merge sets it when
 	// it materialized a remote-only source.
 	SourceMaterialized bool
+
+	// SourceClient is a client opened at the linked worktree that has Source
+	// checked out (see git.Client.WorktreeFor). When nil the engine runs
+	// single-tree on the client passed to Run. When set, Rebase performs its
+	// source-side steps (merge, soft reset, commit) on that tree, because git
+	// refuses to check out a branch that another worktree holds.
+	SourceClient *git.Client
 }
 
 // Prompter resolves the generic user-facing merge decisions. issue close's
@@ -51,7 +58,8 @@ type Result struct {
 var errFastForwardDeferred = errors.New("commit created, fast-forward deferred")
 
 type run struct {
-	client       *git.Client
+	client       *git.Client // main tree: every target-side operation
+	src          *git.Client // source-side operations; == client in single-tree mode
 	source       string
 	target       string
 	materialized bool
@@ -63,8 +71,16 @@ type run struct {
 // confirm → execute. It performs no post-merge steps (delete/push) — the caller
 // runs those from Result.
 func Run(ctx context.Context, client *git.Client, p Params, prompter Prompter, prefill PrefillFunc) (Result, error) {
+	src := p.SourceClient
+	if src == nil {
+		src = client
+	} else if remote, err := client.Remote(); err == nil && remote != "" {
+		// The source-side MergeRebase resolves the remote on its own client;
+		// pin it to the main client's remote so both agree.
+		src.SetRemote(remote)
+	}
 	r := &run{
-		client: client, source: p.Source, target: p.Target,
+		client: client, src: src, source: p.Source, target: p.Target,
 		materialized: p.SourceMaterialized, prompter: prompter, prefill: prefill,
 	}
 

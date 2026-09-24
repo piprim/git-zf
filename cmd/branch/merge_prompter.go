@@ -28,6 +28,7 @@ type SourceBranch struct {
 type MergePrompter interface {
 	mergeflow.Prompter // PickStrategy, ConfirmMerge, ComposeMessage
 	PickSource(ctx context.Context, sources []SourceBranch) (SourceBranch, error)
+	ConfirmRemoveWorktree(ctx context.Context, path string) (remove bool, err error)
 	ConfirmDeleteSource(ctx context.Context, source string) (delete bool, err error)
 }
 
@@ -135,4 +136,13 @@ func (p *huhMergePrompter) ConfirmDeleteSource(ctx context.Context, source strin
 	}
 
 	return del, nil
+}
+
+func (p *huhMergePrompter) ConfirmRemoveWorktree(ctx context.Context, path string) (bool, error) {
+	var remove bool
+	if err := huh.NewForm(tui.IssueRemoveWorktree(path, &remove)).RunWithContext(ctx); err != nil {
+		return false, fmt.Errorf("remove worktree form: %w", err)
+	}
+
+	return remove, nil
 }

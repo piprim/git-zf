@@ -94,3 +94,50 @@ func TestGet_linkedWorktree(t *testing.T) {
 		t.Errorf("Get() = %q, want path containing .git", got)
 	}
 }
+
+func TestCommon(t *testing.T) {
+	t.Run("main tree: equals Get", func(t *testing.T) {
+		mainDir := t.TempDir()
+		initGitRepo(t, mainDir)
+		t.Chdir(mainDir)
+
+		got, err := gitdir.Common()
+		if err != nil {
+			t.Fatalf("Common() error = %v", err)
+		}
+		want, err := gitdir.Get()
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if got != want {
+			t.Errorf("Common() = %q, want Get() = %q", got, want)
+		}
+	})
+
+	t.Run("linked worktree: returns the main .git", func(t *testing.T) {
+		mainDir := t.TempDir()
+		initGitRepo(t, mainDir)
+
+		worktreeDir := t.TempDir()
+		cmd := exec.Command("git", "worktree", "add", "-b", "wt-branch", worktreeDir, "main")
+		cmd.Dir = mainDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git worktree add: %v\n%s", err, out)
+		}
+
+		t.Chdir(worktreeDir)
+
+		got, err := gitdir.Common()
+		if err != nil {
+			t.Fatalf("Common() error = %v", err)
+		}
+		gotReal, _ := filepath.EvalSymlinks(got)
+		wantReal, _ := filepath.EvalSymlinks(filepath.Join(mainDir, ".git"))
+		if gotReal != wantReal {
+			t.Errorf("Common() = %q, want %q", gotReal, wantReal)
+		}
+		if strings.Contains(got, "worktrees") {
+			t.Errorf("Common() = %q, must not be the per-worktree dir", got)
+		}
+	})
+}

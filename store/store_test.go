@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -908,4 +911,63 @@ func TestMigration0004BranchesNamePK(t *testing.T) {
 	); err == nil {
 		t.Error("expected enforce_merged_at to reject UPDATE without merged_at")
 	}
+}
+
+// TestOpenRepo_linkedWorktreeSharesMainStore guards the store location: a row
+// written from the main tree must be visible when OpenRepo runs inside a
+// linked worktree (the store lives in the common git dir, not the per-worktree
+// dir).
+func TestOpenRepo_linkedWorktreeSharesMainStore(t *testing.T) {
+	mainDir := t.TempDir()
+	runGit := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit(mainDir, "init", "-q", "-b", "main")
+	runGit(mainDir, "config", "user.name", "Test")
+	runGit(mainDir, "config", "user.email", "test@example.com")
+	runGit(mainDir, "commit", "-q", "--allow-empty", "-m", "init")
+
+	mainStore, err := Open(t.Context(), filepath.Join(mainDir, ".git"))
+	if err != nil {
+		t.Fatalf("Open main store: %v", err)
+	}
+	if err := mainStore.InsertIssueWithBranch(t.Context(),
+		&Issue{IDSlug: "ABC-7", Title: "Shared", StatusID: StatusIDInProgress},
+		&Branch{Name: "ABC-7@feat@shared", Type: "feat", StatusID: StatusIDInProgress},
+	); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_ = mainStore.Close()
+
+	wtDir := filepath.Join(t.TempDir(), "repo--wt")
+	runGit(mainDir, "worktree", "add", "-q", "-b", "wt-branch", wtDir, "main")
+	t.Chdir(wtDir)
+
+	s, err := OpenRepo(t.Context())
+	if err != nil {
+		t.Fatalf("OpenRepo inside worktree: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	t.Run("row seeded from the main tree is visible", func(t *testing.T) {
+		rows, err := s.ListBranches(t.Context(), BranchStatusInProgress)
+		if err != nil {
+			t.Fatalf("ListBranches: %v", err)
+		}
+		if len(rows) != 1 || rows[0].IssueSlug != "ABC-7" {
+			t.Fatalf("ListBranches = %+v, want the ABC-7 row", rows)
+		}
+	})
+
+	t.Run("no database was created in the per-worktree git dir", func(t *testing.T) {
+		perWorktree := filepath.Join(mainDir, ".git", "worktrees", "repo--wt", "git-zf.db")
+		if _, err := os.Stat(perWorktree); err == nil {
+			t.Fatalf("unexpected store at %s", perWorktree)
+		}
+	})
 }

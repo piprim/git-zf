@@ -550,3 +550,163 @@ func TestRunMerge_RemoteOnlyRebase_FFDeferred_KeepsMaterialized(t *testing.T) {
 		}
 	})
 }
+
+// addWorktreeBranch creates name one commit ahead of base, checked out in a
+// linked worktree, and returns the worktree path.
+func (r *mergeRig) addWorktreeBranch(t *testing.T, name, base string) string {
+	t.Helper()
+
+	wt := filepath.Join(t.TempDir(), "repo--"+name)
+	r.git(t, "worktree", "add", "-q", "-b", name, wt, base)
+	mergeWrite(t, wt, name+".txt", name+"\n")
+	if out, err := exec.CommandContext(t.Context(), "git", "-C", wt, "add", name+".txt").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	if out, err := exec.CommandContext(t.Context(), "git", "-C", wt, "commit", "-m", "feat: "+name).CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	r.rebuildClient(t)
+
+	return wt
+}
+
+func TestRunMerge_SourceInWorktree(t *testing.T) {
+	rig := newMergeRig(t)
+	rig.addOrigin(t)
+	wt := rig.addWorktreeBranch(t, "feature", "master")
+	rig.git(t, "push", "-q", "origin", "feature")
+	rig.rebuildClient(t)
+
+	p := &scriptedMergePrompter{
+		Source:         SourceBranch{Name: "feature"},
+		Strategy:       commit.MergeStrategyRebase,
+		Confirm:        true,
+		Message:        []byte("chore: merge feature\n"),
+		RemoveWorktree: true,
+		DeleteSource:   true,
+	}
+
+	err := runMerge(t.Context(), rig.deps(declinePush), p)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runMerge: %v", err)
+		}
+	})
+	t.Run("master carries the merge commit", func(t *testing.T) {
+		if got := rig.headSubject(t, "master"); got != "chore: merge feature" {
+			t.Fatalf("master HEAD subject = %q", got)
+		}
+	})
+	t.Run("remove prompt asked once", func(t *testing.T) {
+		if p.RemoveWorktreeCalls != 1 {
+			t.Fatalf("RemoveWorktreeCalls = %d", p.RemoveWorktreeCalls)
+		}
+	})
+	t.Run("worktree removed", func(t *testing.T) {
+		if _, statErr := os.Stat(wt); !os.IsNotExist(statErr) {
+			t.Fatalf("worktree still present: %v", statErr)
+		}
+	})
+	t.Run("local source deleted", func(t *testing.T) {
+		if rig.branchExists(t, "feature") {
+			t.Fatal("local feature should have been deleted")
+		}
+	})
+	t.Run("remote source deleted", func(t *testing.T) {
+		if out := rig.gitOut(t, "ls-remote", "origin", "refs/heads/feature"); out != "" {
+			t.Fatalf("origin still has feature: %q", out)
+		}
+	})
+}
+
+func TestRunMerge_SourceInWorktree_DeclinedRemovalKeepsLocalBranch(t *testing.T) {
+	rig := newMergeRig(t)
+	wt := rig.addWorktreeBranch(t, "feature", "master")
+
+	p := &scriptedMergePrompter{
+		Source:         SourceBranch{Name: "feature"},
+		Strategy:       commit.MergeStrategySquash,
+		Confirm:        true,
+		Message:        []byte("chore: merge feature\n"),
+		RemoveWorktree: false,
+		DeleteSource:   true,
+	}
+
+	err := runMerge(t.Context(), rig.deps(declinePush), p)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runMerge: %v", err)
+		}
+	})
+	t.Run("worktree kept", func(t *testing.T) {
+		if _, statErr := os.Stat(wt); statErr != nil {
+			t.Fatalf("worktree missing: %v", statErr)
+		}
+	})
+	t.Run("local source kept with a warning", func(t *testing.T) {
+		if !rig.branchExists(t, "feature") {
+			t.Fatal("feature should still exist (held by its worktree)")
+		}
+		if !strings.Contains(rig.stderr.String(), "still checked out in its worktree") {
+			t.Fatalf("stderr = %q", rig.stderr.String())
+		}
+	})
+}
+
+// branch merge typed inside a linked worktree, with a source the MAIN tree
+// holds: git refuses to check that source out in the worktree, so the engine
+// must act on the main tree for the source side (Rebase) and leave the main
+// tree in place afterwards.
+func TestRunMerge_SourceHeldByMainTree_FromWorktree(t *testing.T) {
+	rig := newMergeRig(t)
+	wt := rig.addWorktreeBranch(t, "feature", "master")
+	// Advance master in the main tree so it has something to merge.
+	mergeWrite(t, rig.dir, "master.txt", "master\n")
+	rig.git(t, "add", "master.txt")
+	rig.git(t, "commit", "-q", "-m", "chore: master work")
+
+	wtClient, err := git.NewClientAt(&pkg.IO{In: bytes.NewReader(nil), Out: rig.stdout, Err: rig.stderr}, wt)
+	if err != nil {
+		t.Fatalf("git.NewClientAt(worktree): %v", err)
+	}
+	d := mergeDeps{client: wtClient, store: rig.store, cfg: rig.cfg, pushConfirm: declinePush}
+
+	p := &scriptedMergePrompter{
+		Source:         SourceBranch{Name: "master"},
+		Strategy:       commit.MergeStrategyRebase,
+		Confirm:        true,
+		Message:        []byte("chore: merge master into feature\n"),
+		RemoveWorktree: true,
+		DeleteSource:   false,
+	}
+
+	err = runMerge(t.Context(), d, p)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runMerge: %v", err)
+		}
+	})
+	t.Run("feature (the current branch in the worktree) carries the merge commit", func(t *testing.T) {
+		if got := rig.headSubject(t, "feature"); got != "chore: merge master into feature" {
+			t.Fatalf("feature HEAD subject = %q", got)
+		}
+	})
+	t.Run("feature contains master's work", func(t *testing.T) {
+		if out := rig.gitOut(t, "show", "feature:master.txt"); out != "master" {
+			t.Fatalf("feature:master.txt = %q", out)
+		}
+	})
+	t.Run("remove prompt never asked for the main tree", func(t *testing.T) {
+		if p.RemoveWorktreeCalls != 0 {
+			t.Fatalf("RemoveWorktreeCalls = %d, want 0", p.RemoveWorktreeCalls)
+		}
+	})
+	t.Run("main tree still present and on master", func(t *testing.T) {
+		if got := rig.gitOut(t, "rev-parse", "--abbrev-ref", "HEAD"); got != "master" {
+			t.Fatalf("main tree HEAD = %q", got)
+		}
+	})
+}

@@ -830,21 +830,6 @@ func (c *Client) RemoteBranchNames() ([]string, error) {
 	return names, nil
 }
 
-// CreateWorktree creates a new branch from baseBranch and checks it out
-// in a linked worktree at path. Wraps `git worktree add -b <branch> <path> <base>`.
-func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, path string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
-
-	if err := c.runInteractive(ctx, root, "worktree", "add", "-b", branchName, path, baseBranch); err != nil {
-		return fmt.Errorf("create worktree %q: %w", path, err)
-	}
-
-	return nil
-}
-
 // ErrBranchNotMerged is returned (wrapped) by SafeDeleteBranch / DeleteLocalBranch
 // when git refuses to delete the branch because its tip commit is not fully merged
 // into HEAD or upstream. Detect with errors.Is.

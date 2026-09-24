@@ -25,3 +25,27 @@ func NewClientForCmd(cmd *cobra.Command, cfg *config.AppConfig) (*git.Client, er
 	}
 	return c, nil
 }
+
+// NewMainClientForCmd opens the repository like NewClientForCmd and re-anchors
+// the client on the main working tree when the command was typed inside a
+// linked worktree. invokedFrom is the working-tree root of the directory the
+// command was typed in, so callers can tell whether a worktree they remove is
+// the one the user's shell is standing in.
+func NewMainClientForCmd(
+	cmd *cobra.Command, cfg *config.AppConfig,
+) (mainClient *git.Client, invokedFrom string, err error) {
+	c, err := NewClientForCmd(cmd, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	invokedFrom, err = c.WorkingTreeRoot()
+	if err != nil {
+		return nil, "", fmt.Errorf("working tree root: %w", err)
+	}
+	mainClient, err = c.MainTree()
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve main working tree: %w", err)
+	}
+
+	return mainClient, invokedFrom, nil
+}

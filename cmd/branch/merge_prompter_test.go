@@ -17,9 +17,12 @@ type scriptedMergePrompter struct {
 	Message      []byte
 	DeleteSource bool
 
-	PickSourceCalls    int
-	PickStrategyCalls  int
-	ConfirmDeleteCalls int
+	RemoveWorktree bool
+
+	PickSourceCalls     int
+	PickStrategyCalls   int
+	ConfirmDeleteCalls  int
+	RemoveWorktreeCalls int
 }
 
 func (s *scriptedMergePrompter) PickSource(context.Context, []SourceBranch) (SourceBranch, error) {
@@ -46,4 +49,10 @@ func (s *scriptedMergePrompter) ConfirmDeleteSource(context.Context, string) (bo
 	s.ConfirmDeleteCalls++
 
 	return s.DeleteSource, nil
+}
+
+func (s *scriptedMergePrompter) ConfirmRemoveWorktree(context.Context, string) (bool, error) {
+	s.RemoveWorktreeCalls++
+
+	return s.RemoveWorktree, nil
 }

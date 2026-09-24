@@ -29,6 +29,10 @@ type scriptedPrompter struct {
 	BaseErr       error
 	BaseCalled    bool
 
+	RemoveWorktree      bool
+	RemoveWorktreeErr   error
+	RemoveWorktreeCalls int
+
 	// Failure injection — when non-nil, that method returns this error
 	// immediately. Useful for cancellation-style tests.
 	BranchErr        error
@@ -45,10 +49,17 @@ type scriptedPrompter struct {
 	// PickBranchSeen holds the branch list PickBranch was last offered. Tests
 	// assert on it to verify which branches the picker would have shown.
 	PickBranchSeen []store.BranchRow
+
+	// PickBranchCurrent holds the pre-selection PickBranch was last given —
+	// the branch checked out in the tree the command was typed in.
+	PickBranchCurrent string
 }
 
-func (s *scriptedPrompter) PickBranch(_ context.Context, branches []store.BranchRow, _ string) (*store.BranchRow, error) {
+func (s *scriptedPrompter) PickBranch(
+	_ context.Context, branches []store.BranchRow, current string,
+) (*store.BranchRow, error) {
 	s.PickBranchSeen = branches
+	s.PickBranchCurrent = current
 
 	if s.BranchErr != nil {
 		return nil, s.BranchErr
@@ -97,6 +108,15 @@ func (s *scriptedPrompter) ConfirmDeleteBranch(_ context.Context, _ string) (boo
 	}
 
 	return s.DeleteBranch, nil
+}
+
+func (s *scriptedPrompter) ConfirmRemoveWorktree(_ context.Context, _ string) (bool, error) {
+	s.RemoveWorktreeCalls++
+	if s.RemoveWorktreeErr != nil {
+		return false, s.RemoveWorktreeErr
+	}
+
+	return s.RemoveWorktree, nil
 }
 
 func (s *scriptedPrompter) PickBaseBranch(_ context.Context, defaultBase string, _ []string) (string, error) {

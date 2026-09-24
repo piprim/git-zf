@@ -645,11 +645,26 @@ func IssueMergeConfirm(branchName, baseBranch, strategy string, confirmed *bool)
 	)
 }
 
-// IssueDeleteBranch asks whether to delete the local branch after closing.
+// IssueDeleteBranch confirms deleting the merged feature branch locally and on
+// the remote.
 func IssueDeleteBranch(branchName string, confirmed *bool) *huh.Group {
 	return huh.NewGroup(
 		huh.NewConfirm().
-			Title(fmt.Sprintf("Delete local branch %q?", branchName)).
+			Title(fmt.Sprintf("Delete branch %q locally and on the remote?", branchName)).
+			Value(confirmed),
+	)
+}
+
+// IssueRemoveWorktree confirms removing the linked worktree that held the
+// merged branch. Defaults to yes: the branch is merged, the directory is
+// disposable.
+func IssueRemoveWorktree(path string, confirmed *bool) *huh.Group {
+	*confirmed = true
+
+	return huh.NewGroup(
+		huh.NewConfirm().
+			Title(fmt.Sprintf("Remove worktree %q?", path)).
+			Description("The branch is merged; git worktree remove deletes the directory (refused if it has changes).").
 			Value(confirmed),
 	)
 }
