@@ -8,7 +8,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/convert"
 )
 
 // rebasePlan captures the state computed by rebasePreflight and consumed by the
@@ -286,7 +285,7 @@ func (r *run) composeAndCommit(
 		return err //nolint:wrapcheck // prompter already wraps
 	}
 
-	if err := tree.Commit(ctx, msg, convert.CommitOptionsFromTUI(opts)); err != nil {
+	if err := tree.Commit(ctx, msg, opts.CommitOptions); err != nil {
 		return fmt.Errorf("commit %s: %w", strategy, err)
 	}
 

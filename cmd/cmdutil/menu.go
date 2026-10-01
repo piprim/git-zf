@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/tui"
@@ -101,18 +99,8 @@ func RunMenu(cmd *cobra.Command, title string, subs []*cobra.Command, p MenuProm
 func menuOptions(subs []*cobra.Command) []tui.MenuOption {
 	opts := make([]tui.MenuOption, len(subs))
 	for i, s := range subs {
-		opts[i] = tui.MenuOption{Label: capitalize(s.Name()), Desc: s.Short, Value: s.Name()}
+		opts[i] = tui.MenuOption{Label: tui.TitleCase(s.Name()), Desc: s.Short, Value: s.Name()}
 	}
 
 	return opts
-}
-
-func capitalize(s string) string {
-	if s == "" {
-		return s
-	}
-
-	r, size := utf8.DecodeRuneInString(s)
-
-	return string(unicode.ToUpper(r)) + s[size:]
 }

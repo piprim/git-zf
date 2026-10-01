@@ -4,34 +4,28 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 )
 
 // CommitOption holds commit option values for the commit options group of the TUI.
 // Used both as flag-derived defaults (input) and as user selections (output).
 type CommitOption struct {
-	Skip             bool
-	Authors          []string
-	Author           string
-	All              bool
-	Amend            bool
-	NoVerify         bool
-	Signoff          bool
-	AllowEmpty       bool
-	IncludeUntracked bool
+	Skip    bool
+	Authors []string
+	git.CommitOptions
 }
 
 var (
 	descStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#888888")).
-			PaddingLeft(1)
-	titler = cases.Title(language.English, cases.NoLower)
+		Foreground(lipgloss.Color("#888888")).
+		PaddingLeft(1)
 )
 
 // CommitMessageGroup builds the first commit form group.
@@ -48,7 +42,7 @@ func CommitMessageGroup(commitTypes []config.CommitTypeOption, items []config.Co
 
 	typeOpts := make([]huh.Option[string], len(commitTypes))
 	for i, ct := range commitTypes {
-		typeOpts[i] = huh.NewOption(titleCase(ct.Name)+"\n"+descStyle.Render(ct.Desc), ct.Name)
+		typeOpts[i] = huh.NewOption(TitleCase(ct.Name)+"\n"+descStyle.Render(ct.Desc), ct.Name)
 	}
 	if len(typeOpts) == 0 {
 		typeOpts = []huh.Option[string]{huh.NewOption("feat", "feat")}
@@ -70,7 +64,7 @@ func CommitMessageGroup(commitTypes []config.CommitTypeOption, items []config.Co
 			// where Name is title-cased and Desc is used as placeholder).
 			opts := make([]huh.Option[string], len(f.Options))
 			for j, opt := range f.Options {
-				name := titleCase(opt.Name)
+				name := TitleCase(opt.Name)
 				opts[j] = huh.NewOption(name+"\n"+descStyle.Render(opt.Desc), opt.Name)
 			}
 			sel := huh.NewSelect[string]().
@@ -83,7 +77,7 @@ func CommitMessageGroup(commitTypes []config.CommitTypeOption, items []config.Co
 			msgFields = append(msgFields, sel)
 		case "input":
 			inp := huh.NewInput().
-				Title(titleCase(f.Name) + ":").
+				Title(TitleCase(f.Name) + ":").
 				Placeholder(f.Desc).
 				Value(&f.Value)
 			if f.Required {
@@ -93,7 +87,7 @@ func CommitMessageGroup(commitTypes []config.CommitTypeOption, items []config.Co
 		case "multiline":
 			txt := huh.NewText().
 				Lines(2).
-				Title(titleCase(f.Name)).
+				Title(TitleCase(f.Name)).
 				Placeholder(f.Desc).
 				Value(&f.Value)
 			if f.Required {
@@ -141,6 +135,13 @@ func CommitOptionsGroup(opt *CommitOption) *huh.Group {
 	)
 }
 
-func titleCase(s string) string {
-	return titler.String(s)
+// TitleCase upper-cases the first rune of s and leaves the rest untouched.
+func TitleCase(s string) string {
+	if s == "" {
+		return s
+	}
+
+	r, size := utf8.DecodeRuneInString(s)
+
+	return string(unicode.ToUpper(r)) + s[size:]
 }

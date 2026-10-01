@@ -12,27 +12,10 @@ import (
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/convert"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
-
-// Committer is the subset of *git.Client the commit command consumes: load the
-// author list for the form, detect the current branch for the issue-hint
-// prefill, and write the commit. Declared here (the consuming package) rather
-// than in package git so the command owns its git surface and tests can
-// substitute a fake — mirrors the pruner / BranchClient pattern elsewhere in
-// cmd/.
-type Committer interface {
-	Authors(ctx context.Context) ([]string, error)
-	Commit(ctx context.Context, msg []byte, opts git.CommitOptions) error
-	CurrentBranch() (string, error)
-}
-
-// Compile-time check that the production client satisfies the role. Catches
-// accidental signature drift on *git.Client.
-var _ Committer = (*git.Client)(nil)
 
 type Commit struct {
 	appConfig *config.AppConfig
@@ -83,13 +66,15 @@ func (c Commit) GetRootCmd() *cobra.Command {
 				cmd.Flags().Changed("signoff") ||
 				cmd.Flags().Changed("allow-empty") ||
 				cmd.Flags().Changed("author"),
-			All:              all,
-			IncludeUntracked: includeUntracked,
-			Amend:            amend,
-			NoVerify:         noVerify,
-			Signoff:          signoff,
-			AllowEmpty:       allowEmpty,
-			Author:           author,
+			CommitOptions: git.CommitOptions{
+				All:              all,
+				IncludeUntracked: includeUntracked,
+				Amend:            amend,
+				NoVerify:         noVerify,
+				Signoff:          signoff,
+				AllowEmpty:       allowEmpty,
+				Author:           author,
+			},
 		})
 	}
 
@@ -141,7 +126,7 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
 
-	if err := client.Commit(cmd.Context(), msg, convert.CommitOptionsFromTUI(opts)); err != nil {
+	if err := client.Commit(cmd.Context(), msg, opts.CommitOptions); err != nil {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 
@@ -204,9 +189,8 @@ func resolveCommitMergeParent(
 // issueHintFromClient detects whether the current branch is an issue branch
 // (feature "<id>@<type>@<slug>" or review "<id>@review") and returns the
 // corresponding IssueHint. All other cases (detached HEAD, non-issue branch
-// name) collapse to the zero value, leaving the form unchanged. It accepts the
-// Committer role (it reads CurrentBranch) so it can be unit-tested with a fake.
-func issueHintFromClient(c Committer) commitpkg.IssueHint {
+// name) collapse to the zero value, leaving the form unchanged.
+func issueHintFromClient(c *git.Client) commitpkg.IssueHint {
 	name, err := c.CurrentBranch()
 	if err != nil {
 		return commitpkg.IssueHint{}

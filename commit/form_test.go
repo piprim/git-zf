@@ -335,7 +335,7 @@ func TestFillOutForm(t *testing.T) {
 		hs := &fakeHistoryStore{}
 
 		// AnyOptionSet() == true skips the options form group (cleaner test).
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, nil)
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
@@ -353,7 +353,7 @@ func TestFillOutForm(t *testing.T) {
 			return nil, huh.ErrUserAborted
 		})
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, &fakeHistoryStore{}, nil, nil)
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, &fakeHistoryStore{}, nil, nil)
 		if !errors.Is(err, huh.ErrUserAborted) {
 			t.Errorf("err = %v, want huh.ErrUserAborted", err)
 		}
@@ -378,7 +378,7 @@ func TestFillOutForm(t *testing.T) {
 
 		hs := &fakeHistoryStore{} // empty history → triggers errNoHistory path
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, nil)
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
@@ -418,7 +418,7 @@ func TestFillOutForm(t *testing.T) {
 			},
 		}
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, nil)
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
 		if !errors.Is(err, huh.ErrUserAborted) {
 			t.Errorf("err = %v, want huh.ErrUserAborted", err)
 		}
@@ -435,7 +435,7 @@ func TestFillOutForm(t *testing.T) {
 			"type":    "feat",
 		}
 
-		msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, prefill, nil)
+		msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, prefill, nil)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
@@ -468,7 +468,7 @@ func TestFillOutForm(t *testing.T) {
 
 		hs := &fakeHistoryStore{}
 		ents := []git.StatusEntry{{XY: " M", Path: "plop"}}
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{All: true}, hs, nil, ents)
+		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, ents)
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
 		}
@@ -488,7 +488,7 @@ func TestFillOutForm(t *testing.T) {
 		// Skip=true so no interactive options group is built; opts stays at
 		// defaults, so classifyFn reflects the launch flags (both true here).
 		_, _, err := FillOutForm(context.Background(), minimalCfg(),
-			tui.CommitOption{All: true, IncludeUntracked: true, Skip: true}, hs, nil,
+			tui.CommitOption{Skip: true, CommitOptions: git.CommitOptions{All: true, IncludeUntracked: true}}, hs, nil,
 			[]git.StatusEntry{{XY: " M", Path: "x"}})
 		if err != nil {
 			t.Fatalf("FillOutForm: %v", err)
