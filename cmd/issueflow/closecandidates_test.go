@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 )
@@ -59,11 +58,11 @@ func (f *fakeCandClient) ListBranchRefs(_ context.Context) ([]git.BranchRef, err
 func (f *fakeCandClient) ReadBranchRef(_ context.Context, issueSlug string) (*git.BranchRef, error) {
 	return f.bySlug[issueSlug], nil
 }
-func (f *fakeCandClient) ResolveBranchRef(name string) (plumbing.Hash, error) {
+func (f *fakeCandClient) ResolveBranchRef(name string) (git.Hash, error) {
 	if f.unresolvable[name] {
-		return plumbing.ZeroHash, errors.New("not found")
+		return git.ZeroHash, errors.New("not found")
 	}
-	return plumbing.ZeroHash, nil
+	return git.ZeroHash, nil
 }
 func (f *fakeCandClient) BranchExists(name string) (bool, error) { return f.localExists[name], nil }
 func (f *fakeCandClient) CreateLocalBranch(_ context.Context, name, _ string) error {

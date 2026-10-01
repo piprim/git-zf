@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
-	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -508,8 +507,8 @@ func TestFillOutForm(t *testing.T) {
 // "abc1234" / "def5678", making testCloseInfo.message() deterministic:
 // "Squash abc1234 into def5678.".
 var testCloseInfo = &IssueCloseInfo{
-	FromHash: plumbing.NewHash("abc1234000000000000000000000000000000000"),
-	ToHash:   plumbing.NewHash("def5678000000000000000000000000000000000"),
+	FromHash: git.Hash("abc1234000000000000000000000000000000000"),
+	ToHash:   git.Hash("def5678000000000000000000000000000000000"),
 	Strategy: MergeStrategySquash,
 }
 

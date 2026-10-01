@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
@@ -47,7 +46,7 @@ func (s *scriptedMergePrompter) ComposeMessage(context.Context, map[string]any) 
 }
 
 // plainPrefill mirrors branch merge's subject-only prefill.
-func plainPrefill(commit.MergeStrategy, plumbing.Hash, plumbing.Hash) map[string]any {
+func plainPrefill(commit.MergeStrategy, git.Hash, git.Hash) map[string]any {
 	return map[string]any{"subject": "chore: merge test"}
 }
 

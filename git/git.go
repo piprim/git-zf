@@ -8,13 +8,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
-	gogit "github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/config"
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/internal/pkg"
 )
+
+// Hash is a git object id as printed by `git rev-parse`: lowercase hex, 40
+// characters for SHA-1 repositories.
+type Hash string
+
+// ZeroHash is the null object id, returned alongside an error by the
+// Resolve* methods.
+const ZeroHash Hash = "0000000000000000000000000000000000000000"
+
+// String returns the hex form.
+func (h Hash) String() string { return string(h) }
 
 // CommitOptions configures Client.Commit.
 type CommitOptions struct {
@@ -27,9 +36,9 @@ type CommitOptions struct {
 	Author           string // "Name <email>"; empty = git config identity
 }
 
-// Client wraps a go-git repository and exposes commit operations.
+// Client drives the system git binary against one working tree.
 type Client struct {
-	repo           *gogit.Repository
+	root           string // absolute working-tree root
 	io             *pkg.IO
 	remote         string
 	remoteResolved bool
@@ -38,23 +47,56 @@ type Client struct {
 // NewClient opens the git repository that contains the current directory.
 // ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
 func NewClient(ioStreams *pkg.IO) (*Client, error) {
-	repo, err := gogit.PlainOpenWithOptions(".", &gogit.PlainOpenOptions{DetectDotGit: true})
+	c, err := NewClientAt(ioStreams, ".")
 	if err != nil {
 		return nil, fmt.Errorf("open git repository: %w", err)
 	}
 
-	return &Client{repo: repo, io: ioStreams}, nil
+	return c, nil
 }
 
-// NewClientAt opens the git repository rooted at dir.
+// NewClientAt opens the git repository whose working tree contains dir.
 // ioStreams configures the streams used for interactive operations; nil uses os.Stdin/Stdout/Stderr.
 func NewClientAt(ioStreams *pkg.IO, dir string) (*Client, error) {
-	repo, err := gogit.PlainOpen(dir)
+	out, err := exec.CommandContext(context.Background(), "git", "-C", dir, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		return nil, fmt.Errorf("open git repository at %s: %w", dir, err)
+		return nil, fmt.Errorf("open git repository at %s: %w", dir, gitStderr(err))
 	}
 
-	return &Client{repo: repo, io: ioStreams}, nil
+	return &Client{root: strings.TrimSpace(string(out)), io: ioStreams}, nil
+}
+
+// gitCmd builds `git -C <root> args...`.
+func (c *Client) gitCmd(ctx context.Context, args ...string) *exec.Cmd {
+	//nolint:gosec // args are subcommands and ref names assembled by this package
+	return exec.CommandContext(ctx, "git", append([]string{"-C", c.root}, args...)...)
+}
+
+// output runs `git -C <root> args...` and returns its stdout with surrounding
+// whitespace trimmed. A non-zero exit yields an error carrying git's stderr.
+func (c *Client) output(ctx context.Context, args ...string) (string, error) {
+	out, err := c.gitCmd(ctx, args...).Output()
+	if err != nil {
+		return "", gitStderr(err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
+// succeeds runs `git -C <root> args...` for its yes/no exit status: exit 0 is
+// true, exit 1 is false, anything else is an error.
+func (c *Client) succeeds(ctx context.Context, args ...string) (bool, error) {
+	_, err := c.gitCmd(ctx, args...).Output()
+
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &ee) && ee.ExitCode() == 1:
+		return false, nil
+	default:
+		return false, gitStderr(err)
+	}
 }
 
 // SetRemote pins the remote name used for all remote operations.
@@ -81,36 +123,29 @@ func (c *Client) Remote() (string, error) {
 		return c.remote, nil
 	}
 
-	remotes, err := c.repo.Remotes()
+	out, err := c.output(context.Background(), "remote")
 	if err != nil {
 		return "", fmt.Errorf("list remotes: %w", err)
 	}
 
-	switch len(remotes) {
+	names := strings.Fields(out)
+
+	switch len(names) {
 	case 0:
 		c.remoteResolved = true
 
 		return "", nil
 	case 1:
-		c.remote = remotes[0].Config().Name
+		c.remote = names[0]
 		c.remoteResolved = true
 
 		return c.remote, nil
 	default:
-		for _, r := range remotes {
-			if r.Config().Name != "origin" {
-				continue
-			}
-
+		if slices.Contains(names, "origin") {
 			c.remote = "origin"
 			c.remoteResolved = true
 
 			return c.remote, nil
-		}
-
-		names := make([]string, len(remotes))
-		for i, r := range remotes {
-			names[i] = r.Config().Name
 		}
 
 		return "", fmt.Errorf("multiple remotes found (%s); set branch.remote in .git-zf.toml",
@@ -120,18 +155,7 @@ func (c *Client) Remote() (string, error) {
 
 // WorkingTreeRoot returns the absolute path of the repository's working tree root.
 func (c *Client) WorkingTreeRoot() (string, error) {
-	wt, err := c.repo.Worktree()
-	if err != nil {
-		return "", fmt.Errorf("get worktree: %w", err)
-	}
-
-	// billy.Filesystem embeds the Chroot interface which exposes Root().
-	type rooter interface{ Root() string }
-	if r, ok := wt.Filesystem.(rooter); ok {
-		return r.Root(), nil
-	}
-
-	return "", fmt.Errorf("filesystem type %T does not expose Root()", wt.Filesystem)
+	return c.root, nil
 }
 
 // GitDir returns the absolute path of the repository's .git directory.
@@ -212,34 +236,33 @@ func (c *Client) Checkout(ctx context.Context, branchName string) error {
 }
 
 // ResolveRef returns the commit hash that `name` resolves to (with reference
-// indirection followed). Use it for read-only ref lookups from packages that
-// need a plumbing.Hash without taking a dependency on go-git's plumbing API.
-func (c *Client) ResolveRef(name string) (plumbing.Hash, error) {
-	ref, err := c.repo.Reference(plumbing.ReferenceName(name), true)
+// indirection followed). Wraps `git rev-parse --verify`.
+func (c *Client) ResolveRef(name string) (Hash, error) {
+	out, err := c.output(context.Background(), "rev-parse", "--verify", "--quiet", name)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("resolve ref %q: %w", name, err)
+		return ZeroHash, fmt.Errorf("resolve ref %q: %w", name, err)
 	}
 
-	return ref.Hash(), nil
+	return Hash(out), nil
 }
 
 // ResolveBranchRef resolves a branch short name to its commit hash. It tries
 // refs/heads/<name> first, then falls back to refs/remotes/<remote>/<name> so
 // that sub-task closes work when the parent integration branch was never
 // checked out locally (exists only as a remote tracking ref).
-func (c *Client) ResolveBranchRef(name string) (plumbing.Hash, error) {
+func (c *Client) ResolveBranchRef(name string) (Hash, error) {
 	if h, err := c.ResolveRef("refs/heads/" + name); err == nil {
 		return h, nil
 	}
 
 	remote, err := c.Remote()
 	if err != nil || remote == "" {
-		return plumbing.ZeroHash, fmt.Errorf("resolve branch %q: reference not found", name)
+		return ZeroHash, fmt.Errorf("resolve branch %q: reference not found", name)
 	}
 
 	h, err := c.ResolveRef("refs/remotes/" + remote + "/" + name)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("resolve branch %q: %w", name, err)
+		return ZeroHash, fmt.Errorf("resolve branch %q: %w", name, err)
 	}
 
 	return h, nil
@@ -249,12 +272,12 @@ func (c *Client) ResolveBranchRef(name string) (plumbing.Hash, error) {
 // On a detached HEAD the returned name will not parse as an issue branch,
 // so callers can simply ignore it.
 func (c *Client) CurrentBranch() (string, error) {
-	head, err := c.repo.Head()
+	name, err := c.output(context.Background(), "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("read HEAD: %w", err)
 	}
 
-	return head.Name().Short(), nil
+	return name, nil
 }
 
 // Authors returns a deduplicated list of commit author identities
@@ -305,9 +328,9 @@ func (c *Client) Authors(ctx context.Context) ([]string, error) {
 		list = append(list, entry)
 	}
 
-	cfg, err := c.repo.ConfigScoped(config.SystemScope)
-	if err == nil && cfg.User.Name != "" {
-		current := cfg.User.Name + " <" + cfg.User.Email + ">"
+	if name, _ := c.output(ctx, "config", "user.name"); name != "" {
+		email, _ := c.output(ctx, "config", "user.email")
+		current := name + " <" + email + ">"
 		filtered := make([]string, 0, len(list))
 		for _, a := range list {
 			if a != current {
@@ -473,18 +496,19 @@ func (c *Client) DefaultBaseBranch() (string, error) {
 	}
 
 	if remote != "" {
-		if ref, err := c.repo.Reference(plumbing.ReferenceName("refs/remotes/"+remote+"/HEAD"), false); err == nil {
-			if ref.Type() == plumbing.SymbolicReference {
-				parts := strings.Split(ref.Target().String(), "/")
-
-				return parts[len(parts)-1], nil
+		prefix := "refs/remotes/" + remote + "/"
+		if target, err := c.output(context.Background(), "symbolic-ref", "--quiet", prefix+"HEAD"); err == nil {
+			if name, ok := strings.CutPrefix(target, prefix); ok {
+				return name, nil
 			}
+
+			return target[strings.LastIndex(target, "/")+1:], nil
 		}
 	}
 
 	// Fall back to local branches.
 	for _, name := range []string{"main", "master"} {
-		if _, err := c.repo.Reference(plumbing.ReferenceName("refs/heads/"+name), false); err == nil {
+		if exists, _ := c.BranchExists(name); exists {
 			return name, nil
 		}
 	}
@@ -494,18 +518,14 @@ func (c *Client) DefaultBaseBranch() (string, error) {
 
 // LocalBranchNames returns the short names of all local branches.
 func (c *Client) LocalBranchNames() ([]string, error) {
-	iter, err := c.repo.Branches()
+	out, err := c.output(context.Background(), "for-each-ref", "--format=%(refname)", "refs/heads/")
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
 
 	var names []string
-	if err := iter.ForEach(func(ref *plumbing.Reference) error {
-		names = append(names, ref.Name().Short())
-
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("iterate branches: %w", err)
+	for _, ref := range strings.Fields(out) {
+		names = append(names, strings.TrimPrefix(ref, "refs/heads/"))
 	}
 
 	return names, nil
@@ -523,17 +543,7 @@ func (c *Client) RepoName() (string, error) {
 	}
 
 	if remote != "" {
-		remotes, err := c.repo.Remotes()
-		if err != nil {
-			return "", fmt.Errorf("list remotes: %w", err)
-		}
-
-		for _, r := range remotes {
-			if r.Config().Name != remote || len(r.Config().URLs) == 0 {
-				continue
-			}
-
-			u := r.Config().URLs[0]
+		if u, err := c.output(context.Background(), "remote", "get-url", remote); err == nil {
 			// Strip trailing slashes then take last segment.
 			u = strings.TrimRight(u, "/")
 			seg := u[strings.LastIndexAny(u, "/:")+1:]
@@ -545,23 +555,18 @@ func (c *Client) RepoName() (string, error) {
 		}
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return "", fmt.Errorf("working tree root: %w", err)
-	}
-
-	return filepath.Base(root), nil
+	return filepath.Base(c.root), nil
 }
 
 // IsMergedInto reports whether branchName's tip commit is reachable from baseBranch,
 // i.e. whether the branch has been merged into base (mirrors git merge-base --is-ancestor).
 func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
-	branchRef, err := c.repo.Reference(plumbing.ReferenceName("refs/heads/"+branchName), true)
+	branchHash, err := c.ResolveRef("refs/heads/" + branchName)
 	if err != nil {
 		return false, fmt.Errorf("resolve branch %q: %w", branchName, err)
 	}
 
-	baseRef, err := c.repo.Reference(plumbing.ReferenceName("refs/heads/"+baseBranch), true)
+	baseHash, err := c.ResolveRef("refs/heads/" + baseBranch)
 	if err != nil {
 		// Try remote tracking branch as fallback when a remote is configured.
 		remote, rErr := c.Remote()
@@ -570,7 +575,7 @@ func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
 		}
 
 		if remote != "" {
-			baseRef, err = c.repo.Reference(plumbing.ReferenceName("refs/remotes/"+remote+"/"+baseBranch), true)
+			baseHash, err = c.ResolveRef("refs/remotes/" + remote + "/" + baseBranch)
 		}
 
 		if err != nil {
@@ -578,17 +583,7 @@ func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
 		}
 	}
 
-	branchCommit, err := c.repo.CommitObject(branchRef.Hash())
-	if err != nil {
-		return false, fmt.Errorf("branch commit: %w", err)
-	}
-
-	baseCommit, err := c.repo.CommitObject(baseRef.Hash())
-	if err != nil {
-		return false, fmt.Errorf("base commit: %w", err)
-	}
-
-	merged, err := branchCommit.IsAncestor(baseCommit)
+	merged, err := c.succeeds(context.Background(), "merge-base", "--is-ancestor", branchHash.String(), baseHash.String())
 	if err != nil {
 		return false, fmt.Errorf("is ancestor: %w", err)
 	}
@@ -717,16 +712,12 @@ func (c *Client) ConfigUser(ctx context.Context) (string, error) {
 // not consult remotes — see resolveBranchConflict for the rationale (no
 // fetch on the happy path of `issue start`).
 func (c *Client) BranchExists(name string) (bool, error) {
-	_, err := c.repo.Reference(plumbing.NewBranchReferenceName(name), false)
-	if err == nil {
-		return true, nil
+	exists, err := c.succeeds(context.Background(), "show-ref", "--verify", "--quiet", "refs/heads/"+name)
+	if err != nil {
+		return false, fmt.Errorf("lookup branch %q: %w", name, err)
 	}
 
-	if errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return false, nil
-	}
-
-	return false, fmt.Errorf("lookup branch %q: %w", name, err)
+	return exists, nil
 }
 
 // LocalOrRemoteRef normalises a branch name into a ref usable by read-only
@@ -761,20 +752,11 @@ func (c *Client) CreateBranch(name, baseBranch string) error {
 		return fmt.Errorf("resolve base branch %q: %w", baseBranch, err)
 	}
 
-	wt, err := c.repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
-	}
-
-	// Hash and Create together are intentional: go-git sets HEAD to the symbolic
-	// ref (Branch) when Create is true, and uses Hash as the starting commit for
-	// the new branch ref.
-	if err := wt.Checkout(&gogit.CheckoutOptions{
-		Hash:   baseHash,
-		Branch: plumbing.ReferenceName("refs/heads/" + name),
-		Create: true,
-		Keep:   true,
-	}); err != nil {
+	// Starting from the resolved hash (not the branch name) never sets an
+	// upstream, so a base that exists only as a remote-tracking ref behaves
+	// exactly like a local one. Local modifications are carried over, as with
+	// any checkout.
+	if _, err := c.output(context.Background(), "checkout", "-b", name, baseHash.String()); err != nil {
 		return fmt.Errorf("create branch %q: %w", name, err)
 	}
 
@@ -797,34 +779,19 @@ func (c *Client) RemoteBranchNames() ([]string, error) {
 		return nil, nil
 	}
 
-	refs, err := c.repo.References()
+	prefix := "refs/remotes/" + remote + "/"
+
+	out, err := c.output(context.Background(), "for-each-ref", "--format=%(refname)", prefix)
 	if err != nil {
 		return nil, fmt.Errorf("list references: %w", err)
 	}
 
-	prefix := "refs/remotes/" + remote + "/"
 	var names []string
-	if err := refs.ForEach(func(ref *plumbing.Reference) error {
+	for _, ref := range strings.Fields(out) {
 		// Skip the remote HEAD symref (refs/remotes/<remote>/HEAD).
-		if ref.Type() == plumbing.SymbolicReference {
-			return nil
+		if short := strings.TrimPrefix(ref, prefix); short != "" && short != "HEAD" {
+			names = append(names, short)
 		}
-
-		full := ref.Name().String()
-		if !strings.HasPrefix(full, prefix) {
-			return nil
-		}
-
-		short := strings.TrimPrefix(full, prefix)
-		if short == "" || short == "HEAD" {
-			return nil
-		}
-
-		names = append(names, short)
-
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("iterate references: %w", err)
 	}
 
 	return names, nil

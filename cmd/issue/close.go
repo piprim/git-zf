@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
@@ -282,7 +281,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 
 	// The issue-flavored commit-message prefill is the one thing the shared
 	// engine cannot know: it is built from this issue's slug/type/title.
-	prefill := func(s commit.MergeStrategy, sourceTip, targetTip plumbing.Hash) map[string]any {
+	prefill := func(s commit.MergeStrategy, sourceTip, targetTip git.Hash) map[string]any {
 		return commit.IssueHint{
 			IssueID:      picked.IssueSlug,
 			BranchType:   picked.Type,

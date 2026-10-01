@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/tui"
@@ -45,7 +44,7 @@ type Prompter interface {
 
 // PrefillFunc builds the commit-message prefill for the resolved tips. close
 // returns an issue-flavored map; branch merge returns a plain merge map.
-type PrefillFunc func(s commit.MergeStrategy, sourceTip, targetTip plumbing.Hash) map[string]any
+type PrefillFunc func(s commit.MergeStrategy, sourceTip, targetTip git.Hash) map[string]any
 
 // Result reports what happened so callers run their own post-steps.
 type Result struct {

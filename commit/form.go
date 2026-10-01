@@ -12,7 +12,6 @@ import (
 	"text/template"
 
 	"github.com/charmbracelet/huh"
-	"github.com/go-git/go-git/v6/plumbing"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -254,8 +253,8 @@ const (
 )
 
 type IssueCloseInfo struct {
-	FromHash plumbing.Hash
-	ToHash   plumbing.Hash
+	FromHash git.Hash
+	ToHash   git.Hash
 	Strategy MergeStrategy
 }
 

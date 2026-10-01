@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/git"
 )
@@ -15,7 +14,7 @@ import (
 // configured, otherwise "<target>"; remoteName is "" in the no-remote case so
 // callers can pick the correct ref namespace.
 type rebasePlan struct {
-	featureOrigSHA plumbing.Hash
+	featureOrigSHA git.Hash
 	remoteName     string
 	remoteBase     string
 }

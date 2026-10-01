@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	branchpkg "github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
@@ -134,7 +133,7 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		return err
 	}
 
-	prefill := func(_ commit.MergeStrategy, _, _ plumbing.Hash) map[string]any {
+	prefill := func(_ commit.MergeStrategy, _, _ git.Hash) map[string]any {
 		return map[string]any{"subject": fmt.Sprintf("Merge %q into %q", source.Name, target)}
 	}
 

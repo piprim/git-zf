@@ -11,59 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	gogit "github.com/go-git/go-git/v6"
-	gogitcfg "github.com/go-git/go-git/v6/config"
-	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/storage/memory"
-
-	// go-git v6 depends on go-billy/v6.
-	"github.com/go-git/go-billy/v6/memfs"
 	"github.com/piprim/git-zf/internal/pkg"
 )
-
-// newTestRepo creates an in-memory git repository with one initial commit.
-// Used by tests that don't need on-disk functionality (DefaultBaseBranch, CreateBranch, etc).
-func newTestRepo(t *testing.T) *gogit.Repository {
-	t.Helper()
-
-	repo, err := gogit.Init(memory.NewStorage(), gogit.WithWorkTree(memfs.New()))
-	if err != nil {
-		t.Fatalf("init in-memory repo: %v", err)
-	}
-
-	cfg, err := repo.Config()
-	if err != nil {
-		t.Fatalf("get config: %v", err)
-	}
-	cfg.User.Name = "Test User"
-	cfg.User.Email = "test@example.com"
-	if err := repo.SetConfig(cfg); err != nil {
-		t.Fatalf("set config: %v", err)
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("worktree: %v", err)
-	}
-
-	f, err := wt.Filesystem.Create("README.md")
-	if err != nil {
-		t.Fatalf("create README.md: %v", err)
-	}
-	_, _ = f.Write([]byte("# test"))
-	_ = f.Close()
-
-	if _, err := wt.Add("README.md"); err != nil {
-		t.Fatalf("stage README.md: %v", err)
-	}
-
-	_, err = wt.Commit("chore: init", &gogit.CommitOptions{})
-	if err != nil {
-		t.Fatalf("initial commit: %v", err)
-	}
-
-	return repo
-}
 
 func TestCommit(t *testing.T) {
 	t.Parallel()
@@ -273,30 +222,31 @@ func TestCommit(t *testing.T) {
 func TestLocalBranchNames(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	client := &Client{repo: repo}
+	client, _ := newTestClient(t)
 
-	// newTestRepo creates one commit on master.
-	names, err := client.LocalBranchNames()
-	if err != nil {
-		t.Fatalf("LocalBranchNames: %v", err)
-	}
-	if len(names) != 1 || names[0] != "master" {
-		t.Errorf("LocalBranchNames = %v, want [master]", names)
-	}
+	t.Run("lists the single initial branch", func(t *testing.T) {
+		names, err := client.LocalBranchNames()
+		if err != nil {
+			t.Fatalf("LocalBranchNames: %v", err)
+		}
+		if len(names) != 1 || names[0] != "master" {
+			t.Errorf("LocalBranchNames = %v, want [master]", names)
+		}
+	})
 
-	// Create a second branch and verify it appears.
-	if err := client.CreateBranch("feature/x", "master"); err != nil {
-		t.Fatalf("CreateBranch: %v", err)
-	}
+	t.Run("includes a branch created afterwards", func(t *testing.T) {
+		if err := client.CreateBranch("feature/x", "master"); err != nil {
+			t.Fatalf("CreateBranch: %v", err)
+		}
 
-	names2, err := client.LocalBranchNames()
-	if err != nil {
-		t.Fatalf("LocalBranchNames after create: %v", err)
-	}
-	if len(names2) != 2 {
-		t.Errorf("got %d branch names, want 2: %v", len(names2), names2)
-	}
+		names, err := client.LocalBranchNames()
+		if err != nil {
+			t.Fatalf("LocalBranchNames after create: %v", err)
+		}
+		if !slices.Equal(names, []string{"feature/x", "master"}) {
+			t.Errorf("LocalBranchNames = %v, want [feature/x master]", names)
+		}
+	})
 }
 
 func TestDefaultBaseBranch(t *testing.T) {
@@ -305,10 +255,7 @@ func TestDefaultBaseBranch(t *testing.T) {
 	t.Run("falls back to master when no remote HEAD exists", func(t *testing.T) {
 		t.Parallel()
 
-		// newTestRepo creates a repo with no remotes and commits on the default branch.
-		// go-git initializes with "master" by default.
-		repo := newTestRepo(t)
-		client := &Client{repo: repo}
+		client, _ := newTestClient(t)
 
 		base, err := client.DefaultBaseBranch()
 		if err != nil {
@@ -322,19 +269,11 @@ func TestDefaultBaseBranch(t *testing.T) {
 	t.Run("returns branch from refs/remotes/origin/HEAD", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
+		client, dir := newTestClient(t)
+		// A dangling symref is enough: only the target name is read.
+		runGitInDir(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+		client.SetRemote("origin")
 
-		// Simulate refs/remotes/origin/HEAD pointing to "main".
-		// In go-git, set a symbolic reference directly in the storer.
-		symRef := plumbing.NewSymbolicReference(
-			plumbing.ReferenceName("refs/remotes/origin/HEAD"),
-			plumbing.ReferenceName("refs/remotes/origin/main"),
-		)
-		if err := repo.Storer.SetReference(symRef); err != nil {
-			t.Fatalf("set origin/HEAD: %v", err)
-		}
-
-		client := &Client{repo: repo, remote: "origin", remoteResolved: true}
 		base, err := client.DefaultBaseBranch()
 		if err != nil {
 			t.Fatalf("DefaultBaseBranch: %v", err)
@@ -344,28 +283,29 @@ func TestDefaultBaseBranch(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps slashes in the remote HEAD target", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newTestClient(t)
+		runGitInDir(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/1.x")
+		client.SetRemote("origin")
+
+		base, err := client.DefaultBaseBranch()
+		if err != nil {
+			t.Fatalf("DefaultBaseBranch: %v", err)
+		}
+		if base != "release/1.x" {
+			t.Errorf("DefaultBaseBranch = %q, want %q", base, "release/1.x")
+		}
+	})
+
 	t.Run("falls back to main when master ref is absent", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
+		client, dir := newTestClient(t)
+		runGitInDir(t, dir, "checkout", "-q", "-b", "main")
+		runGitInDir(t, dir, "branch", "-D", "master")
 
-		wt, err := repo.Worktree()
-		if err != nil {
-			t.Fatalf("worktree: %v", err)
-		}
-		if err := wt.Checkout(&gogit.CheckoutOptions{
-			Branch: "refs/heads/main",
-			Create: true,
-		}); err != nil {
-			t.Fatalf("checkout main: %v", err)
-		}
-
-		// Remove master so only main exists — isolates the fallback priority.
-		if err := repo.Storer.RemoveReference(plumbing.ReferenceName("refs/heads/master")); err != nil {
-			t.Fatalf("remove master: %v", err)
-		}
-
-		client := &Client{repo: repo}
 		base, err := client.DefaultBaseBranch()
 		if err != nil {
 			t.Fatalf("DefaultBaseBranch: %v", err)
@@ -378,17 +318,10 @@ func TestDefaultBaseBranch(t *testing.T) {
 	t.Run("uses configured remote instead of origin for HEAD lookup", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		// Simulate refs/remotes/pi/HEAD pointing to "develop".
-		symRef := plumbing.NewSymbolicReference(
-			plumbing.ReferenceName("refs/remotes/pi/HEAD"),
-			plumbing.ReferenceName("refs/remotes/pi/develop"),
-		)
-		if err := repo.Storer.SetReference(symRef); err != nil {
-			t.Fatalf("set pi/HEAD: %v", err)
-		}
+		client, dir := newTestClient(t)
+		runGitInDir(t, dir, "symbolic-ref", "refs/remotes/pi/HEAD", "refs/remotes/pi/develop")
+		client.SetRemote("pi")
 
-		client := &Client{repo: repo, remote: "pi", remoteResolved: true}
 		base, err := client.DefaultBaseBranch()
 		if err != nil {
 			t.Fatalf("DefaultBaseBranch: %v", err)
@@ -398,19 +331,15 @@ func TestDefaultBaseBranch(t *testing.T) {
 		}
 	})
 
-	t.Run("skips remote HEAD lookup when no remote and falls back to local", func(t *testing.T) {
+	t.Run("errors when neither main nor master exists", func(t *testing.T) {
 		t.Parallel()
 
-		// newTestRepo creates a repo with no remotes; go-git default branch is "master".
-		repo := newTestRepo(t)
-		client := &Client{repo: repo}
+		client, dir := newTestClient(t)
+		runGitInDir(t, dir, "checkout", "-q", "-b", "trunk")
+		runGitInDir(t, dir, "branch", "-D", "master")
 
-		base, err := client.DefaultBaseBranch()
-		if err != nil {
-			t.Fatalf("DefaultBaseBranch: %v", err)
-		}
-		if base != "master" {
-			t.Errorf("DefaultBaseBranch = %q, want %q", base, "master")
+		if _, err := client.DefaultBaseBranch(); err == nil {
+			t.Fatal("DefaultBaseBranch: want error, got nil")
 		}
 	})
 }
@@ -488,33 +417,14 @@ func TestIsMergedInto(t *testing.T) {
 	t.Run("uses configured remote for tracking ref fallback", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
+		client, dir := newTestClient(t)
 
-		// Create feature branch from the initial commit.
-		wt, err := repo.Worktree()
-		if err != nil {
-			t.Fatalf("worktree: %v", err)
-		}
-		if err := wt.Checkout(&gogit.CheckoutOptions{Branch: "refs/heads/feature", Create: true}); err != nil {
-			t.Fatalf("checkout feature: %v", err)
-		}
+		// feature and pi/main both point at the initial commit; there is no
+		// local main, so the base must resolve through the remote-tracking ref.
+		runGitInDir(t, dir, "checkout", "-q", "-b", "feature")
+		runGitInDir(t, dir, "update-ref", "refs/remotes/pi/main", "HEAD")
+		client.SetRemote("pi")
 
-		// Read HEAD hash (same commit on both branches at this point).
-		head, err := repo.Head()
-		if err != nil {
-			t.Fatalf("head: %v", err)
-		}
-
-		// Simulate refs/remotes/pi/main pointing at HEAD.
-		if err := repo.Storer.SetReference(plumbing.NewHashReference(
-			plumbing.ReferenceName("refs/remotes/pi/main"),
-			head.Hash(),
-		)); err != nil {
-			t.Fatalf("set pi/main: %v", err)
-		}
-
-		client := &Client{repo: repo, remote: "pi", remoteResolved: true}
-		// feature == pi/main so it should be considered merged.
 		merged, err := client.IsMergedInto("feature", "main")
 		if err != nil {
 			t.Fatalf("IsMergedInto: %v", err)
@@ -531,50 +441,73 @@ func TestCreateBranch(t *testing.T) {
 	t.Run("creates branch and switches HEAD", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		client := &Client{repo: repo}
+		client, _ := newTestClient(t)
 
-		if err := client.CreateBranch("ABC-42@feat@add-oauth-login@550e8400", "master"); err != nil {
+		const name = "ABC-42@feat@add-oauth-login@550e8400"
+		if err := client.CreateBranch(name, "master"); err != nil {
 			t.Fatalf("CreateBranch: %v", err)
 		}
 
-		// Verify HEAD points to the new branch.
-		head, err := repo.Head()
+		got, err := client.CurrentBranch()
 		if err != nil {
-			t.Fatalf("Head: %v", err)
+			t.Fatalf("CurrentBranch: %v", err)
 		}
-		if head.Name().Short() != "ABC-42@feat@add-oauth-login@550e8400" {
-			t.Errorf("HEAD = %q, want new branch", head.Name().Short())
+		if got != name {
+			t.Errorf("HEAD = %q, want new branch", got)
 		}
 	})
 
 	t.Run("succeeds even with unstaged working-tree changes", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		wt, _ := repo.Worktree()
+		client, dir := newTestClient(t)
+		writeFile(t, dir, "base.txt", "unstaged change\n")
 
-		// Create an unstaged modification to an already-tracked file.
-		f, err := wt.Filesystem.OpenFile("README.md", 2|0x200, 0o644) // O_WRONLY|O_TRUNC
-		if err != nil {
-			t.Fatalf("open README.md: %v", err)
-		}
-		_, _ = f.Write([]byte("# unstaged change"))
-		_ = f.Close()
-
-		client := &Client{repo: repo}
-
-		// Must not fail even though the worktree has unstaged changes.
-		if err := client.CreateBranch("42@fix@some-fix@aabbccdd", "master"); err != nil {
+		const name = "42@fix@some-fix@aabbccdd"
+		if err := client.CreateBranch(name, "master"); err != nil {
 			t.Fatalf("CreateBranch with unstaged changes: %v", err)
 		}
 
-		head, err := repo.Head()
+		got, err := client.CurrentBranch()
 		if err != nil {
-			t.Fatalf("Head: %v", err)
+			t.Fatalf("CurrentBranch: %v", err)
 		}
-		if head.Name().Short() != "42@fix@some-fix@aabbccdd" {
-			t.Errorf("HEAD = %q, want new branch", head.Name().Short())
+		if got != name {
+			t.Errorf("HEAD = %q, want new branch", got)
+		}
+
+		dirty, err := client.IsDirty(t.Context())
+		if err != nil {
+			t.Fatalf("IsDirty: %v", err)
+		}
+		if !dirty {
+			t.Error("unstaged change was lost by CreateBranch")
+		}
+	})
+
+	t.Run("starts from a base that exists only as a remote-tracking ref", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newTestClient(t)
+		runGitInDir(t, dir, "commit", "--allow-empty", "-m", "chore: parent tip")
+		runGitInDir(t, dir, "update-ref", "refs/remotes/pi/parent", "HEAD")
+		runGitInDir(t, dir, "reset", "-q", "--hard", "HEAD~1")
+		client.SetRemote("pi")
+
+		if err := client.CreateBranch("child", "parent"); err != nil {
+			t.Fatalf("CreateBranch: %v", err)
+		}
+
+		got, err := client.ResolveRef("refs/heads/child")
+		if err != nil {
+			t.Fatalf("ResolveRef child: %v", err)
+		}
+		want, err := client.ResolveRef("refs/remotes/pi/parent")
+		if err != nil {
+			t.Fatalf("ResolveRef pi/parent: %v", err)
+		}
+		if got != want {
+			t.Errorf("child = %s, want pi/parent %s", got, want)
 		}
 	})
 }
@@ -582,11 +515,10 @@ func TestCreateBranch(t *testing.T) {
 func TestCurrentBranch(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns master for a freshly initialized in-memory repo", func(t *testing.T) {
+	t.Run("returns master for a freshly initialized repo", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		client := &Client{repo: repo}
+		client, _ := newTestClient(t)
 
 		got, err := client.CurrentBranch()
 		if err != nil {
@@ -600,8 +532,7 @@ func TestCurrentBranch(t *testing.T) {
 	t.Run("returns the issue branch name after CreateBranch", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		client := &Client{repo: repo}
+		client, _ := newTestClient(t)
 
 		const name = "ABC-42@feat@add-oauth-login@a1b2c3d4"
 		if err := client.CreateBranch(name, "master"); err != nil {
@@ -617,17 +548,34 @@ func TestCurrentBranch(t *testing.T) {
 		}
 	})
 
+	t.Run("returns HEAD on a detached HEAD", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newTestClient(t)
+		runGitInDir(t, dir, "checkout", "-q", "--detach")
+
+		got, err := client.CurrentBranch()
+		if err != nil {
+			t.Fatalf("CurrentBranch: %v", err)
+		}
+		if got != "HEAD" {
+			t.Errorf("CurrentBranch = %q, want %q", got, "HEAD")
+		}
+	})
+
 	t.Run("returns error for a repo with no commits", func(t *testing.T) {
 		t.Parallel()
 
-		repo, err := gogit.Init(memory.NewStorage(), gogit.WithWorkTree(memfs.New()))
+		dir := t.TempDir()
+		runGitInDir(t, dir, "init", "-q", "-b", "master")
+
+		client, err := NewClientAt(nil, dir)
 		if err != nil {
-			t.Fatalf("init: %v", err)
+			t.Fatalf("NewClientAt: %v", err)
 		}
-		client := &Client{repo: repo}
 
 		if _, err := client.CurrentBranch(); err == nil {
-			t.Error("CurrentBranch on empty repo: expected error, got nil")
+			t.Error("CurrentBranch on a repo with no commits: expected error, got nil")
 		}
 	})
 }
@@ -739,11 +687,15 @@ func TestIsDirty(t *testing.T) {
 func TestRemote(t *testing.T) {
 	t.Parallel()
 
+	addRemote := func(t *testing.T, dir, name string) {
+		t.Helper()
+		runGitInDir(t, dir, "remote", "add", name, "https://example.com/"+name+".git")
+	}
+
 	t.Run("returns empty string for repo with no remotes", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		c := &Client{repo: repo}
+		c, _ := newTestClient(t)
 
 		remote, err := c.Remote()
 		if err != nil {
@@ -757,14 +709,8 @@ func TestRemote(t *testing.T) {
 	t.Run("returns the sole remote name", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
-			Name: "pi",
-			URLs: []string{"https://example.com/repo.git"},
-		}); err != nil {
-			t.Fatalf("CreateRemote: %v", err)
-		}
-		c := &Client{repo: repo}
+		c, dir := newTestClient(t)
+		addRemote(t, dir, "pi")
 
 		remote, err := c.Remote()
 		if err != nil {
@@ -778,16 +724,9 @@ func TestRemote(t *testing.T) {
 	t.Run("returns origin when multiple remotes include origin", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		for _, name := range []string{"origin", "upstream"} {
-			if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
-				Name: name,
-				URLs: []string{"https://example.com/" + name + ".git"},
-			}); err != nil {
-				t.Fatalf("CreateRemote %s: %v", name, err)
-			}
-		}
-		c := &Client{repo: repo}
+		c, dir := newTestClient(t)
+		addRemote(t, dir, "origin")
+		addRemote(t, dir, "upstream")
 
 		remote, err := c.Remote()
 		if err != nil {
@@ -801,16 +740,9 @@ func TestRemote(t *testing.T) {
 	t.Run("errors when multiple remotes exist with no origin", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		for _, name := range []string{"pi", "upstream"} {
-			if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
-				Name: name,
-				URLs: []string{"https://example.com/" + name + ".git"},
-			}); err != nil {
-				t.Fatalf("CreateRemote %s: %v", name, err)
-			}
-		}
-		c := &Client{repo: repo}
+		c, dir := newTestClient(t)
+		addRemote(t, dir, "pi")
+		addRemote(t, dir, "upstream")
 
 		_, err := c.Remote()
 		if err == nil {
@@ -824,8 +756,7 @@ func TestRemote(t *testing.T) {
 	t.Run("SetRemote pins the name, bypassing detection", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		c := &Client{repo: repo}
+		c, _ := newTestClient(t)
 		c.SetRemote("pi")
 
 		remote, err := c.Remote()
@@ -840,23 +771,15 @@ func TestRemote(t *testing.T) {
 	t.Run("caches result on second call", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
-			Name: "pi",
-			URLs: []string{"https://example.com/repo.git"},
-		}); err != nil {
-			t.Fatalf("CreateRemote: %v", err)
-		}
-		c := &Client{repo: repo}
+		c, dir := newTestClient(t)
+		addRemote(t, dir, "pi")
 
 		r1, err := c.Remote()
 		if err != nil {
 			t.Fatalf("first Remote: %v", err)
 		}
 		// Simulate the remote disappearing — cache should win.
-		if err := repo.DeleteRemote("pi"); err != nil {
-			t.Fatalf("DeleteRemote: %v", err)
-		}
+		runGitInDir(t, dir, "remote", "remove", "pi")
 		r2, err := c.Remote()
 		if err != nil {
 			t.Fatalf("second Remote: %v", err)
@@ -869,8 +792,7 @@ func TestRemote(t *testing.T) {
 	t.Run("caches no-remote result on second call", func(t *testing.T) {
 		t.Parallel()
 
-		repo := newTestRepo(t)
-		c := &Client{repo: repo}
+		c, dir := newTestClient(t)
 
 		// First call: no remotes → ("", nil)
 		r1, err := c.Remote()
@@ -882,12 +804,7 @@ func TestRemote(t *testing.T) {
 		}
 
 		// Add a remote — second call must return cached "" (not re-detect)
-		if _, err := repo.CreateRemote(&gogitcfg.RemoteConfig{
-			Name: "pi",
-			URLs: []string{"https://example.com/repo.git"},
-		}); err != nil {
-			t.Fatalf("CreateRemote: %v", err)
-		}
+		addRemote(t, dir, "pi")
 
 		r2, err := c.Remote()
 		if err != nil {
@@ -1059,8 +976,7 @@ func TestCreateWorktree(t *testing.T) {
 func TestBranchExists(t *testing.T) {
 	t.Parallel()
 
-	repo := newTestRepo(t)
-	client := &Client{repo: repo}
+	client, _ := newTestClient(t)
 
 	if err := client.CreateBranch("feat-x", "master"); err != nil {
 		t.Fatalf("CreateBranch: %v", err)

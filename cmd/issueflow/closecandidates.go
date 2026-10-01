@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
@@ -22,7 +21,7 @@ type CandidateStore interface {
 type CandidateClient interface {
 	ListBranchRefs(ctx context.Context) ([]git.BranchRef, error)
 	ReadBranchRef(ctx context.Context, issueSlug string) (*git.BranchRef, error)
-	ResolveBranchRef(name string) (plumbing.Hash, error)
+	ResolveBranchRef(name string) (git.Hash, error)
 	BranchExists(name string) (bool, error)
 	CreateLocalBranch(ctx context.Context, name, startPoint string) error
 }
