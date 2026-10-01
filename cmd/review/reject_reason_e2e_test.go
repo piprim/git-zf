@@ -199,7 +199,7 @@ func TestReviewReject_ReasonPrintsOnlyAfterStatusRecorded(t *testing.T) {
 		t.Fatalf("WriteReviewRef: %v", err)
 	}
 	rig.stdout.Reset()
-	err = runReviewReject(ctx, rig.deps(), "77", "should not appear")
+	_, err = runReviewReject(ctx, rig.deps(), "77", "should not appear")
 
 	t.Run("returns the not-in-review error", func(t *testing.T) {
 		if err == nil {

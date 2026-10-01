@@ -429,3 +429,69 @@ func TestIsIssueClosed(t *testing.T) {
 		}
 	})
 }
+
+func TestAddComment(t *testing.T) {
+	t.Parallel()
+
+	t.Run("posts the body to the issue comments endpoint", func(t *testing.T) {
+		t.Parallel()
+
+		var gotBody struct {
+			Body string `json:"body"`
+		}
+		hits := 0
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/repos/a/b/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+
+				return
+			}
+
+			hits++
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id":1,"body":"`+gotBody.Body+`"}`)
+		})
+
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		a := newTestAdapter(t, srv, []string{"a/b"})
+
+		if err := a.AddComment(t.Context(), "42", "needs tests"); err != nil {
+			t.Fatalf("AddComment: %v", err)
+		}
+		if hits != 1 {
+			t.Errorf("server hits = %d, want 1", hits)
+		}
+		if gotBody.Body != "needs tests" {
+			t.Errorf(`body = %q, want "needs tests"`, gotBody.Body)
+		}
+	})
+
+	t.Run("surfaces an API error", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"message":"forbidden"}`, http.StatusForbidden)
+		})
+
+		if err := a.AddComment(t.Context(), "42", "x"); err == nil {
+			t.Error("expected error on 403, got nil")
+		}
+	})
+
+	t.Run("rejects a non-numeric issue id without calling the API", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(_ http.ResponseWriter, r *http.Request) {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		})
+
+		if err := a.AddComment(t.Context(), "abc", "x"); err == nil {
+			t.Error("expected error for non-numeric id")
+		}
+	})
+}

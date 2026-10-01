@@ -40,6 +40,8 @@ type Tracker interface {
 	// Returns ErrIssueNotFound for missing-issue cases so callers can format
 	// the warning distinctly from transport/auth failures.
 	IsIssueClosed(ctx context.Context, issueID string) (bool, error)
+	// AddComment posts body as a comment on issueID.
+	AddComment(ctx context.Context, issueID, body string) error
 }
 
 var (

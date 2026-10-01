@@ -18,10 +18,11 @@ func init() {
 // Tracker is the exposed concrete type so tests can read RecordedUpdates
 // after Close() returns. Construct via New() to satisfy the registry signature.
 type Tracker struct {
-	mu              sync.Mutex
-	Issues          []tracker.Issue
-	Statuses        []string
-	RecordedUpdates []Update
+	mu               sync.Mutex
+	Issues           []tracker.Issue
+	Statuses         []string
+	RecordedUpdates  []Update
+	RecordedComments []Comment
 
 	// Closed[id] == true → IsIssueClosed returns (true, nil) for id.
 	// Default zero-value (absent or false) → IsIssueClosed returns (false, nil).
@@ -36,6 +37,11 @@ type Tracker struct {
 type Update struct {
 	IssueID    string
 	StatusName string
+}
+
+type Comment struct {
+	IssueID string
+	Body    string
 }
 
 // New is the tracker.Register factory. cfg is ignored — tests configure the
@@ -90,6 +96,15 @@ func (t *Tracker) UpdateIssueStatus(_ context.Context, issueID, statusName strin
 	defer t.mu.Unlock()
 
 	t.RecordedUpdates = append(t.RecordedUpdates, Update{IssueID: issueID, StatusName: statusName})
+
+	return nil
+}
+
+func (t *Tracker) AddComment(_ context.Context, issueID, body string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.RecordedComments = append(t.RecordedComments, Comment{IssueID: issueID, Body: body})
 
 	return nil
 }

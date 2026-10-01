@@ -176,17 +176,36 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 		Issue issueUpdate `json:"issue"`
 	}
 
-	payload, err := json.Marshal(body{Issue: issueUpdate{StatusID: statusID}})
+	return a.putIssue(ctx, issueID, "status", body{Issue: issueUpdate{StatusID: statusID}})
+}
+
+// AddComment adds body as a journal note via PUT /issues/{id}.json with
+// {"issue":{"notes": body}} — Redmine's comment mechanism.
+func (a *redmineAdapter) AddComment(ctx context.Context, issueID, body string) error {
+	type issueNotes struct {
+		Notes string `json:"notes"`
+	}
+	type payload struct {
+		Issue issueNotes `json:"issue"`
+	}
+
+	return a.putIssue(ctx, issueID, "comment", payload{Issue: issueNotes{Notes: body}})
+}
+
+// putIssue JSON-encodes payload and PUTs it to /issues/{id}.json. what names
+// the operation in error messages ("status", "comment").
+func (a *redmineAdapter) putIssue(ctx context.Context, issueID, what string, payload any) error {
+	buf, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal status update: %w", err)
+		return fmt.Errorf("marshal %s update: %w", what, err)
 	}
 
 	base := strings.TrimRight(a.cfg.URL, "/")
 	url := fmt.Sprintf("%s/issues/%s.json", base, issueID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(buf))
 	if err != nil {
-		return fmt.Errorf("build status update request: %w", err)
+		return fmt.Errorf("build %s update request: %w", what, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -194,7 +213,7 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("update issue %s status: %w", issueID, err)
+		return fmt.Errorf("update issue %s %s: %w", issueID, what, err)
 	}
 
 	defer resp.Body.Close()
@@ -204,9 +223,9 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 		if err != nil {
 			msgErr = []byte("unreachable content")
 		}
-		format := `update issue %s status: unexpected HTTP %d with content: "%s"`
+		format := `update issue %s %s: unexpected HTTP %d with content: "%s"`
 
-		return fmt.Errorf(format, issueID, resp.StatusCode, string(msgErr))
+		return fmt.Errorf(format, issueID, what, resp.StatusCode, string(msgErr))
 	}
 
 	return nil

@@ -346,3 +346,22 @@ func (a *forgejoAdapter) IsIssueClosed(ctx context.Context, issueID string) (boo
 
 	return iss.State == statusClosed, nil
 }
+
+// AddComment posts body as an issue comment via
+// POST /repos/{owner}/{repo}/issues/{number}/comments.
+func (a *forgejoAdapter) AddComment(ctx context.Context, issueID, body string) error {
+	path, err := a.issuePath(issueID)
+	if err != nil {
+		return err
+	}
+
+	payload := struct {
+		Body string `json:"body"`
+	}{Body: body}
+
+	if err := a.doJSON(ctx, http.MethodPost, path+"/comments", payload, nil); err != nil {
+		return fmt.Errorf("forgejo: comment on issue %s: %w", issueID, err)
+	}
+
+	return nil
+}

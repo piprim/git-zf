@@ -196,3 +196,24 @@ func mapState(name string) (string, error) {
 		return "", fmt.Errorf("github: unknown status %q (want %q or %q)", name, statusOpen, statusClosed)
 	}
 }
+
+// AddComment posts body as an issue comment via
+// POST /repos/{owner}/{repo}/issues/{number}/comments.
+func (a *githubAdapter) AddComment(ctx context.Context, issueID, body string) error {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return err
+	}
+
+	n, err := strconv.Atoi(issueID)
+	if err != nil {
+		return fmt.Errorf("github: invalid issue id %q: %w", issueID, err)
+	}
+
+	_, _, err = a.client.Issues.CreateComment(ctx, owner, repo, n, &gogithub.IssueComment{Body: gogithub.Ptr(body)})
+	if err != nil {
+		return fmt.Errorf("github: comment on issue %d: %w", n, err)
+	}
+
+	return nil
+}

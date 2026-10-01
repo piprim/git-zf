@@ -25,6 +25,8 @@ func (f *fakeIssueTracker) ListStatuses(_ context.Context) ([]string, error) { r
 func (f *fakeIssueTracker) UpdateIssueStatus(_ context.Context, _, _ string) error {
 	return nil
 }
+
+func (f *fakeIssueTracker) AddComment(_ context.Context, _, _ string) error { return nil }
 func (f *fakeIssueTracker) IsIssueClosed(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }

@@ -353,3 +353,52 @@ func TestIsIssueClosed(t *testing.T) {
 		}
 	})
 }
+
+func TestAddComment(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PUTs the body as issue notes", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			hits   int
+			method string
+			path   string
+			got    struct {
+				Issue struct {
+					Notes string `json:"notes"`
+				} `json:"issue"`
+			}
+		)
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			hits++
+			method, path = r.Method, r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			w.WriteHeader(http.StatusNoContent)
+		})
+
+		if err := a.AddComment(t.Context(), "42", "needs tests"); err != nil {
+			t.Fatalf("AddComment: %v", err)
+		}
+
+		if hits != 1 || method != http.MethodPut || path != "/issues/42.json" {
+			t.Errorf("got %d hits, %s %s; want 1 hit, PUT /issues/42.json", hits, method, path)
+		}
+
+		if got.Issue.Notes != "needs tests" {
+			t.Errorf(`notes = %q, want "needs tests"`, got.Issue.Notes)
+		}
+	})
+
+	t.Run("surfaces a non-2xx response as an error", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+		})
+
+		if err := a.AddComment(t.Context(), "42", "x"); err == nil {
+			t.Error("expected error on 422, got nil")
+		}
+	})
+}

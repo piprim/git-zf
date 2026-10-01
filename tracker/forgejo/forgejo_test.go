@@ -725,3 +725,80 @@ func TestRegistration(t *testing.T) {
 		})
 	}
 }
+
+func TestAddComment(t *testing.T) {
+	t.Parallel()
+
+	type commentRecorder struct {
+		hits int
+		body struct {
+			Body string `json:"body"`
+		}
+	}
+
+	newCommentServer := func(t *testing.T) (*httptest.Server, *commentRecorder) {
+		t.Helper()
+
+		rec := &commentRecorder{}
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /api/v1/repos/a/b/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+			rec.hits++
+			_ = json.NewDecoder(r.Body).Decode(&rec.body)
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id":1,"body":"`+rec.body.Body+`"}`)
+		})
+
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+
+		return srv, rec
+	}
+
+	t.Run("posts the body to the issue comments endpoint", func(t *testing.T) {
+		t.Parallel()
+
+		srv, rec := newCommentServer(t)
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+
+		if err := a.AddComment(t.Context(), "42", "needs tests"); err != nil {
+			t.Fatalf("AddComment: %v", err)
+		}
+
+		if rec.hits != 1 {
+			t.Errorf("server hits = %d, want 1", rec.hits)
+		}
+
+		if rec.body.Body != "needs tests" {
+			t.Errorf(`body = %q, want "needs tests"`, rec.body.Body)
+		}
+	})
+
+	t.Run("surfaces a non-2xx response as an error", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		t.Cleanup(srv.Close)
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+
+		if err := a.AddComment(t.Context(), "42", "x"); err == nil {
+			t.Error("expected error on 403, got nil")
+		}
+	})
+
+	t.Run("rejects a non-numeric issue id", func(t *testing.T) {
+		t.Parallel()
+
+		srv, rec := newCommentServer(t)
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+
+		if err := a.AddComment(t.Context(), "abc", "x"); err == nil {
+			t.Error("expected error for non-numeric id")
+		}
+
+		if rec.hits != 0 {
+			t.Errorf("server hits = %d, want 0", rec.hits)
+		}
+	})
+}

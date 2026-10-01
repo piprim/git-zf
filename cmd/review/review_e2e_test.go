@@ -1401,7 +1401,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 
 	// Carol rejects X.1 round 1 (no reviewer commits).
 	run(carolDir, "checkout", "X.1@review")
-	if err := runReviewReject(ctx, carolDeps, "X.1", ""); err != nil {
+	if _, err := runReviewReject(ctx, carolDeps, "X.1", ""); err != nil {
 		t.Fatalf("carol runReviewReject X.1: %v", err)
 	}
 

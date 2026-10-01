@@ -231,3 +231,83 @@ func TestReviewTracker_AbsentBranchRef_NoUpdate(t *testing.T) {
 		}
 	})
 }
+
+func TestReviewTracker_Reject_PostsReasonComment(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+	fakeT := withFakeTracker(t, rig)
+	seedBranchRef(t, rig, "77", "77@feat@my-feature", "fake")
+	bringToInReview(t, ctx, rig, fakeT)
+
+	p := &scriptedReviewPrompter{
+		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
+		TrackerStatus: "In Progress",
+	}
+	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "Missing tests.", false); err != nil {
+		t.Fatalf("runReviewRejectInteractive: %v", err)
+	}
+
+	t.Run("posts exactly one comment on the tracker issue", func(t *testing.T) {
+		if got := len(fakeT.RecordedComments); got != 1 {
+			t.Fatalf("RecordedComments len = %d, want 1", got)
+		}
+		c := fakeT.RecordedComments[0]
+		if c.IssueID != "77" {
+			t.Errorf("IssueID = %q, want 77", c.IssueID)
+		}
+		if c.Body != "Changes requested (review round 1):\n\nMissing tests." {
+			t.Errorf("Body = %q", c.Body)
+		}
+	})
+
+	t.Run("still records the picked tracker status", func(t *testing.T) {
+		assertOneUpdate(t, fakeT)
+	})
+}
+
+func TestReviewTracker_Reject_NoReasonNoComment(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+	fakeT := withFakeTracker(t, rig)
+	seedBranchRef(t, rig, "77", "77@feat@my-feature", "fake")
+	bringToInReview(t, ctx, rig, fakeT)
+
+	p := &scriptedReviewPrompter{
+		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
+		TrackerStatus: "In Progress",
+	}
+	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "", false); err != nil {
+		t.Fatalf("runReviewRejectInteractive: %v", err)
+	}
+
+	t.Run("no comment is posted", func(t *testing.T) {
+		if got := len(fakeT.RecordedComments); got != 0 {
+			t.Errorf("RecordedComments len = %d, want 0", got)
+		}
+	})
+}
+
+func TestReviewTracker_Reject_ManualIssueNoComment(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	rig := newReviewE2ERig(t)
+	fakeT := withFakeTracker(t, rig)
+	seedBranchRef(t, rig, "77", "77@feat@my-feature", "")
+	bringToInReview(t, ctx, rig, fakeT)
+
+	p := &scriptedReviewPrompter{Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@review"}}
+	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "Missing tests.", false); err != nil {
+		t.Fatalf("runReviewRejectInteractive: %v", err)
+	}
+
+	t.Run("manual issue gets no tracker comment", func(t *testing.T) {
+		if got := len(fakeT.RecordedComments); got != 0 {
+			t.Errorf("RecordedComments len = %d, want 0", got)
+		}
+	})
+}

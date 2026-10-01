@@ -89,21 +89,29 @@ func runReviewRejectInteractive(ctx context.Context, deps reviewDeps, prompter R
 		}
 	}
 
-	if err := runReviewReject(ctx, deps, picked.IssueSlug, reason); err != nil {
-		return err
-	}
-	maybeUpdateTrackerStatus(ctx, deps, prompter, picked.IssueSlug)
-	return nil
-}
-
-func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason string) error {
-	reason = strings.TrimSpace(reason)
-	latest, err := ensureReviewRecord(ctx, deps, issueSlug)
+	round, err := runReviewReject(ctx, deps, picked.IssueSlug, reason)
 	if err != nil {
 		return err
 	}
+	if trackerBornIssue(ctx, deps, picked.IssueSlug) {
+		if reason = strings.TrimSpace(reason); reason != "" {
+			addTrackerComment(ctx, deps, picked.IssueSlug, round, reason)
+		}
+		applyTrackerStatus(ctx, deps, prompter, picked.IssueSlug)
+	}
+	return nil
+}
+
+// runReviewReject flips the review to changes_requested and returns the round
+// that was rejected.
+func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason string) (int, error) {
+	reason = strings.TrimSpace(reason)
+	latest, err := ensureReviewRecord(ctx, deps, issueSlug)
+	if err != nil {
+		return 0, err
+	}
 	if latest.Status != store.ReviewStatusInReview {
-		return fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, latest.Status)
+		return 0, fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, latest.Status)
 	}
 
 	// Detect reviewer commits on <issueSlug>@review.
@@ -136,7 +144,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 	// Write and push the ref FIRST (ref is the source of truth).
 	currentRef, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
 	if err != nil {
-		return fmt.Errorf("read review ref: %w", err)
+		return 0, fmt.Errorf("read review ref: %w", err)
 	}
 	featureSHA := ""
 	if currentRef != nil {
@@ -157,7 +165,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 	}
 
 	if _, err := deps.client.WriteReviewRef(ctx, issueSlug, newRef, currentSHA); err != nil {
-		return fmt.Errorf("write review ref: %w", err)
+		return 0, fmt.Errorf("write review ref: %w", err)
 	}
 	// expectedOldSHA is currentSHA — the value the remote currently has.
 	if err := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); err != nil {
@@ -165,7 +173,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 	}
 
 	if err := deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatusChangesRequested, hasCommits); err != nil {
-		return fmt.Errorf("update review status: %w", err)
+		return 0, fmt.Errorf("update review status: %w", err)
 	}
 
 	// The rejection is recorded at this point whatever the branch cleanup or
@@ -191,7 +199,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 		fmt.Fprintf(deps.client.IO().Out,
 			"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
 			issueSlug, latest.Round, branchLabel)
-		return nil
+		return latest.Round, nil
 	}
 
 	// Use issueSlug as fallback when feature branch not in local store.
@@ -202,7 +210,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 
 	if reviewBranchExists && hasCommits {
 		if err := proposeReviewPush(ctx, deps, reviewBranch); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
@@ -216,14 +224,14 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 				"  git zf review request\n",
 			issueSlug, latest.Round, branchLabel,
 			reviewBranch, n, branchLabel, reviewBranch)
-		return nil
+		return latest.Round, nil
 	}
 
 	fmt.Fprintf(deps.client.IO().Out,
 		"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
 		issueSlug, latest.Round, branchLabel)
 
-	return nil
+	return latest.Round, nil
 }
 
 // indentLines prefixes every line with two spaces for display under a heading.
