@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -189,36 +190,49 @@ func formatLine(ln statusLine) string {
 // is true (commit -u/--include-untracked), untracked files fold into "Changes
 // to be committed" as "new file:" lines and the untracked section is omitted.
 func StatusPanel(entries []git.StatusEntry, all, includeUntracked bool) string {
+	return statusPanel(entries, all, includeUntracked, 0)
+}
+
+// panelChrome is the number of panel rows that are not body lines: two border
+// rows, the title, and the blank line under it.
+const panelChrome = 4
+
+// statusPanel is StatusPanel with a height budget. When maxHeight > 0 the
+// rendered panel never exceeds maxHeight rows: surplus body lines are replaced
+// by a trailing "… N more" line. bubbletea's inline renderer drops the TOP
+// lines of an over-tall view, which is where the form sits, so an uncapped
+// panel would scroll the form off-screen.
+func statusPanel(entries []git.StatusEntry, all, includeUntracked bool, maxHeight int) string {
 	groups := groupEntries(entries, all, includeUntracked)
 	if len(groups) == 0 {
 		return ""
 	}
 
-	var b strings.Builder
+	var lines []string
 	for i, g := range groups {
 		meta := sectionMetaByKind[g.Kind]
 		style := lipgloss.NewStyle().Foreground(meta.color)
 
 		if i > 0 {
-			b.WriteString("\n")
+			lines = append(lines, "")
 		}
-		b.WriteString(style.Render(meta.header))
-		b.WriteString("\n")
-
+		lines = append(lines, style.Render(meta.header))
 		for _, ln := range g.Lines {
-			b.WriteString(style.Render("  " + formatLine(ln)))
-			b.WriteString("\n")
+			lines = append(lines, style.Render("  "+formatLine(ln)))
 		}
 	}
 
-	title := lipgloss.NewStyle().Bold(true).Render("Current Git Status")
-	body := strings.TrimRight(b.String(), "\n")
+	if budget := maxHeight - panelChrome; maxHeight > 0 && len(lines) > budget {
+		keep := max(budget-1, 0)
+		lines = append(lines[:keep], fmt.Sprintf("  … %d more", len(lines)-keep))
+	}
 
+	title := lipgloss.NewStyle().Bold(true).Render("Current Git Status")
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1)
 
-	return box.Render(title + "\n\n" + body)
+	return box.Render(title + "\n\n" + strings.Join(lines, "\n"))
 }
 
 // StatusPanelReserveWidth returns the widest the panel can render for these

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -154,6 +155,33 @@ func TestFormRunnerView(t *testing.T) {
 		}
 		if strings.Contains(r.View(), "Current Git Status") {
 			t.Errorf("panel must not linger after the form closes; got:\n%s", r.View())
+		}
+	})
+
+	t.Run("WindowSizeMsg caps the panel height so the form stays on-screen", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRunner()
+		for i := range 50 {
+			r.entries = append(r.entries, git.StatusEntry{XY: "M ", Path: fmt.Sprintf("file%02d.go", i)})
+		}
+		r.classifyFn = func() (bool, bool) { return false, false }
+		r.reserveWidth = StatusPanelReserveWidth(r.entries)
+		const height = 10
+
+		r.Update(tea.WindowSizeMsg{Width: 120, Height: height})
+
+		view := r.View()
+		// bubbletea drops the TOP lines of an over-tall inline view, which is where
+		// the form lives; the panel must therefore never exceed the terminal height.
+		if h := lipgloss.Height(view); h > height {
+			t.Errorf("combined view height = %d, want <= %d (form would scroll off-screen)", h, height)
+		}
+		if !strings.Contains(view, "more") {
+			t.Errorf("truncated panel should say how many entries are hidden; got:\n%s", view)
+		}
+		if strings.Contains(view, "file49.go") || !strings.Contains(view, "file00.go") {
+			t.Errorf("truncation should keep the first entries and drop the last; got:\n%s", view)
 		}
 	})
 

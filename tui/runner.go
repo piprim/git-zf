@@ -38,6 +38,7 @@ type FormRunner struct {
 	entries      []git.StatusEntry
 	classifyFn   func() (bool, bool)
 	reserveWidth int
+	height       int
 }
 
 // WantHistory reports whether the user pressed ctrl+r during the form.
@@ -74,6 +75,7 @@ func (r *FormRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// width resize once f.width != 0. reserveWidth covers both --all layouts so
 	// the form does not resize when the toggle flips.
 	if ws, ok := msg.(tea.WindowSizeMsg); ok && r.hasPanel() {
+		r.height = ws.Height
 		formWidth := ws.Width - r.reserveWidth - panelGap
 		if formWidth < minFormWidth {
 			formWidth = minFormWidth
@@ -107,7 +109,7 @@ func (r *FormRunner) View() string {
 	all, includeUntracked := r.classify()
 	panel := lipgloss.NewStyle().
 		MarginLeft(panelGap).
-		Render(StatusPanel(r.entries, all, includeUntracked))
+		Render(statusPanel(r.entries, all, includeUntracked, r.height))
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, formView, panel)
 }
