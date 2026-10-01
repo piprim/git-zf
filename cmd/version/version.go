@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"runtime/debug"
 
+	"github.com/piprim/git-zf/config"
 	"github.com/spf13/cobra"
 )
 
 type Version struct {
 	version string
-	name    string
 }
 
-func New(version, name string) Version {
-	return Version{version: version, name: name}
+func New(version string) Version {
+	return Version{version: version}
 }
 
 type info struct {
@@ -39,7 +39,7 @@ Arch: %s
 OS: %s
 Revision: %s%s
 Built at: %s
-`, v.name, v.version, vinfo.arch, vinfo.os, vinfo.revision, dirtyStr, vinfo.time)
+`, config.ProgName, v.version, vinfo.arch, vinfo.os, vinfo.revision, dirtyStr, vinfo.time)
 }
 
 func vcsInfo() *info {

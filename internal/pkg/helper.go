@@ -2,7 +2,6 @@ package pkg
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,11 +17,7 @@ type IO struct {
 // RunInteractive runs cmd with args in dir.
 // See [Cmd].
 func RunInteractive(ctx context.Context, ioStreams *IO, cmd, dir string, args ...string) error {
-	if err := Cmd(ctx, ioStreams, cmd, dir, args...).Run(); err != nil {
-		return fmt.Errorf("%w", err)
-	}
-
-	return nil
+	return Cmd(ctx, ioStreams, cmd, dir, args...).Run() //nolint:wrapcheck // callers add context
 }
 
 // Cmd return a [cmd.CommandContext] running cmd with args in dir, wiring

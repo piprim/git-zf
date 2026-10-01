@@ -22,10 +22,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Version and Name are injected at build time via -ldflags.
+// Version is injected at build time via -ldflags.
 var (
 	Version = "none"
-	Name    string
 
 	isDebug   bool
 	appConfig *config.AppConfig
@@ -71,22 +70,19 @@ func GetRootCmd() (*cobra.Command, error) {
 	ir := issue.New(appConfig)
 	br := branch.New(appConfig)
 	co := commit.New(appConfig)
-	cp := completion.New(appConfig)
-	in := install.New(appConfig)
-	uin := uninstall.New(appConfig)
-	vs := version.New(Version, Name)
+	vs := version.New(Version)
 	cf := cfgcmd.New(appConfig)
 	rv := review.New(appConfig)
 	it := init_cmd.New()
 
 	rootCmd.AddCommand(
-		cp.GetRootCmd(),
+		completion.Cmd(),
 		co.GetRootCmd(),
 		ir.GetRootCmd(),
 		br.GetRootCmd(),
 		vs.GetRootCmd(),
-		in.GetRootCmd(),
-		uin.GetRootCmd(),
+		install.Cmd(),
+		uninstall.Cmd(),
 		cf.GetRootCmd(),
 		rv.GetRootCmd(),
 		it.GetRootCmd(),

@@ -3,9 +3,7 @@ TARGET     := git-zf
 BIN_DIR := ./bin
 BIN        := $(BIN_DIR)/$(TARGET)
 GOARCH := $(shell go env GOARCH)
-LDFLAGS    := -ldflags "\
-  -X github.com/piprim/git-zf/cmd.Version=${VERSION} \
-  -X github.com/piprim/git-zf/cmd.Name=${TARGET}"
+LDFLAGS    := -ldflags "-X github.com/piprim/git-zf/cmd.Version=${VERSION}"
 
 
 ifeq ($(OS),Windows_NT)

@@ -13,15 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type Install struct {
-	appConfig *config.AppConfig
-}
-
-func New(appConfig *config.AppConfig) Install {
-	return Install{appConfig: appConfig}
-}
-
-func (i Install) GetRootCmd() *cobra.Command {
+// Cmd returns the `install` cobra command.
+func Cmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install this tool to git-core as " + config.SubCommandName,
@@ -33,10 +26,10 @@ func (i Install) GetRootCmd() *cobra.Command {
 
 			path, err := installSubCmd(cmd.Context(), appFilePath)
 			if err != nil {
-				return fmt.Errorf("failed to install %s: %w", i.appConfig.ProgName, err)
+				return fmt.Errorf("failed to install %s: %w", config.ProgName, err)
 			}
 
-			fmt.Printf("Install %s to %s\n", i.appConfig.ProgName, path)
+			fmt.Printf("Install %s to %s\n", config.ProgName, path)
 
 			return nil
 		},

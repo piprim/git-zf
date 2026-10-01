@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/piprim/git-zf/config"
 )
@@ -44,25 +43,18 @@ type Tracker interface {
 	AddComment(ctx context.Context, issueID, body string) error
 }
 
-var (
-	registryMu sync.RWMutex
-	registry   = make(map[string]func(config.IssueTrackerConfig) (Tracker, error))
-)
+var registry = make(map[string]func(config.IssueTrackerConfig) (Tracker, error))
 
-// Register adds a factory function for the named tracker type.
+// Register adds a factory function for the named tracker type. It is meant to
+// be called from an adapter's init(), before any New; it is not safe to call
+// concurrently with New.
 func Register(name string, fn func(config.IssueTrackerConfig) (Tracker, error)) {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-
 	registry[name] = fn
 }
 
 // New constructs a Tracker from cfg using the registered factory.
 func New(cfg config.IssueTrackerConfig) (Tracker, error) {
-	registryMu.RLock()
 	fn, ok := registry[cfg.Type]
-	registryMu.RUnlock()
-
 	if !ok {
 		return nil, fmt.Errorf("unknown tracker type %q: adapter not registered", cfg.Type)
 	}

@@ -9,15 +9,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type Completion struct {
-	appConfig *config.AppConfig
-}
-
-func New(appConfig *config.AppConfig) Completion {
-	return Completion{appConfig: appConfig}
-}
-
-func (c Completion) GetRootCmd() *cobra.Command {
+// Cmd returns the `completion` cobra command.
+func Cmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "completion [bash|zsh|fish|powershell]",
 		Short: "Generate completion script",
@@ -47,7 +40,7 @@ PowerShell: PS> yourprogram completion powershell | Out-String | Invoke-Expressi
 			}
 
 			if err != nil {
-				return fmt.Errorf("%s failed to generate %s completion: %w", c.appConfig.ProgName, shell, err)
+				return fmt.Errorf("%s failed to generate %s completion: %w", config.ProgName, shell, err)
 			}
 
 			return nil

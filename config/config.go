@@ -171,44 +171,24 @@ func DefaultTOML() []byte {
 	return defaultTOML
 }
 
-// HomeDir returns the configuration directory path in the user home directory
-// where live the config file.
-func HomeDir() (string, error) {
+// HomePath returns the configuration file path in the user home directory.
+func HomePath() (string, error) {
 	home, err := homedir.Dir()
 	if err != nil {
 		return "", fmt.Errorf("get home dir: %w", err)
 	}
 
-	return home, nil
+	return filepath.Join(home, configFileName), nil
 }
 
-// RepoDir returns the repository's git directory path. Resolves gitfiles,
-// submodules, and linked worktrees via git rev-parse. Returns "" on error.
-func RepoDir() string {
+// RepoPath returns the configuration file path in the repository's git
+// directory (gitfiles, submodules and linked worktrees resolved via git
+// rev-parse), or "" when not inside a git repository.
+func RepoPath() string {
 	d, err := gitdir.Get()
 	if err != nil {
 		return ""
 	}
 
-	return d
-}
-
-// HomePath returns the configuration file path in the user home directory.
-func HomePath() (string, error) {
-	home, err := HomeDir()
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(home, configFileName), nil
-}
-
-// RepoPath returns the configuration file path in the git repository of the project.
-func RepoPath() string {
-	repoDir := RepoDir()
-	if repoDir == "" {
-		return ""
-	}
-
-	return filepath.Join(repoDir, configFileName)
+	return filepath.Join(d, configFileName)
 }

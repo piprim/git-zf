@@ -11,25 +11,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type Uninstall struct {
-	appConfig *config.AppConfig
-}
-
-func New(appConfig *config.AppConfig) Uninstall {
-	return Uninstall{appConfig: appConfig}
-}
-
-func (u Uninstall) GetRootCmd() *cobra.Command {
+// Cmd returns the `uninstall` cobra command.
+func Cmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
 		Short: "uninstall " + config.SubCommandName + " from git-core",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			path, err := uninstallSubCmd(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("failed to uninstall %s: %w", u.appConfig.ProgName, err)
+				return fmt.Errorf("failed to uninstall %s: %w", config.ProgName, err)
 			}
 
-			fmt.Printf("uninstall %s from %s\n", u.appConfig.ProgName, path)
+			fmt.Printf("uninstall %s from %s\n", config.ProgName, path)
 
 			return nil
 		},

@@ -18,10 +18,9 @@ func (s *stubTracker) AddComment(_ context.Context, _, _ string) error         {
 func (s *stubTracker) IsIssueClosed(_ context.Context, _ string) (bool, error) { return false, nil }
 
 func TestNew(t *testing.T) {
-	t.Parallel()
-
+	// Register is init-time only and not synchronised, so this test stays
+	// sequential: the first subtest registers, the second reads.
 	t.Run("registered type returns a non-nil tracker", func(t *testing.T) {
-		t.Parallel()
 
 		const key = "stub-test-register"
 		tracker.Register(key, func(_ config.IssueTrackerConfig) (tracker.Tracker, error) {
@@ -38,8 +37,6 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("unknown type returns error mentioning the type name", func(t *testing.T) {
-		t.Parallel()
-
 		_, err := tracker.New(config.IssueTrackerConfig{Type: "no-such-adapter-xyz"})
 		if err == nil {
 			t.Fatal("expected error for unknown type, got nil")
