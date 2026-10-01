@@ -613,26 +613,6 @@ func IssueMergeStrategy(selected *string, options []StrategyOption) *huh.Group {
 	)
 }
 
-// IssueMergeAuthor lets the user pick the squash commit author.
-// authors[0] is expected to be the git config identity (pre-filled by the caller).
-func IssueMergeAuthor(authors []string, author *string) *huh.Group {
-	opts := make([]huh.Option[string], 0, len(authors))
-	for _, a := range authors {
-		opts = append(opts, huh.NewOption(a, a))
-	}
-
-	if len(opts) == 0 {
-		opts = []huh.Option[string]{huh.NewOption("(no authors found)", "")}
-	}
-
-	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Squash commit author:").
-			Options(opts...).
-			Value(author),
-	)
-}
-
 // IssueMergeConfirm shows a merge summary and asks for final confirmation.
 func IssueMergeConfirm(branchName, baseBranch, strategy string, confirmed *bool) *huh.Group {
 	desc := fmt.Sprintf("%s → %s (%s)", branchName, baseBranch, strategy)

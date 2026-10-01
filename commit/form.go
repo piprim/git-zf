@@ -225,36 +225,6 @@ func FillOutForm(
 	}
 }
 
-// BuildAuthorList deduplicates all (may contain duplicates), sorts alphabetically,
-// then prepends current as the first entry (removing it from its sorted position if present).
-// If current is empty, the sorted deduplicated list is returned as-is.
-func BuildAuthorList(all []string, current string) []string {
-	seen := make(map[string]struct{})
-	var unique []string
-
-	for _, a := range all {
-		if _, ok := seen[a]; !ok {
-			seen[a] = struct{}{}
-			unique = append(unique, a)
-		}
-	}
-
-	slices.Sort(unique)
-
-	if current == "" {
-		return unique
-	}
-
-	filtered := make([]string, 0, len(unique))
-	for _, a := range unique {
-		if a != current {
-			filtered = append(filtered, a)
-		}
-	}
-
-	return append([]string{current}, filtered...)
-}
-
 // assembleMessage trims whitespace from all string answers, then executes tmplText writing the result to buf.
 func assembleMessage(buf *bytes.Buffer, tmplText string, answers map[string]any) error {
 	tmpl, err := template.New("").Parse(tmplText)
