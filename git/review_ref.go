@@ -18,6 +18,8 @@ type ReviewRef struct {
 	FeatureSHA string `json:"feature_sha"`
 	Reviewer   string `json:"reviewer,omitempty"`
 	CreatedAt  string `json:"created_at"` // RFC3339
+	// Comment is the reviewer's explanation when requesting changes.
+	Comment string `json:"comment,omitempty"`
 }
 
 // WriteReviewRef atomically writes a ReviewRef as a git blob and updates the

@@ -29,6 +29,10 @@ type ReviewPrompter interface {
 	// Confirm presents a yes/no confirmation with the given title. Used by the
 	// request flow to offer merging pending reviewer commits before re-requesting.
 	Confirm(ctx context.Context, title string) (bool, error)
+
+	// Text presents a free-form multi-line text field. An empty answer is
+	// valid. Used by the reject flow to collect the reason for requesting changes.
+	Text(ctx context.Context, title string) (string, error)
 }
 
 // Compile-time check.
@@ -71,6 +75,15 @@ func (p *huhReviewPrompter) Confirm(ctx context.Context, title string) (bool, er
 	return confirmed, nil
 }
 
+func (p *huhReviewPrompter) Text(ctx context.Context, title string) (string, error) {
+	var text string
+	form := huh.NewForm(huh.NewGroup(huh.NewText().Title(title).Value(&text)))
+	if err := form.RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("text form: %w", err)
+	}
+	return text, nil
+}
+
 // scriptedReviewPrompter is the canned-response prompter used by review E2E tests.
 type scriptedReviewPrompter struct {
 	Branch           *store.BranchRow
@@ -81,6 +94,9 @@ type scriptedReviewPrompter struct {
 	TrackerStatusErr error
 	ConfirmAnswer    bool
 	ConfirmErr       error
+	TextAnswer       string
+	TextErr          error
+	TextCalls        int
 }
 
 var _ ReviewPrompter = (*scriptedReviewPrompter)(nil)
@@ -111,4 +127,12 @@ func (s *scriptedReviewPrompter) Confirm(_ context.Context, _ string) (bool, err
 		return false, s.ConfirmErr
 	}
 	return s.ConfirmAnswer, nil
+}
+
+func (s *scriptedReviewPrompter) Text(_ context.Context, _ string) (string, error) {
+	s.TextCalls++
+	if s.TextErr != nil {
+		return "", s.TextErr
+	}
+	return s.TextAnswer, nil
 }

@@ -823,7 +823,7 @@ func TestReviewApproveReject_WorkOnEmptyReviewerStore(t *testing.T) {
 		rejectPrompter := &scriptedReviewPrompter{
 			Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
 		}
-		if err := runReviewRejectInteractive(ctx, reviewerDeps, rejectPrompter); err != nil {
+		if err := runReviewRejectInteractive(ctx, reviewerDeps, rejectPrompter, "", true); err != nil {
 			t.Fatalf("runReviewRejectInteractive on empty store: %v", err)
 		}
 		// Verify the store now has a record (auto-registered then resolved).
@@ -1401,7 +1401,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 
 	// Carol rejects X.1 round 1 (no reviewer commits).
 	run(carolDir, "checkout", "X.1@review")
-	if err := runReviewReject(ctx, carolDeps, "X.1"); err != nil {
+	if err := runReviewReject(ctx, carolDeps, "X.1", ""); err != nil {
 		t.Fatalf("carol runReviewReject X.1: %v", err)
 	}
 

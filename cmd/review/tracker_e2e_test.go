@@ -150,7 +150,7 @@ func TestReviewTracker_Reject_TrackerBornIssue(t *testing.T) {
 		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
 		TrackerStatus: "In Progress",
 	}
-	if err := runReviewRejectInteractive(ctx, rig.deps(), p); err != nil {
+	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "", true); err != nil {
 		t.Fatalf("runReviewRejectInteractive: %v", err)
 	}
 

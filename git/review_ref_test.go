@@ -1,6 +1,8 @@
 package git
 
 import (
+	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -142,6 +144,43 @@ func TestPushReviewRef_NoOpWithoutRemote(t *testing.T) {
 	t.Run("PushReviewRef is a no-op when no remote configured", func(t *testing.T) {
 		if err := client.PushReviewRef(t.Context(), "55", ""); err != nil {
 			t.Errorf("PushReviewRef with no remote: %v", err)
+		}
+	})
+}
+
+func TestReviewRef_CommentRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+
+	t.Run("comment survives write and read", func(t *testing.T) {
+		ref := ReviewRef{Status: "changes_requested", Round: 1, FeatureSHA: "abc", CreatedAt: "2026-06-20T10:00:00Z", Comment: "needs tests\n\n- cover the empty case"}
+		if _, err := client.WriteReviewRef(t.Context(), "43", ref, ""); err != nil {
+			t.Fatalf("WriteReviewRef: %v", err)
+		}
+		got, _, err := client.ReadReviewRef(t.Context(), "43")
+		if err != nil {
+			t.Fatalf("ReadReviewRef: %v", err)
+		}
+		if got.Comment != ref.Comment {
+			t.Errorf("Comment: got %q, want %q", got.Comment, ref.Comment)
+		}
+	})
+
+	t.Run("empty comment is omitted from the blob", func(t *testing.T) {
+		ref := ReviewRef{Status: "in_review", Round: 1, FeatureSHA: "abc", CreatedAt: "2026-06-20T10:00:00Z"}
+		sha, err := client.WriteReviewRef(t.Context(), "44", ref, "")
+		if err != nil {
+			t.Fatalf("WriteReviewRef: %v", err)
+		}
+		cmd := exec.CommandContext(t.Context(), "git", "cat-file", "-p", sha)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("cat-file: %v\n%s", err, out)
+		}
+		if strings.Contains(string(out), "comment") {
+			t.Errorf("blob should omit empty comment, got %s", out)
 		}
 	})
 }

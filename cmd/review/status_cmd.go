@@ -78,7 +78,8 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 
 	// Reconcile the latest row from the ref (authoritative source).
 	// This catches status changes (e.g. rejection) made on another machine.
-	if ref, _, _ := deps.client.ReadReviewRef(ctx, issueSlug); ref != nil {
+	ref, _, _ := deps.client.ReadReviewRef(ctx, issueSlug)
+	if ref != nil {
 		latest := &rows[len(rows)-1]
 		if store.ReviewStatus(ref.Status) != latest.Status {
 			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
@@ -107,6 +108,11 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 		fmt.Fprintf(deps.client.IO().Out, "  Round %-2d  %-20s  reviewer: %-30s  opened: %s  resolved: %s%s\n",
 			row.Round, row.Status, reviewer,
 			row.CreatedAt.Format("2006-01-02 15:04"), resolved, commits)
+	}
+
+	// The ref only carries the latest round's reason; older ones are not kept.
+	if ref != nil && ref.Comment != "" && store.ReviewStatus(ref.Status) == store.ReviewStatusChangesRequested {
+		fmt.Fprintf(deps.client.IO().Out, "\nRound %d reason:\n%s\n", ref.Round, indentLines(ref.Comment))
 	}
 
 	return nil
