@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,7 +18,6 @@ import (
 	"github.com/piprim/git-zf/cmd/version"
 	"github.com/piprim/git-zf/config"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 // Version is injected at build time via -ldflags.
@@ -109,72 +107,24 @@ func menuSubs(root *cobra.Command) []*cobra.Command {
 	return subs
 }
 
-// initConfig loads the .git-zf.toml config file via Viper, then parses the full
-// AppConfig. A fresh viper instance is created per call and threaded through the
-// load explicitly, so there is no hidden dependency on package-global viper
-// state and no load-order coupling between commands. Not being inside a git repo
-// is not a fatal error — git zf version/install must work anywhere.
+// initConfig loads the global ($HOME) and repo-local .git-zf.toml files on top
+// of the built-in defaults; repo values win. Not being inside a git repo is not
+// a fatal error — git zf version/install must work anywhere.
 func initConfig() error {
-	v := viper.New()
-
-	// Phase 1: load global config from home directory.
-	if err := loadGlobalConfig(v); err != nil {
-		return err
-	}
-
-	// Phase 2: merge repo-local config on top (repo values win).
-	if repoPath := config.RepoPath(); repoPath != "" {
-		if err := loadRepoConfig(v, repoPath); err != nil {
-			return err
-		}
-	}
-
-	var err error
-	appConfig, err = config.Load(v)
-	if err != nil {
-		return fmt.Errorf("failed to load app config: %w", err)
-	}
-
-	return nil
-}
-
-func loadGlobalConfig(v *viper.Viper) error {
 	homePath, err := config.HomePath()
 	if err != nil {
 		return fmt.Errorf("get home config path: %w", err)
 	}
 
-	v.SetConfigFile(homePath)
-
-	if err := v.ReadInConfig(); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("could not read global config %s: %w", homePath, err)
-		}
-
-		slog.Info("no global config file found")
-
-		return nil
+	paths := []string{homePath}
+	if repoPath := config.RepoPath(); repoPath != "" {
+		paths = append(paths, repoPath)
 	}
 
-	slog.Debug("loaded global config", "path", homePath)
-
-	return nil
-}
-
-func loadRepoConfig(v *viper.Viper, repoPath string) error {
-	v.SetConfigFile(repoPath)
-
-	if err := v.MergeInConfig(); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("could not merge repo config %s: %w", repoPath, err)
-		}
-
-		slog.Info("no repo config file found")
-
-		return nil
+	appConfig, err = config.Load(paths...)
+	if err != nil {
+		return fmt.Errorf("failed to load app config: %w", err)
 	}
-
-	slog.Debug("merged repo config", "path", repoPath)
 
 	return nil
 }

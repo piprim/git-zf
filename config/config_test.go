@@ -4,21 +4,33 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	toml "github.com/pelletier/go-toml"
-	"github.com/spf13/viper"
 
 	"github.com/piprim/git-zf/config"
 )
 
+// writeTOML writes blob to a fresh temp file and returns its path.
+func writeTOML(t *testing.T, blob string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), ".git-zf.toml")
+	if err := os.WriteFile(path, []byte(blob), 0o600); err != nil {
+		t.Fatalf("write cfg: %v", err)
+	}
+
+	return path
+}
+
 func TestLoad(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns built-in defaults when no viper keys are set", func(t *testing.T) {
+	t.Run("returns built-in defaults when no file exists", func(t *testing.T) {
 		t.Parallel()
 
-		cfg, err := config.Load(viper.New())
+		cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.toml"))
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -47,20 +59,22 @@ func TestLoad(t *testing.T) {
 		if cfg.Branch.Remote != "" {
 			t.Errorf("Branch.Remote default = %q, want empty string", cfg.Branch.Remote)
 		}
+		if cfg.Branch.UseWorktree != nil {
+			t.Errorf("Branch.UseWorktree default = %v, want nil", *cfg.Branch.UseWorktree)
+		}
 		if cfg.ConfigFile != "" {
 			t.Errorf("ConfigFile = %q, want empty when no file is read", cfg.ConfigFile)
 		}
 	})
 
-	t.Run("overrides commit types when viper key is set", func(t *testing.T) {
+	t.Run("a file's commit-types replaces the defaults wholesale", func(t *testing.T) {
 		t.Parallel()
 
-		v := viper.New()
-		v.Set("commit-types", []map[string]any{
-			{"name": "custom", "desc": "Custom type"},
-		})
-
-		cfg, err := config.Load(v)
+		cfg, err := config.Load(writeTOML(t, `
+[[commit-types]]
+name = "custom"
+desc = "Custom type"
+`))
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -71,7 +85,6 @@ func TestLoad(t *testing.T) {
 		if cfg.CommitTypes[0].Name != "custom" {
 			t.Errorf("CommitTypes[0].Name = %q, want %q", cfg.CommitTypes[0].Name, "custom")
 		}
-		// Unset keys fall back to defaults.
 		if cfg.CommitMessage.Template == "" {
 			t.Error("CommitMessage.Template should remain from defaults")
 		}
@@ -80,13 +93,13 @@ func TestLoad(t *testing.T) {
 	t.Run("preserves template when only items is overridden", func(t *testing.T) {
 		t.Parallel()
 
-		// Override only items (not template); template must be preserved from defaults.
-		v := viper.New()
-		v.Set("commit-message.items", []map[string]any{
-			{"name": "subject", "desc": "Custom subject:", "form": "input", "required": true},
-		})
-
-		cfg, err := config.Load(v)
+		cfg, err := config.Load(writeTOML(t, `
+[[commit-message.items]]
+name = "subject"
+desc = "Custom subject:"
+form = "input"
+required = true
+`))
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -94,7 +107,6 @@ func TestLoad(t *testing.T) {
 		if len(cfg.CommitMessage.Items) != 1 {
 			t.Errorf("CommitMessage.Items len = %d, want 1", len(cfg.CommitMessage.Items))
 		}
-
 		if cfg.CommitMessage.Template == "" {
 			t.Error("CommitMessage.Template must be preserved when only items is overridden")
 		}
@@ -103,28 +115,15 @@ func TestLoad(t *testing.T) {
 	t.Run("reads projects list from a TOML config file", func(t *testing.T) {
 		t.Parallel()
 
-		dir := t.TempDir()
-		cfgPath := filepath.Join(dir, ".git-zf.toml")
-
-		const blob = `
+		cfgPath := writeTOML(t, `
 [issue-tracker]
 type = "github"
 url = "https://api.github.com"
 token = "x"
 projects = ["a/b", "c/d"]
-`
-		if err := os.WriteFile(cfgPath, []byte(blob), 0o600); err != nil {
-			t.Fatalf("write cfg: %v", err)
-		}
+`)
 
-		v := viper.New()
-		v.SetConfigType("toml")
-		v.SetConfigFile(cfgPath)
-		if err := v.ReadInConfig(); err != nil {
-			t.Fatalf("read cfg: %v", err)
-		}
-
-		cfg, err := config.Load(v)
+		cfg, err := config.Load(cfgPath)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -141,84 +140,88 @@ projects = ["a/b", "c/d"]
 		})
 	})
 
-	t.Run("merges global and local TOML files", func(t *testing.T) {
+	t.Run("merges global and local TOML files, local wins", func(t *testing.T) {
 		t.Parallel()
 
-		globalTOML := []byte(`
+		globalPath := writeTOML(t, `
 [[commit-types]]
 name = "custom"
 desc = "Custom type"
-`)
 
-		localTOML := []byte(`
+[branch]
+remote = "origin"
+base = "develop"
+`)
+		localPath := writeTOML(t, `
+[branch]
+remote = "upstream"
+
 [issue-tracker]
 type = "redmine"
 url = "https://redmine.example.com"
 token = "tok"
 `)
 
-		globalPath := filepath.Join(t.TempDir(), ".git-zf.toml")
-		localPath := filepath.Join(t.TempDir(), ".git-zf.toml")
-
-		if err := os.WriteFile(globalPath, globalTOML, 0o600); err != nil {
-			t.Fatalf("write global: %v", err)
-		}
-
-		if err := os.WriteFile(localPath, localTOML, 0o600); err != nil {
-			t.Fatalf("write local: %v", err)
-		}
-
-		v := viper.New()
-		v.SetConfigType("toml")
-		v.SetConfigFile(globalPath)
-
-		if err := v.ReadInConfig(); err != nil {
-			t.Fatalf("ReadInConfig global: %v", err)
-		}
-
-		v.SetConfigFile(localPath)
-
-		if err := v.MergeInConfig(); err != nil {
-			t.Fatalf("MergeInConfig local: %v", err)
-		}
-
-		cfg, err := config.Load(v)
+		cfg, err := config.Load(globalPath, localPath)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
 
-		// commit-types from global override (replaces built-in defaults).
-		if len(cfg.CommitTypes) != 1 {
-			t.Errorf("CommitTypes len = %d, want 1", len(cfg.CommitTypes))
-		}
+		t.Run("commit-types from global replace the defaults", func(t *testing.T) {
+			if len(cfg.CommitTypes) != 1 || cfg.CommitTypes[0].Name != "custom" {
+				t.Errorf("CommitTypes = %+v, want one entry named custom", cfg.CommitTypes)
+			}
+		})
+		t.Run("issue-tracker from local", func(t *testing.T) {
+			if cfg.IssueTracker.Type != "redmine" || cfg.IssueTracker.URL != "https://redmine.example.com" {
+				t.Errorf("IssueTracker = %+v", cfg.IssueTracker)
+			}
+		})
+		t.Run("local scalar overrides global scalar", func(t *testing.T) {
+			if cfg.Branch.Remote != "upstream" {
+				t.Errorf("Branch.Remote = %q, want %q", cfg.Branch.Remote, "upstream")
+			}
+		})
+		t.Run("global scalar survives when local leaves it out", func(t *testing.T) {
+			if cfg.Branch.Base != "develop" {
+				t.Errorf("Branch.Base = %q, want %q", cfg.Branch.Base, "develop")
+			}
+		})
+		t.Run("template preserved from built-in default", func(t *testing.T) {
+			if cfg.CommitMessage.Template == "" {
+				t.Error("CommitMessage.Template should be preserved from built-in default")
+			}
+		})
+		t.Run("ConfigFile is the last file read", func(t *testing.T) {
+			if cfg.ConfigFile != localPath {
+				t.Errorf("ConfigFile = %q, want %q", cfg.ConfigFile, localPath)
+			}
+		})
+	})
 
-		if cfg.CommitTypes[0].Name != "custom" {
-			t.Errorf("CommitTypes[0].Name = %q, want %q", cfg.CommitTypes[0].Name, "custom")
-		}
+	t.Run("a missing file between two existing ones is skipped", func(t *testing.T) {
+		t.Parallel()
 
-		// issue-tracker from local.
-		if cfg.IssueTracker.Type != "redmine" {
-			t.Errorf("IssueTracker.Type = %q, want %q", cfg.IssueTracker.Type, "redmine")
-		}
+		first := writeTOML(t, "[branch]\nremote = \"a\"\n")
+		last := writeTOML(t, "[branch]\nbase = \"b\"\n")
 
-		if cfg.IssueTracker.URL != "https://redmine.example.com" {
-			t.Errorf("IssueTracker.URL = %q, want %q", cfg.IssueTracker.URL, "https://redmine.example.com")
+		cfg, err := config.Load(first, filepath.Join(t.TempDir(), "nope.toml"), last)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
 		}
-
-		// template preserved from built-in default (neither file sets it).
-		if cfg.CommitMessage.Template == "" {
-			t.Error("CommitMessage.Template should be preserved from built-in default")
+		if cfg.Branch.Remote != "a" || cfg.Branch.Base != "b" {
+			t.Errorf("Branch = %+v, want remote a / base b", cfg.Branch)
 		}
 	})
 
-	t.Run("ref-format and close-format are loaded when viper keys are set", func(t *testing.T) {
+	t.Run("ref-format and close-format are loaded", func(t *testing.T) {
 		t.Parallel()
 
-		v := viper.New()
-		v.Set("commit-message.ref-format", "Refs: %s")
-		v.Set("commit-message.close-format", "Closes #%s")
-
-		cfg, err := config.Load(v)
+		cfg, err := config.Load(writeTOML(t, `
+[commit-message]
+ref-format = "Refs: %s"
+close-format = "Closes #%s"
+`))
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -235,19 +238,28 @@ token = "tok"
 		})
 	})
 
-	t.Run("branch.remote is loaded when viper key is set", func(t *testing.T) {
+	t.Run("branch.use-worktree is a tri-state", func(t *testing.T) {
 		t.Parallel()
 
-		v := viper.New()
-		v.Set("branch.remote", "upstream")
-
-		cfg, err := config.Load(v)
+		cfg, err := config.Load(writeTOML(t, "[branch]\nuse-worktree = false\n"))
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
+		if cfg.Branch.UseWorktree == nil || *cfg.Branch.UseWorktree {
+			t.Errorf("Branch.UseWorktree = %v, want pointer to false", cfg.Branch.UseWorktree)
+		}
+	})
 
-		if cfg.Branch.Remote != "upstream" {
-			t.Errorf("Branch.Remote = %q, want %q", cfg.Branch.Remote, "upstream")
+	t.Run("malformed file is an error naming the path", func(t *testing.T) {
+		t.Parallel()
+
+		path := writeTOML(t, "this is = not [toml")
+		_, err := config.Load(path)
+		if err == nil {
+			t.Fatal("Load: want error, got nil")
+		}
+		if got := err.Error(); !strings.Contains(got, path) {
+			t.Errorf("error %q does not name %q", got, path)
 		}
 	})
 }
@@ -257,7 +269,8 @@ func TestLoadPushPropose(t *testing.T) {
 
 	t.Run("defaults to true", func(t *testing.T) {
 		t.Parallel()
-		cfg, err := config.Load(viper.New())
+
+		cfg, err := config.Load()
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
@@ -268,9 +281,8 @@ func TestLoadPushPropose(t *testing.T) {
 
 	t.Run("can be overridden to false", func(t *testing.T) {
 		t.Parallel()
-		v := viper.New()
-		v.Set("push.propose", false)
-		cfg, err := config.Load(v)
+
+		cfg, err := config.Load(writeTOML(t, "[push]\npropose = false\n"))
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/mitchellh/go-homedir"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/config"
@@ -553,8 +554,10 @@ func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
 	base := baseDir
 	if base == "" {
 		base = filepath.Dir(repoRoot)
-	} else if expanded, err := homedir.Expand(base); err == nil {
-		base = expanded
+	} else if rest, ok := strings.CutPrefix(base, "~"); ok && (rest == "" || rest[0] == '/') {
+		if home, err := os.UserHomeDir(); err == nil {
+			base = filepath.Join(home, rest)
+		}
 	}
 
 	return filepath.Join(base, repoName+"--"+branchName)
