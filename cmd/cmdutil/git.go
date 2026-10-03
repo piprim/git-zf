@@ -49,3 +49,17 @@ func NewMainClientForCmd(
 
 	return mainClient, invokedFrom, nil
 }
+
+// StringFlag returns the value of the string flag name on cmd, or "" when cmd
+// does not define it. Handlers reached from a menu run with the *parent*
+// command (see RunMenu and the issue / branch menus), which lacks the
+// subcommand's flags: a strict cmd.Flags().GetString then fails with "flag
+// accessed but not defined". Reading through StringFlag treats a missing flag
+// as "not set", which is what an interactive run means.
+func StringFlag(cmd *cobra.Command, name string) string {
+	if f := cmd.Flags().Lookup(name); f != nil {
+		return f.Value.String()
+	}
+
+	return ""
+}

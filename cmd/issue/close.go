@@ -149,18 +149,15 @@ update the local store, update the remote tracker, then optionally delete the lo
 func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
-	baseOverride, err := cmd.Flags().GetString("base")
-	if err != nil {
-		return fmt.Errorf("read --base flag: %w", err)
-	}
-
 	deps, err := buildCloseDeps(ctx, cmd, i.appConfig)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = deps.store.Close() }()
 
-	deps.baseOverride = baseOverride
+	// Tolerant read: the `git zf issue` menu dispatches here with the parent
+	// command, which has no --base flag.
+	deps.baseOverride = cmdutil.StringFlag(cmd, "base")
 	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
 	deps.pushConfirm = pushflow.NewHuhConfirm()
 
