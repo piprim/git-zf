@@ -375,3 +375,55 @@ func TestLinkedWorktreeSharesIssues(t *testing.T) {
 		}
 	})
 }
+
+// The tracking refs say what the remote had at the last fetch. When the remote
+// no longer has an issue (ref deleted there, or the remote URL now points at
+// another host), Sync must notice and push it again.
+func TestSync_RepushesWhenTheRemoteLacksTheIssue(t *testing.T) {
+	t.Parallel()
+
+	origin := newOrigin(t)
+	alice := newRepo(t, "alice", origin)
+	ctx := t.Context()
+
+	rec, err := Create(ctx, alice, NewIssue{Title: "Shared", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := Push(ctx, alice, rec.ID); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	ref := "refs/zf/issues/" + rec.ID
+
+	t.Run("after the ref is deleted on the remote", func(t *testing.T) {
+		runGit(t, origin, "update-ref", "-d", ref)
+
+		res, err := Sync(ctx, alice)
+		if err != nil || res.Pushed != 1 {
+			t.Fatalf("Sync = %+v, %v; want 1 pushed", res, err)
+		}
+		if got := runGit(t, origin, "for-each-ref", "--format=%(refname)", "refs/zf/issues"); got != ref {
+			t.Errorf("origin issue refs = %q", got)
+		}
+	})
+
+	t.Run("after the remote URL moves to an empty repository", func(t *testing.T) {
+		moved := newOrigin(t)
+		root, _ := alice.WorkingTreeRoot()
+		runGit(t, root, "remote", "set-url", "origin", moved)
+
+		res, err := Sync(ctx, alice)
+		if err != nil || res.Pushed != 1 {
+			t.Fatalf("Sync = %+v, %v; want 1 pushed", res, err)
+		}
+		if got := runGit(t, moved, "for-each-ref", "--format=%(refname)", "refs/zf/issues"); got != ref {
+			t.Errorf("new origin issue refs = %q", got)
+		}
+	})
+
+	t.Run("the local issue is still there", func(t *testing.T) {
+		if got, err := Load(ctx, alice, rec.ID); err != nil || got.Title != "Shared" {
+			t.Errorf("Load = %+v, %v", got, err)
+		}
+	})
+}

@@ -15,7 +15,11 @@ const (
 
 // FetchIssueRefs fetches the remote's refs/zf/issues/* into the tracking
 // namespace refs/zf/remote/issues/*. Local issue refs are never touched, so an
-// issue created offline cannot be lost. No-op when no remote is configured.
+// issue created offline cannot be lost. The tracking namespace is pruned: a
+// tracking ref the remote no longer has (ref deleted there, or the remote URL
+// now points elsewhere) is removed, so IssueRefPushed stops reporting that
+// issue as pushed and the next sync pushes it again. No-op when no remote is
+// configured.
 func (c *Client) FetchIssueRefs(ctx context.Context) error {
 	remote, err := c.Remote()
 	if err != nil {
@@ -25,7 +29,7 @@ func (c *Client) FetchIssueRefs(ctx context.Context) error {
 		return nil
 	}
 
-	if err := c.runInteractive(ctx, c.root, "fetch", "--quiet", remote, issueFetchRefspec); err != nil {
+	if err := c.runInteractive(ctx, c.root, "fetch", "--quiet", "--prune", remote, issueFetchRefspec); err != nil {
 		return fmt.Errorf("fetch issue refs: %w", err)
 	}
 
