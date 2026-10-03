@@ -310,3 +310,48 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 
 	return strings.TrimSpace(string(out))
 }
+
+// Commit types are per-clone config, and a record's type comes from the
+// remote: an issue whose type this clone does not know (or that is empty or
+// malformed) must be refused with a message naming the issue and the type,
+// before any branch is created.
+func TestRunIssueStart_RepoIssueWithUnknownTypeIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for name, branchType := range map[string]string{
+		"a type this clone does not configure": "perf",
+		"an empty type":                        "",
+		"a type holding the branch separator":  "fe@t",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newStartRig(t) // configures feat and fix
+			ctx := t.Context()
+
+			rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Odd type", BranchType: branchType})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			prompter := &scriptedStartPrompter{IssueFromRepo: &rec, ConfirmBranch: true}
+			runErr := issueflow.RunIssueStart(ctx, rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
+
+			t.Run("the flow fails naming the issue, its type and the allowed ones", func(t *testing.T) {
+				if runErr == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				for _, want := range []string{rec.ShortID(), `"` + branchType + `"`, "feat, fix"} {
+					if !strings.Contains(runErr.Error(), want) {
+						t.Errorf("error %q does not mention %q", runErr.Error(), want)
+					}
+				}
+			})
+			t.Run("no branch is created", func(t *testing.T) {
+				if out := gitOutput(t, rig.dir, "branch", "--format=%(refname:short)"); out != "main" {
+					t.Errorf("branches = %q, want only main", out)
+				}
+			})
+		})
+	}
+}

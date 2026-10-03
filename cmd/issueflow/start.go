@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -204,6 +205,10 @@ func getFromRepoOrUser(
 			return nil, fmt.Errorf("repo issue picker: %w", err)
 		}
 		if rec != nil {
+			if err := checkRecordType(rec, allowedTypes); err != nil {
+				return nil, err
+			}
+
 			return issueFromRecord(rec), nil
 		}
 	}
@@ -255,6 +260,21 @@ func publishRepoIssue(ctx context.Context, c *git.Client, picked *issue.Issue) {
 	if err := issue.Push(ctx, c, id); err != nil {
 		fmt.Fprintf(errW, "warning: issue saved locally but not pushed (run `git zf issue sync` later): %v\n", err)
 	}
+}
+
+// checkRecordType refuses a repo issue whose branch type this clone cannot
+// use. The type comes from the issue's create op, written on another clone:
+// commit types are per-clone config, so it may be unknown here, and nothing
+// stops an op from carrying an empty or malformed one. Checked before the type
+// reaches the branch name.
+func checkRecordType(rec *issue.Record, allowedTypes []string) error {
+	if slices.Contains(allowedTypes, rec.BranchType) {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"issue %s has type %q, which is not one of this clone's commit types (%s): add it to commit-types in the config",
+		rec.DisplayID(), rec.BranchType, strings.Join(allowedTypes, ", "))
 }
 
 // issueFromRecord converts a repo issue to the in-flow entity. The display ID
