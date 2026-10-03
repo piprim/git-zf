@@ -16,9 +16,14 @@ import (
 )
 
 const (
-	IssueActionNameStart = "issueStart"
-	IssueActionNameList  = "issueList"
-	IssueActionNameClose = "issueClose"
+	IssueActionNameStart   = "issueStart"
+	IssueActionNameList    = "issueList"
+	IssueActionNameClose   = "issueClose"
+	IssueActionNameNew     = "issueNew"
+	IssueActionNameShow    = "issueShow"
+	IssueActionNameComment = "issueComment"
+	IssueActionNameLabel   = "issueLabel"
+	IssueActionNameSync    = "issueSync"
 
 	issueTableColWidthIssueID       = 10
 	issueTableColWidthTitle         = 28
@@ -52,6 +57,11 @@ func IssueActionSelect(action *string) *huh.Group {
 					"Start working on an issue (branch or worktree)"), IssueActionNameStart),
 				huh.NewOption("List\n"+descStyle.Render("List open issues"), IssueActionNameList),
 				huh.NewOption("Close\n"+descStyle.Render("Close an issue"), IssueActionNameClose),
+				huh.NewOption("New\n"+descStyle.Render("Create an issue in the repository"), IssueActionNameNew),
+				huh.NewOption("Show\n"+descStyle.Render("Show an issue and its comments"), IssueActionNameShow),
+				huh.NewOption("Comment\n"+descStyle.Render("Comment on an issue"), IssueActionNameComment),
+				huh.NewOption("Label\n"+descStyle.Render("Add or remove labels"), IssueActionNameLabel),
+				huh.NewOption("Sync\n"+descStyle.Render("Fetch and push repository issues"), IssueActionNameSync),
 			).
 			Value(action),
 	)

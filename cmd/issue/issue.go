@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/review"
 	"github.com/piprim/git-zf/config"
+	issuepkg "github.com/piprim/git-zf/issue"
 	_ "github.com/piprim/git-zf/tracker/forgejo" // registers forgejo + gitea adapters
 	_ "github.com/piprim/git-zf/tracker/github"  // registers github adapter
 	_ "github.com/piprim/git-zf/tracker/redmine" // registers redmine adapter
@@ -28,7 +29,11 @@ func (i Issue) GetRootCmd() *cobra.Command {
 		RunE:  i.runE,
 	}
 
-	cmd.AddCommand(i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(), review.TrackCmd(i.appConfig))
+	cmd.AddCommand(
+		i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(),
+		i.getNewCmd(), i.getShowCmd(), i.getCommentCmd(), i.getLabelCmd(), i.getSyncCmd(),
+		review.TrackCmd(i.appConfig),
+	)
 
 	return cmd
 }
@@ -48,6 +53,16 @@ func (i Issue) runE(cmd *cobra.Command, args []string) error {
 		return i.issueListRunE(cmd, issueListFlags{})
 	case tui.IssueActionNameClose:
 		return i.closeRunE(cmd, args)
+	case tui.IssueActionNameNew:
+		return i.newRunE(cmd, issuepkg.NewIssue{}, true)
+	case tui.IssueActionNameShow:
+		return i.showRunE(cmd, nil, false)
+	case tui.IssueActionNameComment:
+		return i.commentRunE(cmd, nil, "")
+	case tui.IssueActionNameLabel:
+		return i.labelRunE(cmd, nil)
+	case tui.IssueActionNameSync:
+		return i.syncRunE(cmd)
 	default:
 		fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
 
