@@ -227,7 +227,7 @@ func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, er
 	}, nil
 }
 
-func issueRowToTableRow(r store.IssueRow, includeProject bool) btable.Row {
+func issueRowToTableRow(r *store.IssueRow, includeProject bool) btable.Row {
 	row := make(btable.Row, 0, issueTableMaxCols)
 	row = append(row, r.IssueSlug)
 
@@ -236,7 +236,7 @@ func issueRowToTableRow(r store.IssueRow, includeProject bool) btable.Row {
 	}
 
 	return append(row,
-		r.Title,
+		store.TitleWithLabels(r),
 		store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
 		store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
 		store.TrackerStatusOrNA(r.TrackerStatus),
@@ -259,18 +259,29 @@ func buildIssueTableColumns(rows []store.IssueRow) []btable.Column {
 		btable.Column{Title: "Title", Width: issueTableColWidthTitle},
 		btable.Column{Title: "Branch", Width: issueTableColWidthBranch},
 		btable.Column{Title: "Local Status", Width: issueTableColWidthLocalStatus},
-		btable.Column{Title: "Tracker Status", Width: issueTableColWidthTrackerStatus},
+		btable.Column{Title: "Issue Status", Width: issueTableColWidthTrackerStatus},
 		btable.Column{Title: "Created", Width: issueTableColWidthCreated},
 	)
 }
 
-func matchesStatus(r store.IssueRow, status string) bool {
+// matchesStatus reports whether r belongs under the status tab. A row backed
+// by a repo issue (State set) follows the issue's own state; any other row
+// falls back to its branch status.
+func matchesStatus(r *store.IssueRow, status string) bool {
 	switch status {
-	case statusClosed:
-		return r.Branch != nil && r.Branch.Status == store.BranchStatusMerged
 	case statusAll:
 		return true
+	case statusClosed:
+		if r.State != "" {
+			return r.State == statusClosed
+		}
+
+		return r.Branch != nil && r.Branch.Status == store.BranchStatusMerged
 	default: // "open" and anything else
+		if r.State != "" {
+			return r.State == statusOpen
+		}
+
 		return r.Branch == nil || r.Branch.Status == store.BranchStatusInProgress
 	}
 }
@@ -282,7 +293,8 @@ func applyFilters(rows []store.IssueRow, status, text, project string, includePr
 	q := strings.ToLower(text)
 	out := make([]btable.Row, 0, len(rows))
 
-	for _, r := range rows {
+	for i := range rows {
+		r := &rows[i]
 		if !matchesStatus(r, status) {
 			continue
 		}

@@ -217,3 +217,43 @@ func TestWorktreeToggle(t *testing.T) {
 		}
 	})
 }
+
+func TestMatchesStatus_RepoIssueState(t *testing.T) {
+	merged := &store.BranchRow{Status: store.BranchStatusMerged}
+
+	for name, tc := range map[string]struct {
+		row    store.IssueRow
+		status string
+		want   bool
+	}{
+		"closed record without branch is not open":    {store.IssueRow{State: "closed"}, statusOpen, false},
+		"closed record without branch is closed":      {store.IssueRow{State: "closed"}, statusClosed, true},
+		"open record without branch is open":          {store.IssueRow{State: "open"}, statusOpen, true},
+		"open record with a merged branch stays open": {store.IssueRow{State: "open", Branch: merged}, statusOpen, true},
+		"open record with a merged branch not closed": {store.IssueRow{State: "open", Branch: merged}, statusClosed, false},
+		"any record matches all":                      {store.IssueRow{State: "closed"}, statusAll, true},
+		"row without state falls back to its branch":  {store.IssueRow{Branch: merged}, statusClosed, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := matchesStatus(&tc.row, tc.status); got != tc.want {
+				t.Errorf("matchesStatus = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIssueRowToTableRow_Labels(t *testing.T) {
+	t.Run("labels are appended to the title cell", func(t *testing.T) {
+		row := issueRowToTableRow(&store.IssueRow{IssueSlug: "1a2b3c4", Title: "Login fails", Labels: []string{"bug", "ui"}}, false)
+		if row[1] != "Login fails [bug, ui]" {
+			t.Errorf("title cell = %q", row[1])
+		}
+	})
+
+	t.Run("no labels leaves the bare title", func(t *testing.T) {
+		row := issueRowToTableRow(&store.IssueRow{IssueSlug: "1", Title: "Plain"}, false)
+		if row[1] != "Plain" {
+			t.Errorf("title cell = %q", row[1])
+		}
+	})
+}

@@ -109,6 +109,11 @@ type IssueRow struct {
 	Project       string     `json:"project"`        // tracker project / repo; empty when unknown
 	TrackerStatus *string    `json:"tracker_status"` // nil → display "N.A."
 	Branch        *BranchRow `json:"branch"`         // nil → not started locally
+	// Labels and State are set for issues stored in the repository
+	// (refs/zf/issues/*). State is "open" or "closed"; "" means the row has no
+	// repo issue and its status is derived from the branch.
+	Labels []string `json:"labels"`
+	State  string   `json:"state"`
 }
 
 // CommandHistoryRow is one row from the command_history table.

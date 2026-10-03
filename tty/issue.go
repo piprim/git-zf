@@ -17,7 +17,7 @@ func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
 		headers = append(headers, "PROJECT")
 	}
 
-	headers = append(headers, "TITLE", "BRANCH", "LOCAL STATUS", "TRACKER STATUS", "CREATED")
+	headers = append(headers, "TITLE", "BRANCH", "LOCAL STATUS", "ISSUE STATUS", "CREATED")
 
 	t := lgtable.New().
 		Headers(headers...).
@@ -29,14 +29,15 @@ func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
 			return lipgloss.NewStyle()
 		})
 
-	for _, r := range rows {
+	for i := range rows {
+		r := &rows[i]
 		cells := []string{r.IssueSlug}
 		if includeProject {
 			cells = append(cells, r.Project)
 		}
 
 		cells = append(cells,
-			r.Title,
+			store.TitleWithLabels(r),
 			store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
 			store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
 			store.TrackerStatusOrNA(r.TrackerStatus),

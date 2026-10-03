@@ -9,6 +9,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/git"
+	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tty"
@@ -26,6 +29,9 @@ type issueListInfra struct {
 	tracker tracker.Tracker
 	store   *store.Store
 	stderr  io.Writer
+	// client reads the issues stored in the repository. nil skips them, which
+	// leaves the store-only listing.
+	client *git.Client
 }
 
 func (ir Issue) getIssueListCmd() *cobra.Command {
@@ -64,10 +70,16 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		}
 	}
 
+	client, err := cmdutil.NewClientForCmd(cmd, ir.appConfig)
+	if err != nil {
+		return fmt.Errorf("open repository: %w", err)
+	}
+
 	infra := issueListInfra{
 		tracker: t,
 		store:   s,
 		stderr:  cmd.OutOrStderr(),
+		client:  client,
 	}
 
 	return runList(ctx, os.Stdout, infra, flags)
@@ -135,7 +147,61 @@ func buildRows(ctx context.Context, infra issueListInfra, status string) ([]stor
 		fmt.Fprintf(infra.stderr, "warning: tracker unavailable, falling back to local store: %v\n", err)
 	}
 
-	return buildFromStore(ctx, infra.store, status)
+	rows, err := buildFromStore(ctx, infra.store, status)
+	if err != nil || infra.client == nil {
+		return rows, err
+	}
+
+	return mergeRepoIssues(ctx, infra, rows, status)
+}
+
+// mergeRepoIssues enriches the store rows with the issues stored in the
+// repository: a row whose issue has a record gets its labels and state, and
+// every record without a branch row is appended, so the backlog shows up
+// before anyone starts a branch. status filters the appended rows on the
+// issue state ("open" / "closed"; anything else keeps all).
+func mergeRepoIssues(
+	ctx context.Context, infra issueListInfra, rows []store.IssueRow, status string,
+) ([]store.IssueRow, error) {
+	fetchIssues(ctx, infra.client)
+
+	records, warnings, err := issuepkg.List(ctx, infra.client)
+	if err != nil {
+		return nil, fmt.Errorf("list repo issues: %w", err)
+	}
+	printWarnings(infra.stderr, warnings)
+
+	byDisplayID := make(map[string]*issuepkg.Record, len(records))
+	for i := range records {
+		byDisplayID[records[i].DisplayID()] = &records[i]
+	}
+
+	out := rows
+	started := make(map[string]bool, len(out))
+	for i := range out {
+		rec, ok := byDisplayID[out[i].IssueSlug]
+		if !ok {
+			continue
+		}
+		started[rec.ID] = true
+		out[i].Labels, out[i].State, out[i].TrackerStatus = rec.Labels, rec.State, &rec.State
+	}
+
+	for i := range records {
+		rec := &records[i]
+		if started[rec.ID] {
+			continue
+		}
+		if (status == issuepkg.StateOpen || status == issuepkg.StateClosed) && rec.State != status {
+			continue
+		}
+		out = append(out, store.IssueRow{
+			IssueSlug: rec.DisplayID(), Title: rec.Title,
+			Labels: rec.Labels, State: rec.State, TrackerStatus: &rec.State,
+		})
+	}
+
+	return out, nil
 }
 
 func buildFromTracker(ctx context.Context, infra issueListInfra) ([]store.IssueRow, error) {
