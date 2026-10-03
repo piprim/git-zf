@@ -353,7 +353,7 @@ projects = ["owner/repo"]           # optional filter; required for status updat
 | `type` | `"redmine"`, `"github"`, `"forgejo"` or `"gitea"` (the last two share one adapter). |
 | `url` | Redmine: instance URL. GitHub: `https://api.github.com`, or `https://github.example.com/api/v3/` for Enterprise. Forgejo/Gitea: instance root, `/api/v1` is appended. |
 | `token` | Redmine API key; GitHub personal access token with `repo` scope; Forgejo/Gitea access token with the `issue` scope. |
-| `projects` | Optional list limiting which projects appear. Redmine: slugs or numeric IDs. GitHub/Forgejo/Gitea: `"owner/repo"`. Omitted = all issues assigned to you. **Exactly one entry is required** to update issue status on GitHub/Forgejo/Gitea, whose issue endpoints are scoped to one repository. |
+| `projects` | Optional list limiting which projects appear. Redmine: slugs or numeric IDs; every open issue of those projects is listed, whoever it is assigned to. GitHub/Forgejo/Gitea: `"owner/repo"`; only the issues assigned to you. Omitted = all issues assigned to you across the tracker. **Exactly one entry is required** to update issue status on GitHub/Forgejo/Gitea, whose issue endpoints are scoped to one repository. |
 
 **Instance behind an HTTP Basic auth gate** (a reverse proxy protecting the whole site): put the gate credentials in the URL, `url = "https://user:password@forgejo.example.org"`. They are sent as `Authorization: Basic` for the proxy and the Forgejo token is passed as the `token` query parameter instead, which Forgejo/Gitea accept unless `[security] DISABLE_QUERY_AUTH_TOKEN = true` is set. A token in the query string can end up in the proxy's access logs.
 

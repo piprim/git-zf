@@ -458,6 +458,12 @@ func TestRunIssueStart_TrackerListErrorFallsBackToManual(t *testing.T) {
 		}
 	})
 
+	t.Run("the notice does not tie the empty list to the assignee", func(t *testing.T) {
+		if got, want := prompter.TrackerErrorMessage, "no open issues found"; got != want {
+			t.Errorf("TrackerErrorMessage = %q, want %q", got, want)
+		}
+	})
+
 	t.Run("manual fallback branch was created", func(t *testing.T) {
 		exists, err := rig.client.BranchExists("ABC-8@feat@manual-fallback")
 		if err != nil {

@@ -313,7 +313,7 @@ func getFromTracker(
 	}
 
 	if listErr == nil && len(issues) == 0 {
-		errMsg = "no open issues assigned to you"
+		errMsg = "no open issues found"
 	}
 
 	if errMsg != "" {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -122,16 +123,57 @@ func TestListIssues(t *testing.T) {
 		}
 	})
 
-	t.Run("filters issues to the configured project identifiers", func(t *testing.T) {
+	for _, project := range []string{"cpro", "42"} {
+		t.Run("asks project "+project+" for its issues", func(t *testing.T) {
+			t.Parallel()
+
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /projects/{project}/issues.json", func(w http.ResponseWriter, r *http.Request) {
+				if r.PathValue("project") != project {
+					http.NotFound(w, r)
+
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				// real Redmine issue responses carry the project's id and name, never its identifier
+				fmt.Fprint(w, `{"issues":[{"id":1,"subject":"keep","status":{"id":1,"name":"New"},"project":{"id":42,"name":"C Pro"}}],"total_count":1,"offset":0,"limit":100}`)
+			})
+
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			adapter, err := redmine.New(config.IssueTrackerConfig{
+				URL:      srv.URL,
+				Token:    "k",
+				Projects: []string{project},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			issues, err := adapter.ListIssues(t.Context())
+			if err != nil {
+				t.Fatalf("ListIssues: %v", err)
+			}
+			if len(issues) != 1 {
+				t.Fatalf("got %d issues, want 1", len(issues))
+			}
+			if issues[0].ID != "1" || issues[0].Project != project {
+				t.Errorf("got issue %+v, want id=1 project=%s", issues[0], project)
+			}
+		})
+	}
+
+	t.Run("lists the open issues of a project whoever they are assigned to", func(t *testing.T) {
 		t.Parallel()
 
+		got := make(chan url.Values, 1)
 		mux := http.NewServeMux()
-		mux.HandleFunc("/issues.json", func(w http.ResponseWriter, _ *http.Request) {
+		mux.HandleFunc("GET /projects/cpro/issues.json", func(w http.ResponseWriter, r *http.Request) {
+			got <- r.URL.Query()
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"issues":[
-				{"id":1,"subject":"keep","status":{"id":1,"name":"New"},"project":{"id":1,"identifier":"foo"}},
-				{"id":2,"subject":"drop","status":{"id":1,"name":"New"},"project":{"id":2,"identifier":"bar"}}
-			],"total_count":2,"offset":0,"limit":100}`)
+			fmt.Fprint(w, `{"issues":[],"total_count":0,"offset":0,"limit":100}`)
 		})
 
 		srv := httptest.NewServer(mux)
@@ -140,34 +182,34 @@ func TestListIssues(t *testing.T) {
 		adapter, err := redmine.New(config.IssueTrackerConfig{
 			URL:      srv.URL,
 			Token:    "k",
-			Projects: []string{"foo"},
+			Projects: []string{"cpro"},
 		})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
 
-		issues, err := adapter.ListIssues(t.Context())
-		if err != nil {
+		if _, err := adapter.ListIssues(t.Context()); err != nil {
 			t.Fatalf("ListIssues: %v", err)
 		}
-		if len(issues) != 1 {
-			t.Fatalf("got %d issues, want 1", len(issues))
+
+		q := <-got
+		if q.Get("status_id") != "open" {
+			t.Errorf("status_id = %q, want %q", q.Get("status_id"), "open")
 		}
-		if issues[0].ID != "1" || issues[0].Project != "foo" {
-			t.Errorf("got issue %+v, want id=1 project=foo", issues[0])
+		if q.Has("assigned_to_id") {
+			t.Errorf("assigned_to_id = %q, want it absent", q.Get("assigned_to_id"))
 		}
 	})
 
-	t.Run("falls back to numeric project ID when identifier is empty", func(t *testing.T) {
+	t.Run("merges the issues of every configured project", func(t *testing.T) {
 		t.Parallel()
 
+		ids := map[string]int{"foo": 1, "bar": 2}
 		mux := http.NewServeMux()
-		mux.HandleFunc("/issues.json", func(w http.ResponseWriter, _ *http.Request) {
+		mux.HandleFunc("GET /projects/{project}/issues.json", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			// project has only a numeric id; identifier is empty
-			fmt.Fprint(w, `{"issues":[
-				{"id":1,"subject":"x","status":{"id":1,"name":"New"},"project":{"id":42,"identifier":""}}
-			],"total_count":1,"offset":0,"limit":100}`)
+			fmt.Fprintf(w, `{"issues":[{"id":%d,"subject":"x","status":{"id":1,"name":"New"}}],"total_count":1,"offset":0,"limit":100}`,
+				ids[r.PathValue("project")])
 		})
 
 		srv := httptest.NewServer(mux)
@@ -176,7 +218,7 @@ func TestListIssues(t *testing.T) {
 		adapter, err := redmine.New(config.IssueTrackerConfig{
 			URL:      srv.URL,
 			Token:    "k",
-			Projects: []string{"42"},
+			Projects: []string{"foo", "bar"},
 		})
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -186,8 +228,60 @@ func TestListIssues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ListIssues: %v", err)
 		}
-		if len(issues) != 1 || issues[0].Project != "42" {
-			t.Errorf("got %+v, want one issue with Project=42", issues)
+		if len(issues) != 2 {
+			t.Fatalf("got %d issues, want 2", len(issues))
+		}
+		if issues[0].ID != "1" || issues[0].Project != "foo" || issues[1].ID != "2" || issues[1].Project != "bar" {
+			t.Errorf("got %+v, want id=1 project=foo then id=2 project=bar", issues)
+		}
+	})
+
+	t.Run("names the project whose request fails", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.NotFoundHandler())
+		defer srv.Close()
+
+		adapter, err := redmine.New(config.IssueTrackerConfig{
+			URL:      srv.URL,
+			Token:    "k",
+			Projects: []string{"nope"},
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		_, err = adapter.ListIssues(t.Context())
+		if err == nil || !strings.Contains(err.Error(), `"nope"`) {
+			t.Errorf("err = %v, want it to name project \"nope\"", err)
+		}
+	})
+
+	t.Run("lists the issues assigned to the user across the tracker when no project is configured", func(t *testing.T) {
+		t.Parallel()
+
+		got := make(chan url.Values, 1)
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /issues.json", func(w http.ResponseWriter, r *http.Request) {
+			got <- r.URL.Query()
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"issues":[],"total_count":0,"offset":0,"limit":100}`)
+		})
+
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		adapter, err := redmine.New(config.IssueTrackerConfig{URL: srv.URL, Token: "k"})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		if _, err := adapter.ListIssues(t.Context()); err != nil {
+			t.Fatalf("ListIssues: %v", err)
+		}
+
+		if q := <-got; q.Get("assigned_to_id") != "me" || q.Get("status_id") != "open" {
+			t.Errorf("query = %v, want assigned_to_id=me and status_id=open", q)
 		}
 	})
 

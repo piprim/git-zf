@@ -44,8 +44,10 @@ type scriptedStartPrompter struct {
 	ConflictBranch *branch.Branch
 	ConflictAbort  bool
 
-	// Counter set by NotifyTrackerError so tests can assert "fallback fired".
+	// Counter and last message set by NotifyTrackerError so tests can assert
+	// "fallback fired" and what the operator was told.
 	TrackerErrorNotifications int
+	TrackerErrorMessage       string
 
 	// BaseBranch picker return value and error injection.
 	BaseBranch    string
@@ -91,8 +93,9 @@ func (s *scriptedStartPrompter) PickIssueFromRepo(_ context.Context, records []i
 	return s.IssueFromRepo, s.IssueFromRepoErr
 }
 
-func (s *scriptedStartPrompter) NotifyTrackerError(_ context.Context, _ string) error {
+func (s *scriptedStartPrompter) NotifyTrackerError(_ context.Context, message string) error {
 	s.TrackerErrorNotifications++
+	s.TrackerErrorMessage = message
 
 	return s.TrackerErrorErr
 }

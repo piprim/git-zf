@@ -2,12 +2,14 @@ package redmine
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -64,12 +66,37 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 	return &redmineAdapter{client: c, cfg: cfg, http: &http.Client{}}, nil
 }
 
-// ListIssues fetches open issues assigned to the authenticated user.
+// ListIssues fetches open issues. With cfg.Projects set, it asks each project
+// (a slug or a numeric ID) for its open issues, whoever they are assigned to.
+// Without projects, it fetches the open issues assigned to the authenticated
+// user across the whole tracker.
 func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
-	base := strings.TrimRight(a.cfg.URL, "/")
-	url := fmt.Sprintf("%s/issues.json?assigned_to_id=me&status_id=open&limit=100", base)
+	if len(a.cfg.Projects) == 0 {
+		return a.fetchIssues(ctx, "/issues.json?assigned_to_id=me&status_id=open&limit=100", "")
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	var out []tracker.Issue
+
+	for _, p := range a.cfg.Projects {
+		issues, err := a.fetchIssues(ctx, "/projects/"+url.PathEscape(p)+"/issues.json?status_id=open&limit=100", p)
+		if err != nil {
+			return nil, fmt.Errorf("project %q: %w", p, err)
+		}
+
+		out = append(out, issues...)
+	}
+
+	return out, nil
+}
+
+// fetchIssues GETs one page of issues from path. Every issue is reported under
+// project; when project is empty, the name comes from the issue itself.
+//
+// ponytail: one page of 100; walk offset/total_count if a listing outgrows it.
+func (a *redmineAdapter) fetchIssues(ctx context.Context, path, project string) ([]tracker.Issue, error) {
+	endpoint := strings.TrimRight(a.cfg.URL, "/") + path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("build redmine issues request: %w", err)
 	}
@@ -92,20 +119,11 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 		return nil, fmt.Errorf("decode redmine issues: %w", err)
 	}
 
-	projectsSet := toRedmineProjectsSet(a.cfg.Projects)
-
 	result := make([]tracker.Issue, 0, len(payload.Issues))
 	for _, iss := range payload.Issues {
 		statusName := ""
 		if iss.Status != nil {
 			statusName = iss.Status.Name
-		}
-
-		proj := redmineProjectName(iss.Project)
-		if projectsSet != nil {
-			if _, ok := projectsSet[proj]; !ok {
-				continue
-			}
 		}
 
 		result = append(result, tracker.Issue{
@@ -114,7 +132,7 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 			Subject:     iss.Subject,
 			Description: iss.Description,
 			Status:      statusName,
-			Project:     proj,
+			Project:     cmp.Or(project, redmineProjectName(iss.Project)),
 		})
 	}
 
@@ -201,9 +219,9 @@ func (a *redmineAdapter) putIssue(ctx context.Context, issueID, what string, pay
 	}
 
 	base := strings.TrimRight(a.cfg.URL, "/")
-	url := fmt.Sprintf("%s/issues/%s.json", base, issueID)
+	endpoint := fmt.Sprintf("%s/issues/%s.json", base, issueID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return fmt.Errorf("build %s update request: %w", what, err)
 	}
@@ -235,9 +253,9 @@ func (a *redmineAdapter) putIssue(ctx context.Context, issueID, what string, pay
 // HTTP 404 → tracker.ErrIssueNotFound; other failures are wrapped.
 func (a *redmineAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
 	base := strings.TrimRight(a.cfg.URL, "/")
-	url := fmt.Sprintf("%s/issues/%s.json", base, issueID)
+	endpoint := fmt.Sprintf("%s/issues/%s.json", base, issueID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return false, fmt.Errorf("redmine: build request: %w", err)
 	}
@@ -271,21 +289,6 @@ func (a *redmineAdapter) IsIssueClosed(ctx context.Context, issueID string) (boo
 	}
 
 	return payload.Issue.Status.IsClosed, nil
-}
-
-// toRedmineProjectsSet builds a lookup set from cfg.Projects. Returns nil when
-// the slice is empty so callers can short-circuit the filter.
-func toRedmineProjectsSet(list []string) map[string]struct{} {
-	if len(list) == 0 {
-		return nil
-	}
-
-	out := make(map[string]struct{}, len(list))
-	for _, p := range list {
-		out[p] = struct{}{}
-	}
-
-	return out
 }
 
 // redmineProjectName picks the slug, then the display name, then the numeric
