@@ -63,13 +63,18 @@ On an issue branch the form is pre-filled from the branch name (see [Commit auto
 $ git zf issue start
 $ git zf issue list
 $ git zf issue close
+$ git zf issue new              # create an issue in the repository, no branch
+$ git zf issue show [<id>]      # show an issue and its comments
+$ git zf issue comment [<id>]   # comment on an issue
+$ git zf issue label [<id> +add -remove …]
+$ git zf issue sync             # fetch, merge and push the repository issues
 ```
 
-**`issue start`** — start work on an issue: fetch your open issues from the configured tracker (Redmine, GitHub, Forgejo/Gitea), or enter ID, title and type by hand. A branch named `{issue-id}@{type}@{slug}` (see [Branch naming](#branch-naming)) is created and checked out, **or a git worktree is created** so the main working tree stays untouched. A prompt asks which; pin the choice with `branch.use-worktree` in the config. When a worktree is created the command prints its path and a `cd` hint, since the shell cannot change directory for you. With a tracker configured, you can move the issue to "In Progress" in the same step. Branch and worktree state is tracked in a local SQLite store shared by all worktrees of the repository.
+**`issue start`** — start work on an issue: fetch your open issues from the configured tracker (Redmine, GitHub, Forgejo/Gitea), or take the manual path: pick an open issue stored in the repository, or fill the form. Leaving the form's Issue ID empty creates a new issue in the repository; typing one (for a tracker git-zf does not talk to) uses it as is. A branch named `{issue-id}@{type}@{slug}` (see [Branch naming](#branch-naming)) is created and checked out, **or a git worktree is created** so the main working tree stays untouched. A prompt asks which; pin the choice with `branch.use-worktree` in the config. When a worktree is created the command prints its path and a `cd` hint, since the shell cannot change directory for you. With a tracker configured, you can move the issue to "In Progress" in the same step. Branch and worktree state is tracked in a local SQLite store shared by all worktrees of the repository.
 
 Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
-**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured; the local store is the fallback. Columns: Issue ID · [Project] · Title · Branch · Local Status · Tracker Status · Created. `∅` means no local branch yet; `N.A.` means no tracker configured.
+**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured. Otherwise the list is the issues stored in the repository plus the branches of the local store. Columns: Issue ID · [Project] · Title · Branch · Local Status · Issue Status · Created. Labels follow the title in brackets. `∅` means no local branch yet; `N.A.` means the row has neither a tracker nor a repository issue.
 
 In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycles the status filter (Open → Closed → All), **`p`** opens the project picker, **`q`** quits. Flags: `--status open|closed|all`, `--stdout` (plain table), `--json`.
 
@@ -78,7 +83,7 @@ In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycle
 1. **Reviewer commits** left on `<IssueID>@review` by an approved or rejected review are incorporated (fast-forward or merge); a conflicting merge refuses with a hint to run `git zf review sync`. A parent issue with open sub-tasks is refused.
 2. **Conflict dry-run** via `git merge-tree` against the target (`--base <branch>` overrides the default: the parent branch for a sub-task, otherwise the configured base). Conflicts abort the command before anything is touched.
 3. **Pick a merge strategy** — Rebase (default), Squash or Classic (see [Merge strategies](#merge-strategies)) — and compose the final commit in the commitizen form, pre-filled from the issue.
-4. **Confirm.** The branch is marked `merged` and the issue `closed` in the local store.
+4. **Confirm.** The branch is marked `merged` and the issue `closed` in the local store. An issue stored in the repository is closed there too, and pushed.
 5. **Tracker status** picker, if a tracker is configured (or skip).
 6. **Worktree removal**, if the branch was started in one. Never forced: a worktree with modified or untracked files is left in place. A `cd` hint back to the main checkout is printed when you ran the command from inside the removed worktree.
 7. **Branch deletion**, locally and on the remote, then a push proposal. Classic uses `git branch -d`; Squash and Rebase need `-D` since neither preserves ancestry. A branch still held by a kept worktree is not deleted.
@@ -86,6 +91,38 @@ In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycle
 The picker also lists branches known only from fetched `refs/zf/branches/*` refs, so a teammate can close an issue they did not start: the branch is materialized from `origin/<branch>` and tracked automatically.
 
 Closing works from inside a linked worktree. Rebase runs its steps in the worktree holding the branch and fast-forwards the base from the main checkout; Squash and Classic run in the main checkout. Git refuses the close when the *base* branch is checked out in another linked worktree.
+
+#### Issues in the repository
+
+Without a tracker, issues live in the repository itself, under
+`refs/zf/issues/`, and travel with `git zf issue sync`. A teammate with a
+fresh clone sees the same backlog, descriptions and comments, with no account
+anywhere.
+
+```
+$ git zf issue new --title "Login fails on Safari" --type fix --label bug
+Created issue 1a2b3c4: Login fails on Safari
+$ git zf issue comment 1a2b3c4 -m "Reproduced on 17.4"
+$ git zf issue label 1a2b3c4 +ui -bug
+$ git zf issue show 1a2b3c4
+$ git zf issue start            # pick it, the branch is 1a2b3c4@fix@login-fails-on-safari
+```
+
+- **`issue new`** opens a form (title, type, description, labels). Any flag
+  (`--title`, `--type`, `--description`, `--label`, repeatable) skips it.
+- **`issue show`**, **`issue comment`** and **`issue label`** take the issue ID
+  shown by `issue list`: the 7-character ID, the full one, or any unique prefix
+  of at least 4 characters. Without an ID they open a picker. `show --json`
+  prints the record; `comment -m` skips the form.
+- **`issue sync`** fetches the issues from the remote, merges the ones changed
+  on both sides and pushes yours. Each command above also pushes its own
+  change, so `sync` is mostly for bringing in other people's.
+
+Two people can comment on or relabel the same issue offline: both changes are
+kept when they sync. Nothing is ever force-pushed. The storage format is
+described in [docs/issue-refs.md](docs/issue-refs.md).
+
+Syncing these issues with Redmine, GitHub or Forgejo is not available yet.
 
 #### Sub-tasks
 

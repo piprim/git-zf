@@ -75,6 +75,31 @@ prompt:
     git zf branch prune --yes
 
 
+### Testing the repo issues
+
+Issues stored in the repository (`refs/zf/issues/*`) are tested at three
+levels, all on real on-disk repos:
+
+- `issue/record_test.go` — the fold (pure, no git).
+- `git/issue_ref_test.go`, `git/issue_ref_sync_test.go` — plumbing: write and
+  read a chain, fetch into `refs/zf/remote/issues/*`, reconcile, push.
+- `issue/repo_test.go` — the glue (`Create`, `Append`, `Load`, `Resolve`,
+  `Sync`), including two clones diverging and merging.
+- `cmd/issue/record_e2e_test.go`, `record_ops_e2e_test.go` — the `new`, `show`,
+  `comment`, `label` and `sync` commands, driven by a `scriptedRecordPrompter`
+  on a `recordRig` (`newRecordRig(t, user, origin)`; pass `newBareOrigin(t)` to
+  two rigs to get two clones of one remote).
+
+    mise exec -- go test ./issue/... ./git/... -run "TestFold|TestIssueRef_|TestPushFetchSync" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestRun(New|Show|Comment|Label|Sync)" -v
+
+The start, close and list integrations live next to their flows:
+`start_record_e2e_test.go`, `close_record_e2e_test.go`, `list_record_test.go`.
+
+When adding an op type, add its constant and its `Fold` case in
+`issue/record.go` with a table case in `TestFold`. Unknown types must keep
+being skipped: an older binary reads refs written by a newer one.
+
 ### Testing the menus
 
 `git zf` (no subcommand) and `git zf review` open an action menu built on
@@ -129,7 +154,7 @@ Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.to
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (2509 symbols, 12415 relationships, 212 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (2768 symbols, 14077 relationships, 234 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
