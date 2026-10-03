@@ -174,16 +174,15 @@ func (c *Client) ListIssueIDs(ctx context.Context) ([]string, error) {
 func (c *Client) ReadIssueCommits(ctx context.Context, id string) ([]IssueCommit, error) {
 	ref := issueRefPrefix + id
 
-	tip, err := c.IssueTip(ctx, id)
+	out, err := c.output(ctx, "rev-list", "--topo-order", "--reverse", "--parents", ref)
 	if err != nil {
-		return nil, err
-	}
-	if tip == "" {
-		return nil, fmt.Errorf("%s: %w", id, ErrIssueNotFound)
-	}
+		// Only on failure: tell "no such issue" from a chain that cannot be
+		// read. Checking the ref first would cost one more git process per
+		// issue on every listing.
+		if tip, tipErr := c.IssueTip(ctx, id); tipErr == nil && tip == "" {
+			return nil, fmt.Errorf("%s: %w", id, ErrIssueNotFound)
+		}
 
-	out, err := c.output(ctx, "rev-list", "--topo-order", "--reverse", "--parents", tip)
-	if err != nil {
 		return nil, fmt.Errorf("rev-list %s: %w", ref, err)
 	}
 

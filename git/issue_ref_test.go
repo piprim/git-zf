@@ -169,3 +169,32 @@ func TestIssueRef_Signing(t *testing.T) {
 		}
 	})
 }
+
+// ReadIssueCommits must tell "no such issue" from a chain it cannot read.
+func TestIssueRef_ReadErrors(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newDiskRepo(t)
+	ctx := t.Context()
+
+	t.Run("an unknown issue is ErrIssueNotFound", func(t *testing.T) {
+		_, err := client.ReadIssueCommits(ctx, "0000000000000000000000000000000000000001")
+		if !errors.Is(err, ErrIssueNotFound) {
+			t.Errorf("err = %v, want ErrIssueNotFound", err)
+		}
+	})
+
+	t.Run("a ref that points at a blob is an error, but not ErrIssueNotFound", func(t *testing.T) {
+		out, err := exec.CommandContext(ctx, "git", "-C", dir, "hash-object", "-w", "--stdin").Output()
+		if err != nil {
+			t.Fatalf("hash-object: %v", err)
+		}
+		blob := strings.TrimSpace(string(out))
+		mustGit(t, dir, "update-ref", "refs/zf/issues/"+blob, blob)
+
+		_, err = client.ReadIssueCommits(ctx, blob)
+		if err == nil || errors.Is(err, ErrIssueNotFound) {
+			t.Errorf("err = %v, want a read error distinct from ErrIssueNotFound", err)
+		}
+	})
+}

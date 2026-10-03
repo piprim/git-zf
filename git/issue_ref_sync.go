@@ -47,6 +47,19 @@ func (c *Client) ReconcileIssueRefs(ctx context.Context, mergePayload []byte) (i
 		return 0, fmt.Errorf("for-each-ref %s: %w", issueRemoteRefPrefix, err)
 	}
 
+	// One listing of the local tips, instead of one git process per issue.
+	localOut, err := c.output(ctx, "for-each-ref", "--format=%(objectname) %(refname)", issueRefPrefix)
+	if err != nil {
+		return 0, fmt.Errorf("for-each-ref %s: %w", issueRefPrefix, err)
+	}
+
+	localTips := make(map[string]string)
+	for _, line := range strings.Split(localOut, "\n") {
+		if tip, name, ok := strings.Cut(line, " "); ok {
+			localTips[strings.TrimPrefix(name, issueRefPrefix)] = tip
+		}
+	}
+
 	merged := 0
 	for _, line := range strings.Split(out, "\n") {
 		remoteTip, name, ok := strings.Cut(line, " ")
@@ -56,7 +69,7 @@ func (c *Client) ReconcileIssueRefs(ctx context.Context, mergePayload []byte) (i
 
 		id := strings.TrimPrefix(name, issueRemoteRefPrefix)
 
-		didMerge, err := c.reconcileIssueRef(ctx, id, remoteTip, mergePayload)
+		didMerge, err := c.reconcileIssueRef(ctx, id, localTips[id], remoteTip, mergePayload)
 		if err != nil {
 			return merged, fmt.Errorf("reconcile issue %s: %w", id, err)
 		}
@@ -68,13 +81,12 @@ func (c *Client) ReconcileIssueRefs(ctx context.Context, mergePayload []byte) (i
 	return merged, nil
 }
 
-func (c *Client) reconcileIssueRef(ctx context.Context, id, remoteTip string, mergePayload []byte) (bool, error) {
+// reconcileIssueRef reconciles one issue. local is the current tip of its
+// local ref, "" when the ref does not exist.
+func (c *Client) reconcileIssueRef(
+	ctx context.Context, id, local, remoteTip string, mergePayload []byte,
+) (bool, error) {
 	ref := issueRefPrefix + id
-
-	local, err := c.IssueTip(ctx, id)
-	if err != nil {
-		return false, err
-	}
 
 	if local == "" {
 		_, err := c.output(ctx, "update-ref", ref, remoteTip, ZeroHash.String())
