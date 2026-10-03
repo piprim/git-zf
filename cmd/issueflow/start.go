@@ -132,8 +132,14 @@ func pickIssue(
 	prompter StartPrompter,
 	allowedBranchTypes []string,
 ) (*issue.Issue, error) {
+	// manual is the non-tracker path: an open issue stored in the repository,
+	// a new one, or an ID typed by hand.
+	manual := func() (*issue.Issue, error) {
+		return getFromRepoOrUser(ctx, deps.Client, prompter, allowedBranchTypes)
+	}
+
 	if deps.Tracker == nil {
-		got, err := getFromUser(ctx, prompter, allowedBranchTypes)
+		got, err := manual()
 		if err != nil {
 			return nil, fmt.Errorf("issue from user: %w", err)
 		}
@@ -147,7 +153,7 @@ func pickIssue(
 	}
 
 	if !useTracker {
-		got, err := getFromUser(ctx, prompter, allowedBranchTypes)
+		got, err := manual()
 		if err != nil {
 			return nil, fmt.Errorf("issue from user: %w", err)
 		}
@@ -155,12 +161,83 @@ func pickIssue(
 		return got, nil
 	}
 
-	got, err := getFromTracker(ctx, prompter, deps.Tracker, allowedBranchTypes)
+	got, err := getFromTracker(ctx, prompter, deps.Tracker, allowedBranchTypes, manual)
 	if err != nil {
 		return nil, fmt.Errorf("issue from tracker: %w", err)
 	}
 
 	return got, nil
+}
+
+// getFromRepoOrUser is the manual path. It offers the open issues stored in
+// the repository, when there are any; otherwise, or when the operator picks
+// "New issue…", it opens the manual form. A form answer with an empty issue ID
+// creates a new issue in the repository and uses its ID; a typed ID is used as
+// is, with no record (an issue living in a tracker git-zf does not talk to).
+func getFromRepoOrUser(
+	ctx context.Context, c *git.Client, p StartPrompter, allowedTypes []string,
+) (*issue.Issue, error) {
+	errW := c.IO().Err
+
+	if _, err := issue.Fetch(ctx, c); err != nil {
+		fmt.Fprintf(errW, "warning: could not fetch issues, using local data: %v\n", err)
+	}
+
+	records, warnings, err := issue.List(ctx, c)
+	if err != nil {
+		return nil, fmt.Errorf("list repo issues: %w", err)
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(errW, w)
+	}
+
+	open := make([]issue.Record, 0, len(records))
+	for i := range records {
+		if records[i].State == issue.StateOpen {
+			open = append(open, records[i])
+		}
+	}
+
+	if len(open) > 0 {
+		rec, err := p.PickIssueFromRepo(ctx, open)
+		if err != nil {
+			return nil, fmt.Errorf("repo issue picker: %w", err)
+		}
+		if rec != nil {
+			return issueFromRecord(rec), nil
+		}
+	}
+
+	got, err := getFromUser(ctx, p, allowedTypes)
+	if err != nil || got == nil || got.ID != "" {
+		return got, err
+	}
+
+	// Check the title before writing anything: an issue whose branch cannot
+	// be named would be left behind as an orphan.
+	if branch.Slug(got.Subject) == "" {
+		return nil, fmt.Errorf("title %q produces an empty branch name", got.Subject)
+	}
+
+	rec, err := issue.Create(ctx, c, issue.NewIssue{Title: got.Subject, BranchType: got.Type})
+	if err != nil {
+		return nil, fmt.Errorf("create repo issue: %w", err)
+	}
+	if err := issue.Push(ctx, c, rec.ID); err != nil {
+		fmt.Fprintf(errW, "warning: issue saved locally but not pushed (run `git zf issue sync` later): %v\n", err)
+	}
+
+	return issueFromRecord(&rec), nil
+}
+
+// issueFromRecord converts a repo issue to the in-flow entity. The display ID
+// goes into the branch name; RecordID keeps the unambiguous full ID.
+func issueFromRecord(rec *issue.Record) *issue.Issue {
+	return &issue.Issue{
+		Type:     rec.BranchType,
+		RecordID: rec.ID,
+		Issue:    tracker.Issue{ID: rec.DisplayID(), Subject: rec.Title, Description: rec.Description},
+	}
 }
 
 // getFromUser drives the manual issue-input flow via p.PickIssueFromUser.
@@ -176,9 +253,12 @@ func getFromUser(ctx context.Context, p Prompter, allowedTypes []string) (*issue
 }
 
 // getFromTracker fetches issues via t.ListIssues, then either falls back to
-// the manual path (PickIssueFromUser) on error/empty-list, or drives the
+// the manual path (the manual callback) on error/empty-list, or drives the
 // tracker picker (PickIssueFromTracker). All form opening is delegated to p.
-func getFromTracker(ctx context.Context, p Prompter, t tracker.Tracker, allowedTypes []string) (*issue.Issue, error) {
+func getFromTracker(
+	ctx context.Context, p Prompter, t tracker.Tracker, allowedTypes []string,
+	manual func() (*issue.Issue, error),
+) (*issue.Issue, error) {
 	errMsg := ""
 	issues, listErr := t.ListIssues(ctx)
 	if listErr != nil {
@@ -194,7 +274,7 @@ func getFromTracker(ctx context.Context, p Prompter, t tracker.Tracker, allowedT
 			return nil, fmt.Errorf("notify tracker error: %w", err)
 		}
 
-		return getFromUser(ctx, p, allowedTypes)
+		return manual()
 	}
 
 	out, err := p.PickIssueFromTracker(ctx, issues, allowedTypes)
@@ -308,7 +388,7 @@ func createFlow(
 		}
 	}
 
-	if err := writePushBranchRef(ctx, deps, b.IssueID(), branchName, trackerType); err != nil {
+	if err := writePushBranchRef(ctx, deps, b, trackerType, picked.RecordID); err != nil {
 		fmt.Fprintf(deps.Client.IO().Err, "warning: write branch ref: %v\n", err)
 	}
 
@@ -566,13 +646,17 @@ func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
 // writePushBranchRef writes a BranchRef to refs/zf/branches/<issueSlug> and
 // pushes it to the remote (best-effort). Called after every successful branch
 // or worktree creation so the parent-child relationship is available cross-machine.
-func writePushBranchRef(ctx context.Context, deps StartDeps, issueSlug, branchName, trackerType string) error {
+func writePushBranchRef(
+	ctx context.Context, deps StartDeps, b *branch.Branch, trackerType, recordID string,
+) error {
+	issueSlug := b.IssueID()
 	ref := git.BranchRef{
 		IssueSlug:   issueSlug,
-		BranchName:  branchName,
+		BranchName:  b.Name(),
 		ParentSlug:  deps.Flags.ParentIssueSlug,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 		TrackerType: trackerType,
+		IssueID:     recordID,
 	}
 	if _, err := deps.Client.WriteBranchRef(ctx, issueSlug, ref); err != nil {
 		return err

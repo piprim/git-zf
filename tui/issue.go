@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -67,45 +66,25 @@ func IssueActionSelect(action *string) *huh.Group {
 	)
 }
 
+// IssueInput is the manual issue form of `issue start` / `branch new`. An
+// empty issue ID means "create a new issue in the repository": the caller
+// then assigns the new record's ID.
 func IssueInput(issueID, title, branchType *string, allowedBranchTypes []string) *huh.Group {
-	typeOpts := make([]huh.Option[string], 0, len(allowedBranchTypes))
-	for _, allowed := range allowedBranchTypes {
-		typeOpts = append(typeOpts, huh.NewOption(allowed, allowed))
-	}
-	if len(typeOpts) == 0 {
-		typeOpts = []huh.Option[string]{huh.NewOption("feat", "feat")}
-	}
-
-	group := huh.NewGroup(
+	return huh.NewGroup(
 		huh.NewInput().
-			Title("Issue ID:").
+			Title("Issue ID (leave empty to create a new repo issue):").
 			Placeholder("ABC-42").
-			Validate(func(s string) error {
-				if s == "" {
-					return errors.New("required")
-				}
-
-				return nil
-			}).
 			Value(issueID),
 		huh.NewInput().
 			Title("Title:").
 			Placeholder("Short description of the issue").
-			Validate(func(s string) error {
-				if s == "" {
-					return errors.New("required")
-				}
-
-				return nil
-			}).
+			Validate(requiredText).
 			Value(title),
 		huh.NewSelect[string]().
 			Title("Type:").
-			Options(typeOpts...).
+			Options(branchTypeOptions(allowedBranchTypes)...).
 			Value(branchType),
 	)
-
-	return group
 }
 
 func IssueConfirm(confirmTitle string, confirmed *bool) *huh.Group {

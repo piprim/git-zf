@@ -54,6 +54,12 @@ type StartPrompter interface {
 	// getFromUser and getFromTracker.
 	Prompter
 
+	// PickIssueFromRepo opens the picker over the open issues stored in the
+	// repository. Called only when at least one exists. A nil record with a
+	// nil error means the operator chose "New issue…": the flow falls through
+	// to PickIssueFromUser.
+	PickIssueFromRepo(ctx context.Context, records []issuepkg.Record) (*issuepkg.Record, error)
+
 	// PickUseTracker drives the "fetch from tracker?" toggle. Called only when
 	// cfg.IssueTracker.Type != "". trackerFirst controls the pre-selected
 	// option (true for `issue start`, false for `branch new`).
@@ -131,6 +137,23 @@ func (p *HuhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tr
 	got.TrackerType = pickedIssue.TrackerType
 
 	return &got, nil
+}
+
+func (*HuhStartPrompter) PickIssueFromRepo(
+	ctx context.Context, records []issuepkg.Record,
+) (*issuepkg.Record, error) {
+	var id string
+	if err := huh.NewForm(tui.IssueRecordPicker(records, &id, true)).RunWithContext(ctx); err != nil {
+		return nil, fmt.Errorf("repo issue picker: %w", err)
+	}
+
+	for i := range records {
+		if records[i].ID == id {
+			return &records[i], nil
+		}
+	}
+
+	return nil, nil // tui.IssueRecordNew
 }
 
 func (p *HuhStartPrompter) NotifyTrackerError(ctx context.Context, message string) error {

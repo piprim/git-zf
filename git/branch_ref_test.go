@@ -198,3 +198,32 @@ func TestListBranchRefs(t *testing.T) {
 		}
 	})
 }
+
+func TestBranchRef_IssueID(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newDiskRepo(t)
+	id := "0123456789abcdef0123456789abcdef01234567"
+
+	t.Run("IssueID round-trips", func(t *testing.T) {
+		in := BranchRef{IssueSlug: "0123456", BranchName: "0123456@feat@x", CreatedAt: "2026-10-03T10:00:00Z", IssueID: id}
+		if _, err := client.WriteBranchRef(t.Context(), "0123456", in); err != nil {
+			t.Fatalf("WriteBranchRef: %v", err)
+		}
+		got, err := client.ReadBranchRef(t.Context(), "0123456")
+		if err != nil || got == nil || got.IssueID != id {
+			t.Errorf("ReadBranchRef = %+v, %v", got, err)
+		}
+	})
+
+	t.Run("a ref written without IssueID reads back empty", func(t *testing.T) {
+		in := BranchRef{IssueSlug: "OLD-1", BranchName: "OLD-1@feat@x", CreatedAt: "2026-10-03T10:00:00Z"}
+		if _, err := client.WriteBranchRef(t.Context(), "OLD-1", in); err != nil {
+			t.Fatalf("WriteBranchRef: %v", err)
+		}
+		got, err := client.ReadBranchRef(t.Context(), "OLD-1")
+		if err != nil || got == nil || got.IssueID != "" {
+			t.Errorf("ReadBranchRef = %+v, %v", got, err)
+		}
+	})
+}

@@ -20,6 +20,13 @@ type scriptedStartPrompter struct {
 	IssueFromUser    *issuepkg.Issue
 	IssueFromTracker *issuepkg.Issue
 
+	// IssueFromRepo is returned by PickIssueFromRepo; nil means "New issue…".
+	IssueFromRepo    *issuepkg.Record
+	IssueFromRepoErr error
+	// CapturedRepoRecords records what PickIssueFromRepo was offered; nil ⇒
+	// the picker was never opened.
+	CapturedRepoRecords []issuepkg.Record
+
 	// Toggle return values.
 	UseTracker  bool
 	UseWorktree bool
@@ -76,6 +83,12 @@ func (s *scriptedStartPrompter) PickIssueFromTracker(_ context.Context, _ []trac
 	}
 
 	return s.IssueFromTracker, nil
+}
+
+func (s *scriptedStartPrompter) PickIssueFromRepo(_ context.Context, records []issuepkg.Record) (*issuepkg.Record, error) {
+	s.CapturedRepoRecords = records
+
+	return s.IssueFromRepo, s.IssueFromRepoErr
 }
 
 func (s *scriptedStartPrompter) NotifyTrackerError(_ context.Context, _ string) error {

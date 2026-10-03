@@ -29,5 +29,9 @@ type IssueStartFlags struct {
 // store.Issue (persisted).
 type Issue struct {
 	Type string // feat, fix, doc, etc…
+	// RecordID is the full ID of the repo issue (refs/zf/issues/<RecordID>)
+	// this entity was built from; "" when the issue has no record (tracker
+	// issue, or an ID typed by hand).
+	RecordID string
 	tracker.Issue
 }

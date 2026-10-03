@@ -27,6 +27,11 @@ type BranchRef struct {
 	// tracker status update. omitempty keeps pre-existing refs backward-
 	// compatible — an absent field unmarshals to "" (treated as "manual").
 	TrackerType string `json:"tracker_type,omitempty"`
+	// IssueID is the full ID of the repo issue (refs/zf/issues/<IssueID>) the
+	// branch works on. The branch name carries only a 7-character short ID,
+	// which may be ambiguous; this field is not. Empty when the issue has no
+	// record in the repository.
+	IssueID string `json:"issue_id,omitempty"`
 }
 
 // WriteBranchRef writes a BranchRef as a git blob and updates the local ref
