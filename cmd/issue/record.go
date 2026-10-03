@@ -165,10 +165,16 @@ func resolveRecord(
 // or one without an issue ID (tracker issue, hand-typed ID) is a no-op. Like
 // the rest of updateClosedStatus, a failure is a warning: the merge already
 // landed.
+//
+// The issue refs are fetched first: whoever closes the branch may never have
+// run an issue command on this clone (a teammate or reviewer closing someone
+// else's branch knows the issue only through the branch ref).
 func closeRepoIssue(ctx context.Context, client *git.Client, ref *git.BranchRef) {
 	if ref == nil || ref.IssueID == "" {
 		return
 	}
+
+	fetchIssues(ctx, client)
 
 	id := ref.IssueID
 	op := &issuepkg.Op{Type: issuepkg.OpSetState, Value: issuepkg.StateClosed}
