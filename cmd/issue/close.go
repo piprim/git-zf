@@ -699,6 +699,8 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.Branc
 		}
 	}
 
+	closeRepoIssue(ctx, deps.client, existing)
+
 	// Only offer a tracker status update for tracker-born issues. The origin
 	// lives in the git object (BranchRef.TrackerType), not the local store, so
 	// this is correct on a reviewer's clone too. A manual issue (ref absent or

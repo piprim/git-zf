@@ -159,3 +159,24 @@ func resolveRecord(
 
 	return rec, nil
 }
+
+// closeRepoIssue closes the repo issue a merged branch worked on: it writes
+// set_state closed on the issue named by ref.IssueID and pushes it. A nil ref
+// or one without an issue ID (tracker issue, hand-typed ID) is a no-op. Like
+// the rest of updateClosedStatus, a failure is a warning: the merge already
+// landed.
+func closeRepoIssue(ctx context.Context, client *git.Client, ref *git.BranchRef) {
+	if ref == nil || ref.IssueID == "" {
+		return
+	}
+
+	id := ref.IssueID
+	op := &issuepkg.Op{Type: issuepkg.OpSetState, Value: issuepkg.StateClosed}
+	if err := issuepkg.Append(ctx, client, id, op); err != nil {
+		fmt.Fprintf(client.IO().Err, "warning: close repo issue: %v\n", err)
+
+		return
+	}
+
+	pushIssue(ctx, client, id)
+}
