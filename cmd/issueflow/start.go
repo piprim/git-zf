@@ -427,7 +427,7 @@ func createFlow(
 		tt = &trackerType
 	}
 
-	if err := persist(ctx, b, picked.Subject, tt); err != nil {
+	if err := persist(ctx, deps.Client, b, picked.Subject, tt); err != nil {
 		fmt.Fprintf(deps.Client.IO().Err, "warning: %s created but store record failed: %v\n", kind, err)
 	}
 
@@ -660,8 +660,21 @@ func updateTrackerStatus(ctx context.Context, deps StartDeps, prompter StartProm
 		issueID, deps.Cfg.IssueTracker.Type, prompter.PickTrackerStatus)
 }
 
-func persist(ctx context.Context, b *branch.Branch, rawTitle string, trackerType *string) error {
-	s, err := store.OpenRepo(ctx)
+// persist records the new branch and its issue in the store of the repository
+// c works on. The store is opened from c's common git dir, not from the
+// process's working directory (store.OpenRepo): the two differ whenever the
+// flow runs against another repository than the one the process was started
+// in, which is the case for every test, and a working-directory lookup then
+// writes the row into the wrong repository's store.
+func persist(
+	ctx context.Context, c *git.Client, b *branch.Branch, rawTitle string, trackerType *string,
+) error {
+	commonDir, err := c.CommonDir()
+	if err != nil {
+		return fmt.Errorf("resolve common git dir: %w", err)
+	}
+
+	s, err := store.Open(ctx, commonDir)
 	if err != nil {
 		return fmt.Errorf("failed to get store: %w", err)
 	}

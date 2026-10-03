@@ -2,11 +2,13 @@ package issue
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/piprim/git-zf/cmd/issueflow"
 	issuepkg "github.com/piprim/git-zf/issue"
+	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -354,4 +356,46 @@ func TestRunIssueStart_RepoIssueWithUnknownTypeIsRefused(t *testing.T) {
 			})
 		})
 	}
+}
+
+// The branch row must be written to the store of the repository the flow works
+// on. It used to go to the store of the repository the process was started
+// from: under `go test` that is git-zf itself, whose `issue close` picker then
+// listed every test fixture.
+func TestRunIssueStart_RecordsBranchInTheFlowRepoStore(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	prompter := &scriptedStartPrompter{
+		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{ID: "STORE-1", Subject: "Store location"}},
+		ConfirmBranch: true,
+	}
+
+	err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("RunIssueStart: %v", err)
+		}
+	})
+	t.Run("no store warning", func(t *testing.T) {
+		if strings.Contains(rig.stderr.String(), "store record failed") {
+			t.Errorf("stderr = %q", rig.stderr.String())
+		}
+	})
+	t.Run("the row is in the store of the flow's repository", func(t *testing.T) {
+		s, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		defer func() { _ = s.Close() }()
+
+		rows, err := s.ListBranches(t.Context(), store.BranchStatusAll)
+		if err != nil {
+			t.Fatalf("ListBranches: %v", err)
+		}
+		if len(rows) != 1 || rows[0].BranchName != "STORE-1@feat@store-location" || rows[0].IssueSlug != "STORE-1" {
+			t.Errorf("rows = %+v, want the single STORE-1 branch", rows)
+		}
+	})
 }
