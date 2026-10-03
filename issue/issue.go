@@ -33,5 +33,9 @@ type Issue struct {
 	// this entity was built from; "" when the issue has no record (tracker
 	// issue, or an ID typed by hand).
 	RecordID string
+	// RecordPending is true when RecordID names an issue that was prepared
+	// (issue.Prepare) but not published yet: the start flow publishes it only
+	// once the branch exists, so an aborted start leaves no issue behind.
+	RecordPending bool
 	tracker.Issue
 }

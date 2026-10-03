@@ -75,17 +75,35 @@ func (c *Client) writeIssueCommit(ctx context.Context, payload []byte, message s
 	return commit, nil
 }
 
+// WriteIssueRoot writes payload as the root commit of a new issue chain and
+// returns its ID, which is the issue's ID. No ref is created: the issue does
+// not exist for any command until PublishIssueRoot is called, and an
+// unpublished root is ordinary garbage for git.
+func (c *Client) WriteIssueRoot(ctx context.Context, payload []byte, message string) (string, error) {
+	return c.writeIssueCommit(ctx, payload, message)
+}
+
+// PublishIssueRoot creates refs/zf/issues/<id> pointing at the root commit id
+// written by WriteIssueRoot.
+func (c *Client) PublishIssueRoot(ctx context.Context, id string) error {
+	// The zero old-value makes update-ref fail if the ref already exists.
+	if _, err := c.output(ctx, "update-ref", issueRefPrefix+id, id, ZeroHash.String()); err != nil {
+		return fmt.Errorf("create issue ref: %w", err)
+	}
+
+	return nil
+}
+
 // CreateIssueRef writes payload as the root commit of a new issue chain and
 // creates refs/zf/issues/<id>, where id is that commit's ID. Returns id.
 func (c *Client) CreateIssueRef(ctx context.Context, payload []byte, message string) (string, error) {
-	id, err := c.writeIssueCommit(ctx, payload, message)
+	id, err := c.WriteIssueRoot(ctx, payload, message)
 	if err != nil {
 		return "", err
 	}
 
-	// The zero old-value makes update-ref fail if the ref already exists.
-	if _, err := c.output(ctx, "update-ref", issueRefPrefix+id, id, ZeroHash.String()); err != nil {
-		return "", fmt.Errorf("create issue ref: %w", err)
+	if err := c.PublishIssueRoot(ctx, id); err != nil {
+		return "", err
 	}
 
 	return id, nil

@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -230,4 +231,82 @@ func TestRunIssueStart_UnsluggableTitleCreatesNoIssue(t *testing.T) {
 			t.Errorf("repo has %d issues, want 0", len(records))
 		}
 	})
+}
+
+// Declining the "Create branch?" confirm must not leave an issue behind: the
+// issue is only written once the branch exists.
+func TestRunIssueStart_AbortAtConfirmLeavesNoIssue(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	origin := newBareOrigin(t)
+	rig.runGit(t, "remote", "add", "origin", origin)
+
+	prompter := &scriptedStartPrompter{
+		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{Subject: "Changed my mind"}},
+		ConfirmBranch: false,
+	}
+
+	err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
+
+	t.Run("the abort is not an error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("RunIssueStart: %v", err)
+		}
+	})
+	t.Run("no repo issue exists locally", func(t *testing.T) {
+		records, _, _ := issuepkg.List(t.Context(), rig.client)
+		if len(records) != 0 {
+			t.Errorf("repo has %d issues, want 0", len(records))
+		}
+	})
+	t.Run("nothing was pushed to the remote", func(t *testing.T) {
+		if out := gitOutput(t, origin, "for-each-ref", "refs/zf/issues"); out != "" {
+			t.Errorf("origin has issue refs: %q", out)
+		}
+	})
+}
+
+// On success the new issue exists and is pushed, after the branch was created.
+func TestRunIssueStart_NewRepoIssueIsPushedOnceBranchExists(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	origin := newBareOrigin(t)
+	rig.runGit(t, "remote", "add", "origin", origin)
+
+	prompter := &scriptedStartPrompter{
+		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{Subject: "Keep it"}},
+		ConfirmBranch: true,
+	}
+
+	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter); err != nil {
+		t.Fatalf("RunIssueStart: %v", err)
+	}
+
+	records, _, _ := issuepkg.List(t.Context(), rig.client)
+	if len(records) != 1 {
+		t.Fatalf("repo has %d issues, want 1", len(records))
+	}
+
+	t.Run("the remote has the issue ref", func(t *testing.T) {
+		out := gitOutput(t, origin, "for-each-ref", "--format=%(refname)", "refs/zf/issues")
+		if out != "refs/zf/issues/"+records[0].ID {
+			t.Errorf("origin issue refs = %q", out)
+		}
+	})
+}
+
+// gitOutput runs git in dir and returns its trimmed stdout.
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+
+	return strings.TrimSpace(string(out))
 }

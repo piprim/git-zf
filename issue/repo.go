@@ -37,19 +37,46 @@ type NewIssue struct {
 	Labels      []string
 }
 
-// Create writes a new issue (a create op, then one add_label op per label)
-// and returns its record. Nothing is pushed.
-func Create(ctx context.Context, c *git.Client, in NewIssue) (Record, error) {
+// Prepare writes the create op of a new issue and returns the issue's ID
+// without making the issue exist: no ref points at it until Publish. It lets a
+// caller know the ID (to name a branch) before committing to the issue. A
+// prepared issue that is never published leaves nothing behind. in.Labels is
+// not used: labels are ops on a published issue.
+func Prepare(ctx context.Context, c *git.Client, in NewIssue) (string, error) {
 	payload, err := marshalOp(ctx, c, &Op{
 		Type: OpCreate, Title: in.Title, Description: in.Description, BranchType: in.BranchType,
 	})
 	if err != nil {
+		return "", err
+	}
+
+	id, err := c.WriteIssueRoot(ctx, payload, OpCreate)
+	if err != nil {
+		return "", fmt.Errorf("prepare issue: %w", err)
+	}
+
+	return id, nil
+}
+
+// Publish makes the issue prepared under id exist. Nothing is pushed.
+func Publish(ctx context.Context, c *git.Client, id string) error {
+	if err := c.PublishIssueRoot(ctx, id); err != nil {
+		return fmt.Errorf("publish issue %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// Create writes a new issue (a create op, then one add_label op per label)
+// and returns its record. Nothing is pushed.
+func Create(ctx context.Context, c *git.Client, in NewIssue) (Record, error) {
+	id, err := Prepare(ctx, c, in)
+	if err != nil {
 		return Record{}, err
 	}
 
-	id, err := c.CreateIssueRef(ctx, payload, OpCreate)
-	if err != nil {
-		return Record{}, fmt.Errorf("create issue: %w", err)
+	if err := Publish(ctx, c, id); err != nil {
+		return Record{}, err
 	}
 
 	for _, label := range in.Labels {

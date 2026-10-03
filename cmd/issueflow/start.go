@@ -219,15 +219,42 @@ func getFromRepoOrUser(
 		return nil, fmt.Errorf("title %q produces an empty branch name", got.Subject)
 	}
 
-	rec, err := issue.Create(ctx, c, issue.NewIssue{Title: got.Subject, BranchType: got.Type})
+	// Only prepare the issue here: it gets its ID, which names the branch, but
+	// it does not exist until createFlow publishes it, after the branch was
+	// created. Every abort in between (base picker, confirm, branch conflict,
+	// git failure) then leaves no issue behind.
+	id, err := issue.Prepare(ctx, c, issue.NewIssue{Title: got.Subject, BranchType: got.Type})
 	if err != nil {
-		return nil, fmt.Errorf("create repo issue: %w", err)
-	}
-	if err := issue.Push(ctx, c, rec.ID); err != nil {
-		fmt.Fprintf(errW, "warning: issue saved locally but not pushed (run `git zf issue sync` later): %v\n", err)
+		return nil, fmt.Errorf("prepare repo issue: %w", err)
 	}
 
-	return issueFromRecord(&rec), nil
+	rec := issue.Record{ID: id}
+	got.ID, got.RecordID, got.RecordPending = rec.DisplayID(), id, true
+
+	return got, nil
+}
+
+// publishRepoIssue makes the issue prepared by getFromRepoOrUser exist and
+// pushes it. Called once the branch exists; a no-op for an issue that was not
+// prepared by this run (tracker issue, typed ID, existing repo issue).
+// Failures are warnings, like every other post-creation step: the branch is
+// there and the operator can re-create the issue with `git zf issue new`.
+func publishRepoIssue(ctx context.Context, c *git.Client, picked *issue.Issue) {
+	if !picked.RecordPending {
+		return
+	}
+
+	id, errW := picked.RecordID, c.IO().Err
+
+	if err := issue.Publish(ctx, c, id); err != nil {
+		fmt.Fprintf(errW, "warning: branch created but the repo issue could not be saved: %v\n", err)
+
+		return
+	}
+
+	if err := issue.Push(ctx, c, id); err != nil {
+		fmt.Fprintf(errW, "warning: issue saved locally but not pushed (run `git zf issue sync` later): %v\n", err)
+	}
 }
 
 // issueFromRecord converts a repo issue to the in-flow entity. The display ID
@@ -364,6 +391,8 @@ func createFlow(
 	if !created {
 		return nil
 	}
+
+	publishRepoIssue(ctx, deps.Client, picked)
 
 	// trackerType is the originating tracker ("" = manual). It is recorded both
 	// in the local store (as a cache) and in the BranchRef git object (the
