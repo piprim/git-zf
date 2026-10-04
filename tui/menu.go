@@ -14,8 +14,7 @@ type MenuOption struct {
 	Value string
 }
 
-// MenuSelect presents a list of actions, in the same style as
-// BranchActionSelect / IssueActionSelect, and writes the picked Value into
+// MenuSelect presents a list of actions and writes the picked Value into
 // value. When *value does not match any option it is reset to the first
 // option's Value so the cursor always starts on a real entry.
 func MenuSelect(title string, opts []MenuOption, value *string) *huh.Group {

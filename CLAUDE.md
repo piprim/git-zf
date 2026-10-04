@@ -102,7 +102,8 @@ being skipped: an older binary reads refs written by a newer one.
 
 ### Testing the menus
 
-`git zf` (no subcommand) and `git zf review` open an action menu built on
+`git zf` (no subcommand), `git zf review`, `git zf branch` and `git zf issue`
+open an action menu built on
 `cmdutil.RunMenu` (`cmd/cmdutil/menu.go`): it takes the parent command, a
 title, the ordered subcommands to offer, and a `MenuPrompter`. The picked
 subcommand's `RunE` runs with the *parent* command (cobra v1.1.3 has no
@@ -113,9 +114,11 @@ stdin → the group's help is printed; Esc → quiet exit.
     mise exec -- go test ./cmd/ -run "^TestGetRootCmd_menu" -v
     mise exec -- go test ./cmd/review/... -run "^TestReviewRootCmd" -v
 
-To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`) or
-`Review.menuSubs` (`cmd/review/review.go`) and extend the matching test. The
-`branch` / `issue` menus predate `RunMenu` and still hand-roll their select.
+To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`),
+`Review.menuSubs` (`cmd/review/review.go`) or the slice in `GetRootCmd` of
+`cmd/branch/branch.go` / `cmd/issue/issue.go`, and extend the matching test. A
+subcommand offered by a menu reads its string flags with `cmdutil.StringFlag`,
+never `cmd.Flags().GetString`: the parent command does not define them.
 
 ### Testing the merge flow
 

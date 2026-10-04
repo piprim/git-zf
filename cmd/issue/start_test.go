@@ -9,9 +9,10 @@ import (
 
 // TestStartRunE_InteractiveDispatch is a regression test for the bug where
 // `git zf issue` → "Start" dispatched through the issue root command (which
-// defines no --variant flag) and startRunE tried to read that flag, failing
-// with "read --variant flag: flag accessed but not defined: variant". startRunE
-// must take the variant as a parameter so the interactive dispatcher passes "".
+// defines no --variant flag) and the handler tried to read that flag, failing
+// with "read --variant flag: flag accessed but not defined: variant". The
+// issue menu (cmdutil.RunMenu) runs the subcommand's RunE with the root
+// command, so that RunE must tolerate the missing --variant and --parent flags.
 func TestStartRunE_InteractiveDispatch(t *testing.T) {
 	i := New(&config.AppConfig{})
 	root := i.GetRootCmd()
@@ -32,10 +33,15 @@ func TestStartRunE_InteractiveDispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("startRunE on the root command does not read the undefined --variant flag", func(t *testing.T) {
+	t.Run("start's RunE on the root command tolerates the undefined flags", func(t *testing.T) {
 		t.Chdir(t.TempDir()) // a directory outside any git repo
 
-		err := i.startRunE(root, "", "")
+		startSub, _, err := root.Find([]string{"start"})
+		if err != nil {
+			t.Fatalf("find start subcommand: %v", err)
+		}
+
+		err = startSub.RunE(root, nil) // what the issue menu does
 		if err == nil {
 			t.Fatal("expected an error outside a git repo, got nil")
 		}

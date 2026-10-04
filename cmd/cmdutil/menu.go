@@ -55,9 +55,8 @@ func (huhMenuPrompter) Select(ctx context.Context, title string, subs []*cobra.C
 // command — rather than itself. cobra v1.1.3 offers no SetContext, and the
 // parent is the only command carrying a live Context and IO streams. Flag
 // reads on the parent tolerate the missing flags (pflag reports unknown flags
-// as unchanged; pushflow.ReadFlags checks Lookup first), so the subcommand
-// runs on its interactive defaults, exactly as branch.runE already dispatches
-// to its own subcommands.
+// as unchanged; pushflow.ReadFlags checks Lookup first; string flags are read
+// through StringFlag), so the subcommand runs on its interactive defaults.
 //
 // Esc / ctrl+c on the menu exits quietly; a non-interactive stdin prints the
 // group's help instead, so scripts keep the pre-menu behaviour.

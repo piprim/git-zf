@@ -1,16 +1,12 @@
 package issue
 
 import (
-	"fmt"
-
-	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/review"
 	"github.com/piprim/git-zf/config"
-	issuepkg "github.com/piprim/git-zf/issue"
 	_ "github.com/piprim/git-zf/tracker/forgejo" // registers forgejo + gitea adapters
 	_ "github.com/piprim/git-zf/tracker/github"  // registers github adapter
 	_ "github.com/piprim/git-zf/tracker/redmine" // registers redmine adapter
-	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -23,49 +19,22 @@ func New(appConfig *config.AppConfig) Issue {
 }
 
 func (i Issue) GetRootCmd() *cobra.Command {
+	// The registration order is also the menu order.
+	menu := []*cobra.Command{
+		i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(),
+		i.getNewCmd(), i.getShowCmd(), i.getCommentCmd(), i.getLabelCmd(), i.getSyncCmd(),
+	}
+
 	cmd := &cobra.Command{
 		Use:   "issue",
 		Short: "Manage issues",
-		RunE:  i.runE,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmdutil.RunMenu(cmd, "Issue action:", menu, cmdutil.NewHuhMenuPrompter())
+		},
 	}
 
-	cmd.AddCommand(
-		i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(),
-		i.getNewCmd(), i.getShowCmd(), i.getCommentCmd(), i.getLabelCmd(), i.getSyncCmd(),
-		review.TrackCmd(i.appConfig),
-	)
+	cmd.AddCommand(menu...)
+	cmd.AddCommand(review.TrackCmd(i.appConfig)) // CLI-only here; the review menu offers it
 
 	return cmd
-}
-
-func (i Issue) runE(cmd *cobra.Command, args []string) error {
-	var action string
-	if err := huh.NewForm(tui.IssueActionSelect(&action)).RunWithContext(cmd.Context()); err != nil {
-		return fmt.Errorf("action select: %w", err)
-	}
-
-	switch action {
-	case tui.IssueActionNameStart:
-		// Interactive path: the issue root command defines no --variant flag,
-		// so pass an empty variant.
-		return i.startRunE(cmd, "", "")
-	case tui.IssueActionNameList:
-		return i.issueListRunE(cmd, issueListFlags{})
-	case tui.IssueActionNameClose:
-		return i.closeRunE(cmd, args)
-	case tui.IssueActionNameNew:
-		return i.newRunE(cmd, issuepkg.NewIssue{}, true)
-	case tui.IssueActionNameShow:
-		return i.showRunE(cmd, nil, false)
-	case tui.IssueActionNameComment:
-		return i.commentRunE(cmd, nil, "")
-	case tui.IssueActionNameLabel:
-		return i.labelRunE(cmd, nil)
-	case tui.IssueActionNameSync:
-		return i.syncRunE(cmd)
-	default:
-		fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
-
-		return nil
-	}
 }

@@ -118,9 +118,10 @@ func TestBranchList(t *testing.T) {
 
 // TestNewRunE_InteractiveDispatch is a regression test for the bug where
 // `git zf branch` → "New" dispatched through the branch root command (which
-// defines no --variant flag) and newRunE tried to read that flag, failing with
-// "read --variant flag: flag accessed but not defined: variant". newRunE must
-// take the variant as a parameter so the interactive dispatcher can pass "".
+// defines no --variant flag) and the handler tried to read that flag, failing
+// with "read --variant flag: flag accessed but not defined: variant". The
+// branch menu (cmdutil.RunMenu) runs the subcommand's RunE with the root
+// command, so that RunE must tolerate the missing flag.
 func TestNewRunE_InteractiveDispatch(t *testing.T) {
 	b := New(&config.AppConfig{})
 	root := b.GetRootCmd()
@@ -141,10 +142,15 @@ func TestNewRunE_InteractiveDispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("newRunE on the root command does not read the undefined --variant flag", func(t *testing.T) {
+	t.Run("new's RunE on the root command tolerates the undefined --variant flag", func(t *testing.T) {
 		t.Chdir(t.TempDir()) // a directory outside any git repo
 
-		err := b.newRunE(root, "")
+		newSub, _, err := root.Find([]string{"new"})
+		if err != nil {
+			t.Fatalf("find new subcommand: %v", err)
+		}
+
+		err = newSub.RunE(root, nil) // what the branch menu does
 		if err == nil {
 			t.Fatal("expected an error outside a git repo, got nil")
 		}

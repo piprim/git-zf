@@ -36,45 +36,19 @@ type listFlags struct {
 }
 
 func (b Branch) GetRootCmd() *cobra.Command {
+	// The registration order is also the menu order.
+	subs := []*cobra.Command{listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd()}
+
 	cmd := &cobra.Command{
 		Use:   "branch",
 		Short: "Manage local branches",
-		RunE:  b.runE,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmdutil.RunMenu(cmd, "Branch action:", subs, cmdutil.NewHuhMenuPrompter())
+		},
 	}
-	cmd.AddCommand(listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd())
+	cmd.AddCommand(subs...)
 
 	return cmd
-}
-
-func (b Branch) runE(cmd *cobra.Command, _ []string) error {
-	var action string
-	if err := huh.NewForm(tui.BranchActionSelect(&action)).RunWithContext(cmd.Context()); err != nil {
-		return fmt.Errorf("action select: %w", err)
-	}
-
-	switch action {
-	case tui.BranchActionNameList:
-		// zero flags → TUI path (status filter presented interactively)
-		return listRunE(cmd, listFlags{})
-	case tui.BranchActionNameNew:
-		// Interactive path: no --variant flag exists on the branch root
-		// command, so pass an empty variant (variants are chosen via the
-		// branch-conflict prompter, not a CLI flag).
-		return b.newRunE(cmd, "")
-	case tui.BranchActionNamePrune:
-		return b.pruneRunE(cmd, pruneFlags{})
-	case tui.BranchActionNamePruneTracker:
-		return b.pruneTrackerRunE(cmd, pruneTrackerFlags{})
-	case tui.BranchActionNameMerge:
-		// Interactive path: the push/no-push flags live on the `merge`
-		// subcommand, not this root command; mergeRunE reads them via
-		// pushflow.ReadFlags, which tolerates their absence (→ prompt for push).
-		return b.mergeRunE(cmd, nil)
-	default:
-		fmt.Fprintln(cmd.OutOrStdout(), "Not yet implemented.")
-
-		return nil
-	}
 }
 
 func listCmd() *cobra.Command {
@@ -195,20 +169,16 @@ func (b Branch) newCmd() *cobra.Command {
 		"create a parallel branch for the same issue (e.g. --variant=spike)")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		variant, err := cmd.Flags().GetString("variant")
-		if err != nil {
-			return fmt.Errorf("read --variant flag: %w", err)
-		}
-
-		return b.newRunE(cmd, variant)
+		// StringFlag, not GetString: the branch menu runs this with the root
+		// command, which defines no --variant flag.
+		return b.newRunE(cmd, cmdutil.StringFlag(cmd, "variant"))
 	}
 
 	return cmd
 }
 
 // newRunE delegates to RunIssueStart with manual-first (tracker toggle defaults to NO).
-// variant carries the --variant flag value; the interactive dispatcher (runE)
-// passes "" because the branch root command defines no such flag.
+// variant carries the --variant flag value, "" when run from the branch menu.
 func (b Branch) newRunE(cmd *cobra.Command, variant string) error {
 	flags := issue.IssueStartFlags{TrackerFirst: false, Variant: variant}
 	deps, err := issueflow.BuildStartDeps(cmd, b.appConfig, flags)

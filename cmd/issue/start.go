@@ -1,8 +1,7 @@
 package issue
 
 import (
-	"fmt"
-
+	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/spf13/cobra"
@@ -22,25 +21,16 @@ checked out from the default base branch. Branch state is saved to .git/git-zf.d
 		"parent issue slug — creates this as a sub-task branching from the parent integration branch")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		variant, err := cmd.Flags().GetString("variant")
-		if err != nil {
-			return fmt.Errorf("read --variant flag: %w", err)
-		}
-
-		parent, err := cmd.Flags().GetString("parent")
-		if err != nil {
-			return fmt.Errorf("read --parent flag: %w", err)
-		}
-
-		return i.startRunE(cmd, variant, parent)
+		// StringFlag, not GetString: the issue menu runs this with the root
+		// command, which defines neither flag.
+		return i.startRunE(cmd, cmdutil.StringFlag(cmd, "variant"), cmdutil.StringFlag(cmd, "parent"))
 	}
 
 	return cmd
 }
 
-// startRunE drives the tracker-first issue-start flow. variant carries the
-// --variant flag value; the interactive dispatcher (runE) passes "" because
-// the issue root command defines no such flag.
+// startRunE drives the tracker-first issue-start flow. variant and parentSlug
+// carry the --variant and --parent flag values, "" when run from the issue menu.
 func (i Issue) startRunE(cmd *cobra.Command, variant, parentSlug string) error {
 	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: variant, ParentIssueSlug: parentSlug}
 
