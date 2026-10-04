@@ -210,10 +210,7 @@ func TestMainTree(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MainTree: %v", err)
 		}
-		root, err := m.WorkingTreeRoot()
-		if err != nil {
-			t.Fatalf("WorkingTreeRoot: %v", err)
-		}
+		root := m.WorkingTreeRoot()
 		if !SamePath(root, dir) {
 			t.Fatalf("root = %q, want %q", root, dir)
 		}

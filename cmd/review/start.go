@@ -81,10 +81,7 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 		return fmt.Errorf("branch %q already exists — review already started", reviewBranch)
 	}
 
-	root, err := deps.client.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := deps.client.WorkingTreeRoot()
 
 	// Fetch from the remote so the feature branch commits are present locally.
 	// review start only fetched refs/zf/reviews/* earlier; the reviewer's clone

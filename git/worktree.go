@@ -12,10 +12,7 @@ import (
 // CreateWorktree creates a new branch from baseBranch and checks it out
 // in a linked worktree at path. Wraps `git worktree add -b <branch> <path> <base>`.
 func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, path string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "worktree", "add", "-b", branchName, path, baseBranch); err != nil {
 		return fmt.Errorf("create worktree %q: %w", path, err)
@@ -70,10 +67,7 @@ func parseWorktreeList(out string) []Worktree {
 
 // Worktrees lists every working tree of the repository (main first).
 func (c *Client) Worktrees(ctx context.Context) ([]Worktree, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain")
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
@@ -129,10 +123,7 @@ func (c *Client) HoldingWorktree(ctx context.Context, branch string) (*Worktree,
 // own safety checks (modified or untracked files) apply and the error carries
 // git's reason.
 func (c *Client) RemoveWorktree(ctx context.Context, path string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "worktree", "remove", path)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
@@ -148,10 +139,7 @@ func (c *Client) RemoveWorktree(ctx context.Context, path string) error {
 // every worktree. In the main tree it equals GitDir; in a linked worktree
 // GitDir is .git/worktrees/<name> while CommonDir is the main .git.
 func (c *Client) CommonDir() (string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return "", fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(context.Background(), "git", "-C", root, "rev-parse", "--git-common-dir")
 
@@ -175,10 +163,7 @@ func (c *Client) CommonDir() (string, error) {
 // tree that holds the base, even when the command was typed inside a linked
 // worktree.
 func (c *Client) MainTree() (*Client, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	list, err := c.Worktrees(context.Background())
 	if err != nil {

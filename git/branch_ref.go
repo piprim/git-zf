@@ -39,10 +39,7 @@ type BranchRef struct {
 // overwrite (e.g. re-running issue start) simply replaces the blob.
 // Returns the new blob SHA.
 func (c *Client) WriteBranchRef(ctx context.Context, issueSlug string, ref BranchRef) (string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return "", fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	data, err := json.Marshal(ref)
 	if err != nil {
@@ -69,10 +66,7 @@ func (c *Client) WriteBranchRef(ctx context.Context, issueSlug string, ref Branc
 // ReadBranchRef reads the BranchRef for issueSlug from the local ref store.
 // Returns (nil, nil) when the ref does not exist.
 func (c *Client) ReadBranchRef(ctx context.Context, issueSlug string) (*BranchRef, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	refName := branchRefPrefix + issueSlug
 
@@ -108,10 +102,7 @@ func (c *Client) FetchBranchRefs(ctx context.Context) error {
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	refspec := branchRefPrefix + "*:" + branchRefPrefix + "*"
 	if err := c.runInteractive(ctx, root, "fetch", remote, refspec); err != nil {
@@ -134,10 +125,7 @@ func (c *Client) PushBranchRef(ctx context.Context, issueSlug string) error {
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	refName := branchRefPrefix + issueSlug
 	if err := c.runInteractive(ctx, root, "push", "--force", remote, refName); err != nil {
@@ -152,10 +140,7 @@ func (c *Client) PushBranchRef(ctx context.Context, issueSlug string) error {
 // an empty slice (not an error) when none exist; malformed blobs are skipped.
 // Mirrors ListReviewRefs.
 func (c *Client) ListBranchRefs(ctx context.Context) ([]BranchRef, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root,
 		"for-each-ref", "--format=%(objectname) %(refname)", branchRefPrefix)

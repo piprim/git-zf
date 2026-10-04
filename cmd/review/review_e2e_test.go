@@ -1450,7 +1450,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	}
 
 	// Fetch Dan's review branch (it only exists on origin as a remote branch).
-	bobRoot, _ := bobDeps.client.WorkingTreeRoot()
+	bobRoot := bobDeps.client.WorkingTreeRoot()
 	if err := bobDeps.client.RunGitAt(ctx, bobRoot, "fetch", "origin", "X.2@review:X.2@review"); err != nil {
 		t.Fatalf("bob fetch X.2@review: %v", err)
 	}

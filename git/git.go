@@ -154,8 +154,8 @@ func (c *Client) Remote() (string, error) {
 }
 
 // WorkingTreeRoot returns the absolute path of the repository's working tree root.
-func (c *Client) WorkingTreeRoot() (string, error) {
-	return c.root, nil
+func (c *Client) WorkingTreeRoot() string {
+	return c.root
 }
 
 // GitDir returns the absolute path of the repository's .git directory.
@@ -164,10 +164,7 @@ func (c *Client) WorkingTreeRoot() (string, error) {
 // not a directory). For a linked worktree it is the per-worktree git dir.
 // Resolved by shelling out to `git rev-parse --git-dir` to handle all forms.
 func (c *Client) GitDir() (string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return "", fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(context.Background(), "git", "-C", root, "rev-parse", "--git-dir")
 
@@ -197,10 +194,7 @@ func (c *Client) IO() *pkg.IO {
 // does not touch untracked content, so their presence does not put user work
 // at risk during rollback.
 func (c *Client) IsDirty(ctx context.Context) (bool, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return false, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=no")
 	out, err := cmd.Output()
@@ -223,10 +217,7 @@ func (c *Client) Checkout(ctx context.Context, branchName string) error {
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "checkout", branchName); err != nil {
 		return fmt.Errorf("checkout %s: %w", branchName, err)
@@ -288,10 +279,7 @@ func (c *Client) CurrentBranch() (string, error) {
 // .idx). The current git config identity is prepended as the first
 // (default) entry.
 func (c *Client) Authors(ctx context.Context) ([]string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "shortlog", "-sne", "--all")
 
@@ -418,13 +406,12 @@ func (c *Client) stageUntracked(ctx context.Context, root string) ([]byte, error
 // Commit records a commit with msg and the given options using the system git
 // binary so that all configured hooks (pre-commit, commit-msg, post-commit) run.
 func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	var stagedUntracked []byte
 	if opts.IncludeUntracked {
+		var err error
+
 		stagedUntracked, err = c.stageUntracked(ctx, root)
 		if err != nil {
 			return err // wrapped by stageUntracked; commit does not proceed
@@ -594,10 +581,7 @@ func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
 // CommitsAhead returns the number of commits in branchName that are not reachable
 // from baseBranch. Uses `git rev-list --count <baseBranch>..<branchName>`.
 func (c *Client) CommitsAhead(ctx context.Context, branchName, baseBranch string) (int, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return 0, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root,
 		"rev-list", "--count", baseBranch+".."+branchName)
@@ -625,10 +609,7 @@ func (c *Client) DeleteRemoteBranch(ctx context.Context, branchName string) erro
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "push", remote, "--delete", branchName); err != nil {
 		return fmt.Errorf("delete remote branch %s: %w", branchName, err)
@@ -645,10 +626,7 @@ func (c *Client) RemoteBranchExists(ctx context.Context, branchName string) bool
 	if err != nil || remote == "" {
 		return false
 	}
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return false
-	}
+	root := c.root
 	cmd := exec.CommandContext(ctx, "git", "-C", root,
 		"ls-remote", "--exit-code", "--heads", remote, branchName)
 	return cmd.Run() == nil
@@ -686,10 +664,7 @@ func (c *Client) RunGitAt(ctx context.Context, dir string, args ...string) error
 // ConfigUser returns the git config user identity as "Name <email>".
 // Returns an empty string when not configured.
 func (c *Client) ConfigUser(ctx context.Context) (string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return "", fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	nameCmd := exec.CommandContext(ctx, "git", "-C", root, "config", "user.name")
 	nameOut, err := nameCmd.Output()
@@ -820,10 +795,7 @@ func (c *Client) ForceDeleteBranch(name string) error {
 // as a remote-tracking ref on a reviewer's clone so the merge strategies can
 // resolve it by bare name.
 func (c *Client) CreateLocalBranch(ctx context.Context, name, startPoint string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "branch", name, startPoint)
 	if out, err := cmd.CombinedOutput(); err != nil {

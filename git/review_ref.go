@@ -26,10 +26,7 @@ type ReviewRef struct {
 // local ref refs/zf/reviews/<issueID> using CAS. oldSHA must be the current
 // ref SHA — pass "" for the first write (no prior value). Returns the new SHA.
 func (c *Client) WriteReviewRef(ctx context.Context, issueID string, ref ReviewRef, oldSHA string) (string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return "", fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	data, err := json.Marshal(ref)
 	if err != nil {
@@ -64,10 +61,7 @@ func (c *Client) WriteReviewRef(ctx context.Context, issueID string, ref ReviewR
 // Returns (nil, "", nil) when the ref does not exist.
 // The returned currentSHA is suitable as oldSHA in the next WriteReviewRef call.
 func (c *Client) ReadReviewRef(ctx context.Context, issueID string) (*ReviewRef, string, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, "", fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	refName := reviewRefPrefix + issueID
 
@@ -106,10 +100,7 @@ func (c *Client) FetchReviewRefs(ctx context.Context) error {
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	// --prune removes local refs/zf/reviews/* that no longer exist on the
 	// remote (e.g. deleted when a sibling developer closed their issue).
@@ -131,10 +122,7 @@ func (c *Client) FetchReviewRef(ctx context.Context, issueID string) {
 		return
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return
-	}
+	root := c.root
 
 	refName := reviewRefPrefix + issueID
 	cmd := exec.CommandContext(ctx, "git", "-C", root,
@@ -155,10 +143,7 @@ func (c *Client) PushReviewRef(ctx context.Context, issueID, expectedOldSHA stri
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	refName := reviewRefPrefix + issueID
 	lease := refName
@@ -179,10 +164,7 @@ func (c *Client) PushReviewRef(ctx context.Context, issueID, expectedOldSHA stri
 // issueID → ReviewRef. Call FetchReviewRefs first to ensure the local
 // namespace is up to date. Does not require the issue to exist in the store.
 func (c *Client) ListReviewRefs(ctx context.Context) (map[string]*ReviewRef, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	// List all refs under refs/zf/reviews/ with their SHA.
 	cmd := exec.CommandContext(ctx, "git", "-C", root,
@@ -229,10 +211,7 @@ func (c *Client) ListReviewRefs(ctx context.Context) (map[string]*ReviewRef, err
 // DeleteReviewRef deletes refs/zf/reviews/<issueID> locally. If a remote is
 // configured, also attempts to delete it there (best-effort; errors are ignored).
 func (c *Client) DeleteReviewRef(ctx context.Context, issueID string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	refName := reviewRefPrefix + issueID
 

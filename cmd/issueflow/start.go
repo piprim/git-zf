@@ -478,10 +478,7 @@ func branchCreator(
 func worktreeCreator(
 	ctx context.Context, deps StartDeps,
 	prompter StartPrompter, branchName, base string) (bool, string, error) {
-	repoRoot, err := deps.Client.WorkingTreeRoot()
-	if err != nil {
-		return false, "", fmt.Errorf("working tree root: %w", err)
-	}
+	repoRoot := deps.Client.WorkingTreeRoot()
 
 	repoName, err := deps.Client.RepoName()
 	if err != nil {

@@ -30,10 +30,7 @@ func (c *Client) runInteractive(ctx context.Context, dir string, args ...string)
 // are not traversed. Returns the list of conflicting file paths, or nil if clean.
 func (c *Client) MergeDryRun(ctx context.Context, branchName, baseBranch string) ([]string, error) {
 	slog.Debug("Git dry run merge…")
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root,
 		"merge-tree", "--write-tree", baseBranch, branchName)
@@ -62,10 +59,7 @@ func (c *Client) MergeDryRun(ctx context.Context, branchName, baseBranch string)
 // leaving the squashed changes staged. The caller is responsible for the
 // follow-up commit (so it can drive an interactive commit form).
 func (c *Client) MergeSquash(ctx context.Context, branchName, baseBranch string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "checkout", baseBranch); err != nil {
 		return fmt.Errorf("checkout %s: %w", baseBranch, err)
@@ -94,10 +88,7 @@ func (c *Client) MergeSquash(ctx context.Context, branchName, baseBranch string)
 // Caller is responsible for the final commit (typically via the commitizen TUI
 // form) and for rollback on failure.
 func (c *Client) MergeRebase(ctx context.Context, featureBranch, baseBranch string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	remote, err := c.Remote()
 	if err != nil {
@@ -132,10 +123,7 @@ func (c *Client) MergeRebase(ctx context.Context, featureBranch, baseBranch stri
 // commitizen TUI form). Caller is responsible for `git merge --abort`
 // on TUI abort or commit failure.
 func (c *Client) MergeNoFFNoCommit(ctx context.Context, featureBranch, baseBranch string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "checkout", baseBranch); err != nil {
 		return fmt.Errorf("checkout %s: %w", baseBranch, err)
@@ -155,10 +143,7 @@ func (c *Client) MergeNoFFNoCommit(ctx context.Context, featureBranch, baseBranc
 // as fatal (e.g. by ignoring it when the orchestrator isn't sure
 // whether MergeNoFFNoCommit actually started a merge).
 func (c *Client) AbortMerge(ctx context.Context) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "merge", "--abort"); err != nil {
 		return fmt.Errorf("merge --abort: %w", err)
@@ -175,10 +160,7 @@ func (c *Client) FastForwardOnly(ctx context.Context, sourceBranch, targetBranch
 		return fmt.Errorf("checkout %s: %w", targetBranch, err)
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "merge", "--ff-only", sourceBranch); err != nil {
 		return fmt.Errorf("merge --ff-only %s: %w", sourceBranch, err)
@@ -190,10 +172,7 @@ func (c *Client) FastForwardOnly(ctx context.Context, sourceBranch, targetBranch
 // DeleteLocalBranch deletes the local branch by name.
 // force=true uses -D (required after squash merges); force=false uses -d (safe).
 func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	flag := "-d"
 	if force {
@@ -228,10 +207,7 @@ func (c *Client) Fetch(ctx context.Context) error {
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "fetch", remote); err != nil {
 		return fmt.Errorf("fetch %s: %w", remote, err)
@@ -244,10 +220,7 @@ func (c *Client) Fetch(ctx context.Context) error {
 // Wraps `git merge-base --is-ancestor child ancestor`: exit code 0 → true,
 // exit code 1 → false, any other exit code → wrapped error.
 func (c *Client) IsAncestor(ctx context.Context, child, ancestor string) (bool, error) {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return false, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", child, ancestor)
 	out, err := cmd.CombinedOutput()
@@ -267,10 +240,7 @@ func (c *Client) IsAncestor(ctx context.Context, child, ancestor string) (bool, 
 // to atomically roll the current branch back to its original tip on TUI abort
 // or commit failure. Does not touch untracked files.
 func (c *Client) ResetHard(ctx context.Context, target string) error {
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "reset", "--hard", target); err != nil {
 		return fmt.Errorf("reset --hard %s: %w", target, err)
@@ -288,10 +258,7 @@ func (c *Client) MergeForward(ctx context.Context, sourceBranch, targetBranch st
 		return fmt.Errorf("checkout %s: %w", targetBranch, err)
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "merge", "--no-edit", sourceBranch); err != nil {
 		return fmt.Errorf("merge --no-edit %s: %w", sourceBranch, err)
@@ -351,10 +318,7 @@ func (c *Client) MergeLeaveConflicts(ctx context.Context, sourceBranch, targetBr
 		return fmt.Errorf("checkout %s: %w", targetBranch, err)
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "merge", "--no-edit", sourceBranch); err != nil {
 		if inProgress, mhErr := c.MergeInProgress(); mhErr == nil && inProgress {

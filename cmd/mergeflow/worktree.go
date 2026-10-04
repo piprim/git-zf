@@ -36,10 +36,7 @@ func SourceTree(ctx context.Context, caller *git.Client, branch string) (*git.Cl
 			branch, wt.Path)
 	}
 
-	root, err := caller.WorkingTreeRoot()
-	if err != nil {
-		return nil, nil, fmt.Errorf("working tree root: %w", err)
-	}
+	root := caller.WorkingTreeRoot()
 	if git.SamePath(wt.Path, root) {
 		return nil, nil, nil
 	}
@@ -97,11 +94,9 @@ func RemoveWorktreeStep(
 	fmt.Fprintf(caller.IO().Out, "Removed worktree %q.\n", wt.Path)
 
 	if inside {
-		if root, rerr := caller.WorkingTreeRoot(); rerr == nil {
-			fmt.Fprintln(caller.IO().Out,
-				tui.HintStyle.Render(fmt.Sprintf(
-					"Run 'cd %q' — the worktree you were in has been removed.", root)))
-		}
+		fmt.Fprintln(caller.IO().Out,
+			tui.HintStyle.Render(fmt.Sprintf(
+				"Run 'cd %q' — the worktree you were in has been removed.", caller.WorkingTreeRoot())))
 	}
 
 	return true, nil

@@ -38,10 +38,7 @@ func NewMainClientForCmd(
 	if err != nil {
 		return nil, "", err
 	}
-	invokedFrom, err = c.WorkingTreeRoot()
-	if err != nil {
-		return nil, "", fmt.Errorf("working tree root: %w", err)
-	}
+	invokedFrom = c.WorkingTreeRoot()
 	mainClient, err = c.MainTree()
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve main working tree: %w", err)

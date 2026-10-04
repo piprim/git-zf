@@ -37,7 +37,7 @@ func TestSourceTree(t *testing.T) {
 		if src == nil || wt == nil {
 			t.Fatalf("src=%v wt=%v, want both set", src, wt)
 		}
-		root, _ := src.WorkingTreeRoot()
+		root := src.WorkingTreeRoot()
 		if got := gitOut(t, root, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature" {
 			t.Fatalf("source client HEAD = %q", got)
 		}
@@ -74,7 +74,7 @@ func TestSourceTree(t *testing.T) {
 		if src == nil || wt == nil || !wt.Main {
 			t.Fatalf("src=%v wt=%+v, want a client on the main entry", src, wt)
 		}
-		root, _ := src.WorkingTreeRoot()
+		root := src.WorkingTreeRoot()
 		if got := gitOut(t, root, "rev-parse", "--abbrev-ref", "HEAD"); got != "master" {
 			t.Fatalf("source client HEAD = %q, want master", got)
 		}

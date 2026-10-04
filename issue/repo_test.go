@@ -152,7 +152,7 @@ func TestListAndResolve(t *testing.T) {
 
 	t.Run("List skips a corrupt ref with a warning", func(t *testing.T) {
 		wrong := strings.Repeat("1", 40)
-		root, _ := c.WorkingTreeRoot()
+		root := c.WorkingTreeRoot()
 		runGit(t, root, "update-ref", "refs/zf/issues/"+wrong, first.ID)
 
 		recs, warnings, err := List(ctx, c)
@@ -211,7 +211,7 @@ func TestResolve_Ambiguous(t *testing.T) {
 		last = "1"
 	}
 	twin := rec.ID[:39] + last
-	root, _ := c.WorkingTreeRoot()
+	root := c.WorkingTreeRoot()
 	runGit(t, root, "update-ref", "refs/zf/issues/"+twin, rec.ID)
 
 	t.Run("an ambiguous prefix lists the candidates", func(t *testing.T) {
@@ -344,7 +344,7 @@ func TestLinkedWorktreeSharesIssues(t *testing.T) {
 
 	main := newRepo(t, "alice", "")
 	ctx := t.Context()
-	root, _ := main.WorkingTreeRoot()
+	root := main.WorkingTreeRoot()
 	wtDir := filepath.Join(t.TempDir(), "wt")
 	runGit(t, root, "worktree", "add", "-q", "-b", "side", wtDir)
 
@@ -409,7 +409,7 @@ func TestSync_RepushesWhenTheRemoteLacksTheIssue(t *testing.T) {
 
 	t.Run("after the remote URL moves to an empty repository", func(t *testing.T) {
 		moved := newOrigin(t)
-		root, _ := alice.WorkingTreeRoot()
+		root := alice.WorkingTreeRoot()
 		runGit(t, root, "remote", "set-url", "origin", moved)
 
 		res, err := Sync(ctx, alice)

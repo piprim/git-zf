@@ -44,10 +44,7 @@ func (c *Client) PushDryRun(ctx context.Context, branch string) (PushOutcome, bo
 		return PushOutcome{}, false, nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return PushOutcome{}, false, fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	cmd := exec.CommandContext(ctx, "git", "-C", root,
 		"push", "--porcelain", "--dry-run", remote, branch+":"+branch)
@@ -116,10 +113,7 @@ func (c *Client) PushBranch(ctx context.Context, branch string) error {
 		return nil
 	}
 
-	root, err := c.WorkingTreeRoot()
-	if err != nil {
-		return fmt.Errorf("working tree root: %w", err)
-	}
+	root := c.root
 
 	if err := c.runInteractive(ctx, root, "push", remote, branch+":"+branch); err != nil {
 		return fmt.Errorf("push %s: %w", branch, err)
