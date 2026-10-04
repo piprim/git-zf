@@ -1352,8 +1352,9 @@ func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 // TestClose_ParentClose_ReconcilesMergedChildFromRef covers Phase 12 of the
 // demo: Alice tries to close parent X, but her local store still has X.2 as
 // in_progress (Bob closed it in his clone). The branch ref for X.2 has
-// Merged=true (written by Bob's close). reconcileChildrenFromRefs should
-// update Alice's store so ChildrenAllMerged passes.
+// Merged=true (written by Bob's close). The reconcile getPickedBranch runs
+// (issueflow.ReconcileMergedFromRefs) should update Alice's store so
+// ChildrenAllMerged passes.
 func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
 	t.Parallel()
 

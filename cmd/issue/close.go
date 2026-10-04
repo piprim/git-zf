@@ -259,13 +259,9 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return err
 	}
 
-	// Reconcile child statuses from branch refs so closes done in sibling clones
-	// (e.g. Bob closed X.2 in his repo) are visible before the guard runs.
-	// Branch refs are already fetched above (FetchBranchRefs is called when
-	// parentSlug is empty, which is always the case for a top-level parent issue).
-	reconcileChildrenFromRefs(ctx, deps, picked.IssueSlug)
-
-	// Parent issue: block close until all children are merged.
+	// Parent issue: block close until all children are merged. A child closed
+	// in a sibling clone (e.g. Bob closed X.2 in his repo) was already marked
+	// merged from its branch ref by getPickedBranch (ReconcileMergedFromRefs).
 	if allDone, err := deps.store.ChildrenAllMerged(ctx, picked.IssueSlug); err != nil {
 		return fmt.Errorf("check children: %w", err)
 	} else if !allDone {
@@ -739,34 +735,6 @@ func doDeleteBranch(
 	}
 
 	return nil
-}
-
-// reconcileChildrenFromRefs reads refs/zf/branches/<childSlug> for every
-// in-progress child of parentSlug. When a ref has Merged=true (written by the
-// child's close in another clone), the local store is updated to merged so the
-// ChildrenAllMerged guard doesn't block the parent close.
-func reconcileChildrenFromRefs(ctx context.Context, deps closeDeps, parentSlug string) {
-	children, err := deps.store.ListChildIssues(ctx, parentSlug)
-	if err != nil || len(children) == 0 {
-		return
-	}
-
-	branches, err := deps.store.ListBranches(ctx, store.BranchStatusInProgress)
-	if err != nil {
-		return
-	}
-
-	isChild := make(map[string]bool, len(children))
-	for _, childSlug := range children {
-		isChild[childSlug] = true
-	}
-
-	now := time.Now()
-	for _, b := range branches {
-		if isChild[b.IssueSlug] {
-			issueflow.MarkMergedFromRef(ctx, deps.store, deps.client, b, now)
-		}
-	}
 }
 
 // proposeClosePush offers to push the merge target (base) after a successful
