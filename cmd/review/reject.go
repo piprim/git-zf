@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/pushflow"
-	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -106,75 +103,13 @@ func runReviewRejectInteractive(ctx context.Context, deps reviewDeps, prompter R
 // that was rejected.
 func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason string) (int, error) {
 	reason = strings.TrimSpace(reason)
-	latest, err := ensureReviewRecord(ctx, deps, issueSlug)
+
+	d, err := recordReviewDecision(ctx, deps, issueSlug, store.ReviewStatusChangesRequested, reason)
 	if err != nil {
 		return 0, err
 	}
-	if latest.Status != store.ReviewStatusInReview {
-		return 0, fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, latest.Status)
-	}
 
-	// Detect reviewer commits on <issueSlug>@review.
-	reviewBranch := branch.ReviewBranchName(issueSlug)
-	var featureBranch string
-
-	branches, branchErr := deps.store.ListBranches(ctx, store.BranchStatusAll)
-	if branchErr != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: list branches: %v (has_commits will be false)\n", branchErr)
-	}
-	for _, b := range branches {
-		if b.IssueSlug == issueSlug {
-			featureBranch = b.BranchName
-			break
-		}
-	}
-
-	hasCommits := false
-	reviewBranchExists := false
-	if exists, _ := deps.client.BranchExists(reviewBranch); exists {
-		reviewBranchExists = true
-		if featureBranch != "" {
-			n, countErr := deps.client.CommitsAhead(ctx, reviewBranch, featureBranch)
-			if countErr == nil && n > 0 {
-				hasCommits = true
-			}
-		}
-	}
-
-	// Write and push the ref FIRST (ref is the source of truth).
-	currentRef, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
-	if err != nil {
-		return 0, fmt.Errorf("read review ref: %w", err)
-	}
-	featureSHA := ""
-	if currentRef != nil {
-		featureSHA = currentRef.FeatureSHA
-	}
-
-	reviewer := ""
-	if currentRef != nil {
-		reviewer = currentRef.Reviewer
-	}
-	newRef := git.ReviewRef{
-		Status:     string(store.ReviewStatusChangesRequested),
-		Round:      latest.Round,
-		FeatureSHA: featureSHA,
-		Reviewer:   reviewer,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		Comment:    reason,
-	}
-
-	if _, err := deps.client.WriteReviewRef(ctx, issueSlug, newRef, currentSHA); err != nil {
-		return 0, fmt.Errorf("write review ref: %w", err)
-	}
-	// expectedOldSHA is currentSHA — the value the remote currently has.
-	if err := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
-	}
-
-	if err := deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatusChangesRequested, hasCommits); err != nil {
-		return 0, fmt.Errorf("update review status: %w", err)
-	}
+	reviewBranch, featureBranch, hasCommits := d.reviewBranch, d.featureBranch, d.hasCommits
 
 	// The rejection is recorded at this point whatever the branch cleanup or
 	// push proposal below does, so the reason is printed here rather than deferred.
@@ -183,7 +118,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 	}
 
 	// Handle review branch: keep if reviewer pushed commits, delete if empty.
-	if reviewBranchExists && !hasCommits {
+	if d.branchExists && !hasCommits {
 		if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
 			fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
 		}
@@ -198,8 +133,9 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 		}
 		fmt.Fprintf(deps.client.IO().Out,
 			"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
-			issueSlug, latest.Round, branchLabel)
-		return latest.Round, nil
+			issueSlug, d.round, branchLabel)
+
+		return d.round, nil
 	}
 
 	// Use issueSlug as fallback when feature branch not in local store.
@@ -208,7 +144,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 		branchLabel = issueSlug
 	}
 
-	if reviewBranchExists && hasCommits {
+	if d.branchExists && hasCommits {
 		if err := proposeReviewPush(ctx, deps, reviewBranch); err != nil {
 			return 0, err
 		}
@@ -222,16 +158,17 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 				"  git log %s..%s\n"+
 				"Cherry-pick, adapt, or discard as needed, then:\n"+
 				"  git zf review request\n",
-			issueSlug, latest.Round, branchLabel,
+			issueSlug, d.round, branchLabel,
 			reviewBranch, n, branchLabel, reviewBranch)
-		return latest.Round, nil
+
+		return d.round, nil
 	}
 
 	fmt.Fprintf(deps.client.IO().Out,
 		"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
-		issueSlug, latest.Round, branchLabel)
+		issueSlug, d.round, branchLabel)
 
-	return latest.Round, nil
+	return d.round, nil
 }
 
 // indentLines prefixes every line with two spaces for display under a heading.

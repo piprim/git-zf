@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
@@ -156,6 +157,84 @@ func ensureReviewRecord(ctx context.Context, deps reviewDeps, issueSlug string) 
 		}
 	}
 	return inserted, nil
+}
+
+// reviewDecision is what recordReviewDecision resolved while recording.
+type reviewDecision struct {
+	round         int
+	reviewBranch  string // <issueSlug>@review
+	featureBranch string // "" when the issue's branch is not in the local store
+	branchExists  bool   // reviewBranch exists locally
+	hasCommits    bool   // the reviewer pushed commits to reviewBranch
+}
+
+// recordReviewDecision flips the in-review issue to status (approved or
+// changes requested). comment is the reviewer's reason, "" when approving.
+//
+// It writes and pushes the review ref FIRST (the ref is the source of truth)
+// and updates the store after: a store failure leaves the ref correct, a ref
+// failure leaves the store unchanged.
+func recordReviewDecision(
+	ctx context.Context, deps reviewDeps, issueSlug string, status store.ReviewStatus, comment string,
+) (reviewDecision, error) {
+	latest, err := ensureReviewRecord(ctx, deps, issueSlug)
+	if err != nil {
+		return reviewDecision{}, err
+	}
+	if latest.Status != store.ReviewStatusInReview {
+		return reviewDecision{}, fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, latest.Status)
+	}
+
+	d := reviewDecision{round: latest.Round, reviewBranch: branch.ReviewBranchName(issueSlug)}
+
+	branches, branchErr := deps.store.ListBranches(ctx, store.BranchStatusAll)
+	if branchErr != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: list branches: %v (has_commits will be false)\n", branchErr)
+	}
+	for _, b := range branches {
+		if b.IssueSlug == issueSlug {
+			d.featureBranch = b.BranchName
+			break
+		}
+	}
+
+	// Detect reviewer commits on <issueSlug>@review.
+	d.branchExists, _ = deps.client.BranchExists(d.reviewBranch)
+	if d.branchExists && d.featureBranch != "" {
+		n, countErr := deps.client.CommitsAhead(ctx, d.reviewBranch, d.featureBranch)
+		d.hasCommits = countErr == nil && n > 0
+	}
+
+	currentRef, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
+	if err != nil {
+		return reviewDecision{}, fmt.Errorf("read review ref: %w", err)
+	}
+
+	newRef := git.ReviewRef{
+		Status:    string(status),
+		Round:     latest.Round,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Comment:   comment,
+	}
+	if currentRef != nil {
+		newRef.FeatureSHA = currentRef.FeatureSHA
+		newRef.Reviewer = currentRef.Reviewer
+	}
+
+	if _, err := deps.client.WriteReviewRef(ctx, issueSlug, newRef, currentSHA); err != nil {
+		return reviewDecision{}, fmt.Errorf("write review ref: %w", err)
+	}
+
+	// expectedOldSHA is currentSHA — the value the remote has before this push.
+	if err := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
+	}
+
+	if err := deps.store.UpdateReviewStatus(ctx, latest.ID, status, d.hasCommits); err != nil {
+		return reviewDecision{}, fmt.Errorf("update review status: %w", err)
+	}
+
+	return d, nil
 }
 
 // proposeReviewPush offers to push branch after a review transition. No-op when
