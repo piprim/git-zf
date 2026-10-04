@@ -28,38 +28,26 @@ func (r Review) getStartCmd() *cobra.Command {
 }
 
 func runReviewStartInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
-	}
-
-	// Collect issue slugs directly from git refs — does not require the
-	// reviewer to have the branch registered in their local store.
-	allRefs, err := deps.client.ListReviewRefs(ctx)
+	// inReviewBranches reads the review refs, not the local store, so the
+	// reviewer does not need the branch registered in their own store.
+	branches, err := inReviewBranches(ctx, deps)
 	if err != nil {
-		return fmt.Errorf("list review refs: %w", err)
+		return err
 	}
-
-	var inReviewSlugs []string
-	for issueID, ref := range allRefs {
-		if ref.Status == string(store.ReviewStatusInReview) {
-			inReviewSlugs = append(inReviewSlugs, issueID)
-		}
-	}
-
-	if len(inReviewSlugs) == 0 {
+	if len(branches) == 0 {
 		fmt.Fprintln(deps.client.IO().Out, "No issues currently awaiting review.")
 		return nil
 	}
 
-	issueSlug, err := prompter.PickIssueToStart(ctx, inReviewSlugs)
+	picked, err := prompter.PickBranch(ctx, "Select issue to review:", branches, currentIssueSlug(deps.client))
 	if err != nil {
-		return fmt.Errorf("issue picker: %w", err)
+		return fmt.Errorf("branch picker: %w", err)
 	}
-	if issueSlug == "" {
+	if picked == nil {
 		return nil
 	}
 
-	return runReviewStart(ctx, deps, issueSlug)
+	return runReviewStart(ctx, deps, picked.IssueSlug)
 }
 
 // runReviewStart creates the review branch for issueSlug. The caller is

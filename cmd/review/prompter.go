@@ -14,12 +14,8 @@ import (
 type ReviewPrompter interface {
 	// PickBranch presents a branch list with a configurable title and a smart
 	// default (the branch whose IssueSlug matches currentSlug, or the first row).
-	// Used by request, approve, reject, sync, and status subcommands.
+	// Used by request, start, approve, reject, sync, and status subcommands.
 	PickBranch(ctx context.Context, title string, branches []store.BranchRow, currentSlug string) (*store.BranchRow, error)
-
-	// PickIssueToStart presents a list of issue slugs available to start reviewing.
-	// Used by the start subcommand.
-	PickIssueToStart(ctx context.Context, slugs []string) (string, error)
 
 	// PickTrackerStatus presents the tracker's status list and returns the chosen
 	// status name (or "" to skip). Used by request/approve/reject to update the
@@ -48,14 +44,6 @@ func (p *huhReviewPrompter) PickBranch(ctx context.Context, title string, branch
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}
 	return &picked, nil
-}
-
-func (p *huhReviewPrompter) PickIssueToStart(ctx context.Context, slugs []string) (string, error) {
-	var picked string
-	if err := huh.NewForm(tui.ReviewIssueStartPicker(slugs, &picked)).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("issue picker: %w", err)
-	}
-	return picked, nil
 }
 
 func (p *huhReviewPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {

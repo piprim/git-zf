@@ -588,7 +588,7 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 
 	t.Run("review start succeeds on empty store after fetch", func(t *testing.T) {
 		reviewerStdout.Reset()
-		reviewPrompter := &scriptedReviewPrompter{IssueSlug: "77"}
+		reviewPrompter := &scriptedReviewPrompter{Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@review"}}
 		if err := runReviewStartInteractive(ctx, reviewerDeps, reviewPrompter); err != nil {
 			t.Fatalf("runReviewStartInteractive on empty store: %v", err)
 		}

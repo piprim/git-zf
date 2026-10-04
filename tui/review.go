@@ -7,8 +7,8 @@ import (
 	"github.com/piprim/git-zf/store"
 )
 
-// ReviewBranchPicker presents a branch list for review commands (request, approve,
-// reject, sync). The branch whose IssueSlug matches currentSlug is pre-selected;
+// ReviewBranchPicker presents a branch list for review commands (request, start,
+// approve, reject, sync). The branch whose IssueSlug matches currentSlug is pre-selected;
 // falls back to the first row.
 func ReviewBranchPicker(title string, rows []store.BranchRow, currentSlug string, selected *store.BranchRow) *huh.Group {
 	opts := make([]huh.Option[store.BranchRow], len(rows))
@@ -28,23 +28,6 @@ func ReviewBranchPicker(title string, rows []store.BranchRow, currentSlug string
 	return huh.NewGroup(
 		huh.NewSelect[store.BranchRow]().
 			Title(title).
-			Options(opts...).
-			Value(selected),
-	)
-}
-
-// ReviewIssueStartPicker presents a list of issue slugs available to start reviewing.
-// The first slug is pre-selected.
-func ReviewIssueStartPicker(slugs []string, selected *string) *huh.Group {
-	opts := make([]huh.Option[string], len(slugs))
-	for i, s := range slugs {
-		opts[i] = huh.NewOption(s, s)
-	}
-	*selected = slugs[0]
-
-	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Select issue to review:").
 			Options(opts...).
 			Value(selected),
 	)
