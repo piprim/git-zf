@@ -335,22 +335,16 @@ ORDER BY b.created_at DESC`
 
 // scanBranchRow scans one row from a branch query. Column order must match
 // branchSelectBase: id, id_slug, title, name, type, status, created_at.
+// created_at scans into a time.Time because the column is declared DATETIME:
+// the driver parses the stored text (see TestStoredTimes).
 func scanBranchRow(rows *sql.Rows) (BranchRow, error) {
 	var r BranchRow
-	var createdAtStr string
 
 	if err := rows.Scan(
-		&r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &createdAtStr,
+		&r.IssueID, &r.IssueSlug, &r.Title, &r.BranchName, &r.Type, &r.Status, &r.CreatedAt,
 	); err != nil {
 		return r, fmt.Errorf("scan branch row: %w", err)
 	}
-
-	t, parseErr := parseSQLiteTime(createdAtStr)
-	if parseErr != nil {
-		return r, fmt.Errorf("parse branch created_at %q: %w", createdAtStr, parseErr)
-	}
-
-	r.CreatedAt = t
 
 	return r, nil
 }
@@ -372,20 +366,6 @@ func (s *Store) DeleteBranch(ctx context.Context, name string) error {
 	}
 
 	return nil
-}
-
-// parseSQLiteTime parses the time string returned by modernc/sqlite for DATETIME columns.
-// The driver may return either RFC3339 ("2006-01-02T15:04:05Z") or SQLite text
-// ("2006-01-02 15:04:05") depending on whether the value originated from
-// CURRENT_TIMESTAMP or a literal string INSERT.
-func parseSQLiteTime(s string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-
-	return time.Time{}, fmt.Errorf("unrecognised datetime format %q", s)
 }
 
 // OpenRepo opens the local store inside the current git repository's common
@@ -500,12 +480,12 @@ func (s *Store) InsertReview(ctx context.Context, issueSlug, reviewer string) (*
 	}
 
 	round := maxRound + 1
-	now := time.Now().UTC().Format(time.RFC3339)
+	createdAt := time.Now().UTC().Truncate(time.Second) // what RFC3339 keeps
 
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO reviews (issue_slug, round, reviewer, status, created_at)
 		 VALUES (?, ?, ?, ?, ?)`,
-		issueSlug, round, reviewer, string(ReviewStatusInReview), now,
+		issueSlug, round, reviewer, string(ReviewStatusInReview), createdAt.Format(time.RFC3339),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert review: %w", err)
@@ -519,8 +499,6 @@ func (s *Store) InsertReview(ctx context.Context, issueSlug, reviewer string) (*
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit tx: %w", err)
 	}
-
-	createdAt, _ := parseSQLiteTime(now)
 
 	return &ReviewRow{
 		ID:        id,
@@ -544,30 +522,14 @@ func (s *Store) GetLatestReview(ctx context.Context, issueSlug string) (*ReviewR
 
 func scanReviewRow(row *sql.Row) (*ReviewRow, error) {
 	var r ReviewRow
-	var createdAtStr string
-	var resolvedAtStr *string
 
 	err := row.Scan(&r.ID, &r.IssueSlug, &r.Round, &r.Reviewer,
-		(*string)(&r.Status), &r.HasCommits, &createdAtStr, &resolvedAtStr)
+		(*string)(&r.Status), &r.HasCommits, &r.CreatedAt, &r.ResolvedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scan review row: %w", err)
-	}
-
-	t, parseErr := parseSQLiteTime(createdAtStr)
-	if parseErr != nil {
-		return nil, fmt.Errorf("parse created_at: %w", parseErr)
-	}
-	r.CreatedAt = t
-
-	if resolvedAtStr != nil {
-		rt, parseErr := parseSQLiteTime(*resolvedAtStr)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse resolved_at: %w", parseErr)
-		}
-		r.ResolvedAt = &rt
 	}
 
 	return &r, nil
@@ -634,23 +596,10 @@ func (s *Store) ListReviews(ctx context.Context, issueSlug string) ([]ReviewRow,
 	var result []ReviewRow
 	for rows.Next() {
 		var r ReviewRow
-		var createdAtStr string
-		var resolvedAtStr *string
 
 		if err := rows.Scan(&r.ID, &r.IssueSlug, &r.Round, &r.Reviewer,
-			(*string)(&r.Status), &r.HasCommits, &createdAtStr, &resolvedAtStr); err != nil {
+			(*string)(&r.Status), &r.HasCommits, &r.CreatedAt, &r.ResolvedAt); err != nil {
 			return nil, fmt.Errorf("scan review row: %w", err)
-		}
-
-		t, parseErr := parseSQLiteTime(createdAtStr)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse created_at: %w", parseErr)
-		}
-		r.CreatedAt = t
-
-		if resolvedAtStr != nil {
-			rt, _ := parseSQLiteTime(*resolvedAtStr)
-			r.ResolvedAt = &rt
 		}
 
 		result = append(result, r)
@@ -772,20 +721,13 @@ func (s *Store) ListCommandHistory(ctx context.Context, command string, limit in
 
 	for rows.Next() {
 		var r CommandHistoryRow
-		var payloadStr, createdAtStr string
+		var payloadStr string
 
-		if err := rows.Scan(&r.ID, &payloadStr, &createdAtStr); err != nil {
+		if err := rows.Scan(&r.ID, &payloadStr, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan command history row: %w", err)
 		}
 
 		r.Payload = json.RawMessage(payloadStr)
-
-		t, parseErr := parseSQLiteTime(createdAtStr)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse command_history created_at %q: %w", createdAtStr, parseErr)
-		}
-
-		r.CreatedAt = t
 		result = append(result, r)
 	}
 

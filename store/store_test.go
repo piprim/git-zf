@@ -971,3 +971,83 @@ func TestOpenRepo_linkedWorktreeSharesMainStore(t *testing.T) {
 		}
 	})
 }
+
+// TestStoredTimes checks that the driver hands back a time.Time for both text
+// forms the store holds in its DATETIME columns: SQLite's CURRENT_TIMESTAMP
+// ("2006-01-02 15:04:05") and the RFC3339 strings the store writes itself.
+func TestStoredTimes(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+
+	recent := func(t *testing.T, what string, got time.Time) {
+		t.Helper()
+
+		if d := time.Since(got); d < -time.Minute || d > time.Minute {
+			t.Errorf("%s = %v, want about now (off by %v)", what, got, d)
+		}
+	}
+
+	t.Run("a CURRENT_TIMESTAMP default is read as a UTC time", func(t *testing.T) {
+		if err := s.InsertIssueWithBranch(ctx,
+			&Issue{IDSlug: "T-1", Title: "times", StatusID: 1},
+			&Branch{Name: "T-1@feat@times", Type: "feat", StatusID: 1},
+		); err != nil {
+			t.Fatalf("InsertIssueWithBranch: %v", err)
+		}
+
+		rows, err := s.ListBranches(ctx, BranchStatusAll)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("ListBranches = %d rows, err %v", len(rows), err)
+		}
+
+		recent(t, "branch created_at", rows[0].CreatedAt)
+
+		if err := s.InsertCommandHistory(ctx, "commit", json.RawMessage(`{}`)); err != nil {
+			t.Fatalf("InsertCommandHistory: %v", err)
+		}
+
+		history, err := s.ListCommandHistory(ctx, "commit", 1)
+		if err != nil || len(history) != 1 {
+			t.Fatalf("ListCommandHistory = %d rows, err %v", len(history), err)
+		}
+
+		recent(t, "command_history created_at", history[0].CreatedAt)
+	})
+
+	t.Run("an RFC3339 string is read back as the time that was written", func(t *testing.T) {
+		inserted, err := s.InsertReview(ctx, "T-1", "carol")
+		if err != nil {
+			t.Fatalf("InsertReview: %v", err)
+		}
+
+		recent(t, "inserted created_at", inserted.CreatedAt)
+
+		latest, err := s.GetLatestReview(ctx, "T-1")
+		if err != nil {
+			t.Fatalf("GetLatestReview: %v", err)
+		}
+		if !latest.CreatedAt.Equal(inserted.CreatedAt) {
+			t.Errorf("GetLatestReview created_at = %v, want %v", latest.CreatedAt, inserted.CreatedAt)
+		}
+		if latest.ResolvedAt != nil {
+			t.Errorf("resolved_at = %v before any decision, want nil", latest.ResolvedAt)
+		}
+
+		if err := s.UpdateReviewStatus(ctx, latest.ID, ReviewStatusApproved, false); err != nil {
+			t.Fatalf("UpdateReviewStatus: %v", err)
+		}
+
+		all, err := s.ListReviews(ctx, "T-1")
+		if err != nil || len(all) != 1 {
+			t.Fatalf("ListReviews = %d rows, err %v", len(all), err)
+		}
+		if !all[0].CreatedAt.Equal(inserted.CreatedAt) {
+			t.Errorf("ListReviews created_at = %v, want %v", all[0].CreatedAt, inserted.CreatedAt)
+		}
+		if all[0].ResolvedAt == nil {
+			t.Fatal("resolved_at is nil after the decision")
+		}
+
+		recent(t, "resolved_at", *all[0].ResolvedAt)
+	})
+}
