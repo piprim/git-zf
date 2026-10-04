@@ -29,8 +29,7 @@ type ParentClient interface {
 // where the store has no record, the refs/zf/branches/<slug> git ref is the
 // fallback (FetchBranchRefs runs best-effort first so a later read sees fresh
 // refs). The parent's branch *name* is resolved from the store, then from the
-// parent's own branch ref. Extracted verbatim from cmd/issue/close.go's
-// resolveDefaultBase so close and commit share one implementation.
+// parent's own branch ref. Close and commit share this one implementation.
 func ResolveParentBranch(ctx context.Context, s ParentStore, c ParentClient, issueSlug, cfgBase string) (string, error) {
 	base := cfgBase
 	if base == "" {

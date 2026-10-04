@@ -23,7 +23,7 @@ type BranchClient interface {
 }
 
 // Prompter resolves the issue-input forms: manual entry, the tracker picker,
-// and the tracker-error note. It is the slice of StartPrompter that getFromUser
+// and the tracker-error note. It is the slice of StartPrompter that getFromRepoOrUser
 // and getFromTracker drive, kept as its own interface so those helpers can be
 // unit-tested without the rest of the start flow. It lives here in the
 // application layer (not the issue domain package) because every method is a
@@ -51,7 +51,7 @@ type Prompter interface {
 // for every UI element.
 type StartPrompter interface {
 	// Prompter contributes the three issue-input methods used by
-	// getFromUser and getFromTracker.
+	// getFromRepoOrUser and getFromTracker.
 	Prompter
 
 	// PickIssueFromRepo opens the picker over the open issues stored in the

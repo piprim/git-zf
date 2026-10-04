@@ -116,11 +116,12 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 		return err
 	}
 
+	creator := branchCreator
 	if useWorktree {
-		return createWorktreeFlow(ctx, deps, prompter, pickedIssue)
+		creator = worktreeCreator
 	}
 
-	return createBranchFlow(ctx, deps, prompter, pickedIssue)
+	return createFlow(ctx, deps, prompter, pickedIssue, creator)
 }
 
 // pickIssue chooses between tracker-driven and user-driven issue input.
@@ -213,9 +214,12 @@ func getFromRepoOrUser(
 		}
 	}
 
-	got, err := getFromUser(ctx, p, allowedTypes)
-	if err != nil || got == nil || got.ID != "" {
-		return got, err
+	got, err := p.PickIssueFromUser(ctx, allowedTypes)
+	if err != nil {
+		return nil, fmt.Errorf("issue input: %w", err)
+	}
+	if got == nil || got.ID != "" {
+		return got, nil
 	}
 
 	// Check the title before writing anything: an issue whose branch cannot
@@ -287,18 +291,6 @@ func issueFromRecord(rec *issue.Record) *issue.Issue {
 	}
 }
 
-// getFromUser drives the manual issue-input flow via p.PickIssueFromUser.
-// Moved here from the issue domain package: it is application-layer
-// orchestration over the UI prompter, not entity logic.
-func getFromUser(ctx context.Context, p Prompter, allowedTypes []string) (*issue.Issue, error) {
-	out, err := p.PickIssueFromUser(ctx, allowedTypes)
-	if err != nil {
-		return nil, fmt.Errorf("issue input: %w", err)
-	}
-
-	return out, nil
-}
-
 // getFromTracker fetches issues via t.ListIssues, then either falls back to
 // the manual path (the manual callback) on error/empty-list, or drives the
 // tracker picker (PickIssueFromTracker). All form opening is delegated to p.
@@ -354,14 +346,6 @@ func resolveUseWorktree(ctx context.Context, deps StartDeps, prompter StartPromp
 type createFlowCreator func(
 	ctx context.Context, deps StartDeps, prompter StartPrompter, branchName, base string,
 ) (created bool, kind string, err error)
-
-func createBranchFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
-	return createFlow(ctx, deps, prompter, picked, branchCreator)
-}
-
-func createWorktreeFlow(ctx context.Context, deps StartDeps, prompter StartPrompter, picked *issue.Issue) error {
-	return createFlow(ctx, deps, prompter, picked, worktreeCreator)
-}
 
 // createFlow implements the shared prepare→resolve-conflict→[creator]→persist→tracker
 // pipeline. creator handles the mode-specific confirm+create+output middle.
@@ -442,7 +426,11 @@ func createFlow(
 	}
 
 	if picked.TrackerType != "" {
-		updateTrackerStatus(ctx, deps, prompter, picked.ID)
+		// Every error here is a non-fatal warning: the branch was already
+		// created, and the operator can clean up tracker drift manually.
+		ApplyTrackerStatus(
+			ctx, deps.Tracker, deps.Client.IO().Err,
+			picked.ID, deps.Cfg.IssueTracker.Type, prompter.PickTrackerStatus)
 	}
 
 	return nil
@@ -599,7 +587,7 @@ func resolveDefaultBase(deps StartDeps) (string, error) {
 }
 
 // prepareBranch assembles the branch and resolves the base branch. Shared by
-// createBranchFlow and createWorktreeFlow.
+// the branch and worktree creators of createFlow.
 //
 // When deps.Flags.ParentIssueSlug is set, parentStore (must be non-nil) is
 // queried to find the parent's in-progress branch, which becomes the base.
@@ -646,15 +634,6 @@ func prepareBranch(
 	}
 
 	return b, base, nil
-}
-
-// updateTrackerStatus runs the tracker status-picker form and applies the
-// chosen status. All errors are non-fatal warnings (the branch was already
-// created — the operator must be able to clean up tracker drift manually).
-func updateTrackerStatus(ctx context.Context, deps StartDeps, prompter StartPrompter, issueID string) {
-	ApplyTrackerStatus(
-		ctx, deps.Tracker, deps.Client.IO().Err,
-		issueID, deps.Cfg.IssueTracker.Type, prompter.PickTrackerStatus)
 }
 
 // persist records the new branch and its issue in the store of the repository

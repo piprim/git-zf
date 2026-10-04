@@ -246,7 +246,10 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		}
 	}()
 
-	base, err := resolveDefaultBase(ctx, deps, picked)
+	// Smart-default merge target, pre-selected in the picker: the configured
+	// base (or DefaultBaseBranch), redirected to the parent integration branch
+	// when the picked issue has a parent.
+	base, err := issueflow.ResolveParentBranch(ctx, deps.store, deps.client, picked.IssueSlug, deps.cfg.Branch.Base)
 	if err != nil {
 		return err
 	}
@@ -356,17 +359,6 @@ func trackPickedCandidate(ctx context.Context, deps closeDeps, picked *store.Bra
 	}
 
 	return &promoted
-}
-
-// resolveDefaultBase computes the smart-default merge target: the configured
-// base (or DefaultBaseBranch) redirected to the parent integration branch when
-// the picked issue has a parent. This is the value pre-selected in the picker.
-//
-// The body lives in issueflow.ResolveParentBranch so the commit flow can reuse
-// the identical resolution for its merge-vs-parent preview; this wrapper keeps
-// the close call site (runClose) unchanged.
-func resolveDefaultBase(ctx context.Context, deps closeDeps, picked *store.BranchRow) (string, error) {
-	return issueflow.ResolveParentBranch(ctx, deps.store, deps.client, picked.IssueSlug, deps.cfg.Branch.Base)
 }
 
 // chooseMergeTarget refines the smart-default base into the final merge target.

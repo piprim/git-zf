@@ -543,7 +543,7 @@ func TestRunIssueStart_UseWorktreeConfigOverride(t *testing.T) {
 	}
 
 	// Tripwire: PickUseWorktree returning an error would surface here. The
-	// scripted prompter's UseWorktree=false would route to createBranchFlow if
+	// scripted prompter's UseWorktree=false would route to the branch creator if
 	// the toggle were consulted — instead we expect it to be skipped entirely
 	// and the override (true) to drive the worktree flow.
 	prompter := &scriptedStartPrompter{
@@ -587,7 +587,7 @@ func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
 
 	// Tracker is configured (rig.cfg.IssueTracker.Type = "fake") but the
 	// operator declines the toggle. pickIssue should fall through to
-	// getFromUser → prompter.PickIssueFromUser.
+	// prompter.PickIssueFromUser.
 	manualPicked := &issuepkg.Issue{
 		Type:  "feat",
 		Issue: tracker.Issue{ID: "ABC-11", Subject: "Manual choice"},
