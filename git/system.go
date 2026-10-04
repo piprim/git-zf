@@ -3,27 +3,17 @@ package git
 import (
 	"context"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 )
 
+// ExecPath returns git's exec path, the directory git looks in for its
+// subcommands.
 func ExecPath(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "--exec-path")
-	stdout, err := cmd.StdoutPipe()
+	out, err := exec.CommandContext(ctx, "git", "--exec-path").Output()
 	if err != nil {
-		return "", fmt.Errorf("exec-path pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("exec-path start: %w", err)
-	}
-	result, err := io.ReadAll(stdout)
-	if err != nil {
-		return "", fmt.Errorf("exec-path read: %w", err)
-	}
-	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("exec-path wait: %w", err)
+		return "", fmt.Errorf("git --exec-path: %w", err)
 	}
 
-	return strings.TrimSpace(string(result)), nil
+	return strings.TrimSpace(string(out)), nil
 }

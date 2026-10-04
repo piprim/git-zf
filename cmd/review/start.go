@@ -15,7 +15,7 @@ func (r Review) getStartCmd() *cobra.Command {
 		Short: "Begin reviewing an issue (creates <IssueID>@review branch from the locked snapshot)",
 		Args:  cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
-			return runReviewStartInteractive(ctx, deps, newHuhReviewPrompter())
+			return runReviewStartInteractive(ctx, deps, &huhReviewPrompter{})
 		}),
 	}
 }

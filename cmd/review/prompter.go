@@ -36,8 +36,6 @@ var _ ReviewPrompter = (*huhReviewPrompter)(nil)
 
 type huhReviewPrompter struct{}
 
-func newHuhReviewPrompter() *huhReviewPrompter { return &huhReviewPrompter{} }
-
 func (p *huhReviewPrompter) PickBranch(ctx context.Context, title string, branches []store.BranchRow, currentSlug string) (*store.BranchRow, error) {
 	var picked store.BranchRow
 	if err := huh.NewForm(tui.ReviewBranchPicker(title, branches, currentSlug, &picked)).RunWithContext(ctx); err != nil {

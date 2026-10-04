@@ -24,11 +24,6 @@ type PrunePrompter interface {
 // by the --yes / -y flag on `branch prune`.
 type autoConfirmPrunePrompter struct{}
 
-// newAutoConfirmPrunePrompter returns the auto-confirm PrunePrompter wired by --yes.
-func newAutoConfirmPrunePrompter() *autoConfirmPrunePrompter {
-	return &autoConfirmPrunePrompter{}
-}
-
 func (p *autoConfirmPrunePrompter) ConfirmPrune(_ context.Context, _, _ int) (bool, error) {
 	return true, nil
 }
@@ -40,11 +35,6 @@ var _ PrunePrompter = (*huhPrunePrompter)(nil)
 // asking the operator to confirm. Constructed once per `branch prune`
 // invocation.
 type huhPrunePrompter struct{}
-
-// newHuhPrunePrompter returns the interactive PrunePrompter used by default.
-func newHuhPrunePrompter() *huhPrunePrompter {
-	return &huhPrunePrompter{}
-}
 
 func (p *huhPrunePrompter) ConfirmPrune(ctx context.Context, toDelete, toMerge int) (bool, error) {
 	var confirmed bool

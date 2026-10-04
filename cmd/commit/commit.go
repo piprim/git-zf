@@ -26,16 +26,7 @@ func New(appConfig *config.AppConfig) Commit {
 }
 
 func (c Commit) GetRootCmd() *cobra.Command {
-	var (
-		skip             bool
-		all              bool
-		amend            bool
-		noVerify         bool
-		signoff          bool
-		allowEmpty       bool
-		includeUntracked bool
-		author           string
-	)
+	var opts tui.CommitOption
 
 	desc := "Open the " + c.appConfig.ProgName +
 		" TUI to compose a standardised commit message, then commit using go-git."
@@ -46,36 +37,26 @@ func (c Commit) GetRootCmd() *cobra.Command {
 	}
 
 	f := cmd.Flags()
-	f.BoolVarP(&skip, "yes", "y", false, "skip the commit options form and assume defaults")
-	f.BoolVarP(&all, "all", "a", false, "stage all tracked modified/deleted files before committing")
-	f.BoolVarP(&includeUntracked, "include-untracked", "u", false, "stage untracked files before committing")
-	f.BoolVar(&amend, "amend", false, "replace the tip of the current branch")
-	f.BoolVarP(&noVerify, "no-verify", "n", false, "bypass pre-commit and commit-msg hooks")
-	f.BoolVarP(&signoff, "signoff", "s", false, "add Signed-off-by trailer to the commit message")
-	f.BoolVar(&allowEmpty, "allow-empty", false, "allow a commit with no changes")
-	f.StringVar(&author, "author", "", `override commit author as "Name <email>"`)
+	f.BoolVarP(&opts.Skip, "yes", "y", false, "skip the commit options form and assume defaults")
+	f.BoolVarP(&opts.All, "all", "a", false, "stage all tracked modified/deleted files before committing")
+	f.BoolVarP(&opts.IncludeUntracked, "include-untracked", "u", false, "stage untracked files before committing")
+	f.BoolVar(&opts.Amend, "amend", false, "replace the tip of the current branch")
+	f.BoolVarP(&opts.NoVerify, "no-verify", "n", false, "bypass pre-commit and commit-msg hooks")
+	f.BoolVarP(&opts.Signoff, "signoff", "s", false, "add Signed-off-by trailer to the commit message")
+	f.BoolVar(&opts.AllowEmpty, "allow-empty", false, "allow a commit with no changes")
+	f.StringVar(&opts.Author, "author", "", `override commit author as "Name <email>"`)
 	pushflow.AddFlags(cmd)
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return c.runE(cmd, tui.CommitOption{
-			Skip: skip ||
-				cmd.Flags().Changed("all") ||
-				cmd.Flags().Changed("include-untracked") ||
-				cmd.Flags().Changed("amend") ||
-				cmd.Flags().Changed("no-verify") ||
-				cmd.Flags().Changed("signoff") ||
-				cmd.Flags().Changed("allow-empty") ||
-				cmd.Flags().Changed("author"),
-			CommitOptions: git.CommitOptions{
-				All:              all,
-				IncludeUntracked: includeUntracked,
-				Amend:            amend,
-				NoVerify:         noVerify,
-				Signoff:          signoff,
-				AllowEmpty:       allowEmpty,
-				Author:           author,
-			},
-		})
+		o := opts
+		// Passing any commit option also skips the options form.
+		for _, name := range []string{
+			"all", "include-untracked", "amend", "no-verify", "signoff", "allow-empty", "author",
+		} {
+			o.Skip = o.Skip || cmd.Flags().Changed(name)
+		}
+
+		return c.runE(cmd, o)
 	}
 
 	return cmd

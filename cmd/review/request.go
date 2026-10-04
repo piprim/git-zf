@@ -19,7 +19,7 @@ func (r Review) getRequestCmd() *cobra.Command {
 		Short: "Submit an issue branch for code review (locks the branch)",
 		Args:  cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
-			return runReviewRequestInteractive(ctx, deps, newHuhReviewPrompter())
+			return runReviewRequestInteractive(ctx, deps, &huhReviewPrompter{})
 		}),
 	}
 	pushflow.AddFlags(cmd)

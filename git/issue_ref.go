@@ -94,21 +94,6 @@ func (c *Client) PublishIssueRoot(ctx context.Context, id string) error {
 	return nil
 }
 
-// CreateIssueRef writes payload as the root commit of a new issue chain and
-// creates refs/zf/issues/<id>, where id is that commit's ID. Returns id.
-func (c *Client) CreateIssueRef(ctx context.Context, payload []byte, message string) (string, error) {
-	id, err := c.WriteIssueRoot(ctx, payload, message)
-	if err != nil {
-		return "", err
-	}
-
-	if err := c.PublishIssueRoot(ctx, id); err != nil {
-		return "", err
-	}
-
-	return id, nil
-}
-
 // AppendIssueCommit writes payload as a new commit on top of issue id and
 // moves the ref to it with compare-and-swap. Returns the new commit ID.
 func (c *Client) AppendIssueCommit(ctx context.Context, id string, payload []byte, message string) (string, error) {

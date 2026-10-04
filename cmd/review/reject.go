@@ -1,6 +1,7 @@
 package review
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,7 +30,8 @@ func (r Review) getRejectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runReviewRejectInteractive(ctx, deps, newHuhReviewPrompter(), reason, !given)
+
+			return runReviewRejectInteractive(ctx, deps, &huhReviewPrompter{}, reason, !given)
 		},
 	}
 	cmd.Flags().StringP("message", "m", "", "reason for requesting changes (skips the prompt)")
@@ -119,54 +121,37 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 
 	// Handle review branch: keep if reviewer pushed commits, delete if empty.
 	if d.branchExists && !hasCommits {
-		if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
+		if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, deps.cfg.Branch.Base); err != nil {
 			fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
 		}
 		// Only push --delete when the branch actually exists on the remote.
 		if deps.client.RemoteBranchExists(ctx, reviewBranch) {
 			_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
 		}
-		// Use issueSlug as fallback when the feature branch is not in the local store.
-		branchLabel := featureBranch
-		if branchLabel == "" {
-			branchLabel = issueSlug
-		}
-		fmt.Fprintf(deps.client.IO().Out,
-			"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
-			issueSlug, d.round, branchLabel)
-
-		return d.round, nil
 	}
 
-	// Use issueSlug as fallback when feature branch not in local store.
-	branchLabel := featureBranch
-	if branchLabel == "" {
-		branchLabel = issueSlug
-	}
-
-	if d.branchExists && hasCommits {
+	if hasCommits {
 		if err := proposeReviewPush(ctx, deps, reviewBranch); err != nil {
 			return 0, err
 		}
 	}
 
-	if hasCommits {
-		n, _ := deps.client.CommitsAhead(ctx, reviewBranch, featureBranch)
-		fmt.Fprintf(deps.client.IO().Out,
-			"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n"+
-				"%s has %d reviewer commit(s). Inspect with:\n"+
-				"  git log %s..%s\n"+
-				"Cherry-pick, adapt, or discard as needed, then:\n"+
-				"  git zf review request\n",
-			issueSlug, d.round, branchLabel,
-			reviewBranch, n, branchLabel, reviewBranch)
-
-		return d.round, nil
-	}
+	// Use issueSlug as fallback when the feature branch is not in the local store.
+	branchLabel := cmp.Or(featureBranch, issueSlug)
 
 	fmt.Fprintf(deps.client.IO().Out,
 		"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
 		issueSlug, d.round, branchLabel)
+
+	if hasCommits {
+		n, _ := deps.client.CommitsAhead(ctx, reviewBranch, featureBranch)
+		fmt.Fprintf(deps.client.IO().Out,
+			"%s has %d reviewer commit(s). Inspect with:\n"+
+				"  git log %s..%s\n"+
+				"Cherry-pick, adapt, or discard as needed, then:\n"+
+				"  git zf review request\n",
+			reviewBranch, n, branchLabel, reviewBranch)
+	}
 
 	return d.round, nil
 }

@@ -85,19 +85,8 @@ func Run(ctx context.Context, client *git.Client, p Params, prompter Prompter, p
 	}
 
 	// The Target may not exist locally; LocalOrRemoteRef falls back to origin/<target>.
-	dryRunBase := client.LocalOrRemoteRef(p.Target)
-	conflicts, err := client.MergeDryRun(ctx, p.Source, dryRunBase)
-	if err != nil {
-		return Result{}, fmt.Errorf("merge dry-run: %w", err)
-	}
-	if len(conflicts) > 0 {
-		fmt.Fprintln(client.IO().Out, "Conflicts detected:")
-		for _, f := range conflicts {
-			fmt.Fprintln(client.IO().Out, "  "+f)
-		}
-		fmt.Fprintln(client.IO().Out, "Aborting.")
-
-		return Result{}, fmt.Errorf("merge conflicts in branch %q", p.Source)
+	if err := r.mergeDryRun(ctx, client.LocalOrRemoteRef(p.Target)); err != nil {
+		return Result{}, err
 	}
 
 	strategy, err := prompter.PickStrategy(ctx)

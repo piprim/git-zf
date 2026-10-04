@@ -121,7 +121,7 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 			return
 		}
 		cleanupCtx := context.WithoutCancel(ctx)
-		if delErr := d.client.DeleteLocalBranchSafe(cleanupCtx, source.Name, true, d.cfg.Branch.Base); delErr != nil {
+		if delErr := d.client.DeleteLocalBranchSafe(cleanupCtx, source.Name, d.cfg.Branch.Base); delErr != nil {
 			fmt.Fprintf(d.client.IO().Err, "warning: rollback materialized branch %q: %v\n", source.Name, delErr)
 		}
 	}()

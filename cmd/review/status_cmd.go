@@ -14,7 +14,7 @@ func (r Review) getStatusCmd() *cobra.Command {
 		Short: "Show the full review history for an issue",
 		Args:  cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
-			return runReviewStatusInteractive(ctx, deps, newHuhReviewPrompter())
+			return runReviewStatusInteractive(ctx, deps, &huhReviewPrompter{})
 		}),
 	}
 }

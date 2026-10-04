@@ -17,7 +17,7 @@ func (r Review) getSyncCmd() *cobra.Command {
 		Short: "Bring a branch up to date: merge pending reviewer commits, then parent drift",
 		Args:  cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
-			return runReviewSyncInteractive(ctx, deps, newHuhReviewPrompter())
+			return runReviewSyncInteractive(ctx, deps, &huhReviewPrompter{})
 		}),
 	}
 }

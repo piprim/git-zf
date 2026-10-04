@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strings"
@@ -197,4 +198,21 @@ func TestIssueRef_ReadErrors(t *testing.T) {
 			t.Errorf("err = %v, want a read error distinct from ErrIssueNotFound", err)
 		}
 	})
+}
+
+// CreateIssueRef writes payload as the root commit of a new issue chain and
+// creates refs/zf/issues/<id>, where id is that commit's ID. Returns id.
+// Test-only: production code calls WriteIssueRoot and PublishIssueRoot
+// separately, so nothing is published before the branch exists.
+func (c *Client) CreateIssueRef(ctx context.Context, payload []byte, message string) (string, error) {
+	id, err := c.WriteIssueRoot(ctx, payload, message)
+	if err != nil {
+		return "", err
+	}
+
+	if err := c.PublishIssueRoot(ctx, id); err != nil {
+		return "", err
+	}
+
+	return id, nil
 }

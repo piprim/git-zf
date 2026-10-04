@@ -400,13 +400,7 @@ func (h IssueHint) prefillNotClosed(msgCfg config.CommitMessageConfig) map[strin
 
 // hasItem reports whether items contains an entry with the given Name.
 func hasItem(items []config.CommitItem, name string) bool {
-	for i := range items {
-		if items[i].Name == name {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(items, func(it config.CommitItem) bool { return it.Name == name })
 }
 
 // setItemValue finds the first item with the given name and sets its Value.

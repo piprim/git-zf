@@ -241,9 +241,9 @@ func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 		return err
 	}
 
-	var prompter PrunePrompter = newHuhPrunePrompter()
+	var prompter PrunePrompter = &huhPrunePrompter{}
 	if flags.yes {
-		prompter = newAutoConfirmPrunePrompter()
+		prompter = &autoConfirmPrunePrompter{}
 	}
 
 	return runPrune(ctx, os.Stdout, s, c, prompter, flags)

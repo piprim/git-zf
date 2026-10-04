@@ -3,7 +3,6 @@ package install
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,31 +42,16 @@ func installSubCmd(ctx context.Context, srcFilePath string) (string, error) {
 	}
 
 	dstFilePath := filepath.Join(dst, config.ProgName)
-	if _, err := copyFile(dstFilePath, srcFilePath); err != nil {
-		return "", err
+	//nolint:gosec // srcFilePath is given by os.Args[0]
+	bin, err := os.ReadFile(srcFilePath)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", srcFilePath, err)
+	}
+
+	//nolint:gosec // an installed command must be executable
+	if err := os.WriteFile(dstFilePath, bin, 0o755); err != nil {
+		return "", fmt.Errorf("write %s: %w", dstFilePath, err)
 	}
 
 	return dstFilePath, nil
-}
-
-func copyFile(dstName, srcName string) (int64, error) {
-	//nolint:gosec // srcName is given by os.Args[0]
-	src, err := os.Open(srcName)
-	if err != nil {
-		return 0, fmt.Errorf("open source: %w", err)
-	}
-	defer func() { _ = src.Close() }()
-
-	dst, err := os.OpenFile(dstName, os.O_WRONLY|os.O_CREATE, 0755)
-	if err != nil {
-		return 0, fmt.Errorf("open destination: %w", err)
-	}
-	defer func() { _ = dst.Close() }()
-
-	nb, err := io.Copy(dst, src)
-	if err != nil {
-		return 0, fmt.Errorf("faild to copy file: %w", err)
-	}
-
-	return nb, nil
 }

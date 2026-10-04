@@ -212,7 +212,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 			return
 		}
 		cleanupCtx := context.WithoutCancel(ctx)
-		if delErr := deps.client.DeleteLocalBranchSafe(cleanupCtx, picked.BranchName, true, deps.cfg.Branch.Base); delErr != nil {
+		if delErr := deps.client.DeleteLocalBranchSafe(cleanupCtx, picked.BranchName, deps.cfg.Branch.Base); delErr != nil {
 			fmt.Fprintf(deps.client.IO().Err, "warning: rollback materialized branch %q: %v\n",
 				picked.BranchName, delErr)
 
@@ -581,7 +581,7 @@ func reviewPreflight(
 		// merge-commit) so an aborted close keeps the reviewer commits' source.
 		return func(ctx context.Context) {
 			if localExists {
-				if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, true, deps.cfg.Branch.Base); err != nil {
+				if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, deps.cfg.Branch.Base); err != nil {
 					fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
 				}
 			}

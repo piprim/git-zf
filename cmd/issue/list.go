@@ -86,11 +86,18 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 }
 
 func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issueListFlags) error {
+	// The TUI filters by status inside the table model, so it needs every row.
+	status := flags.status
+	if !flags.jsonOut && !flags.stdout {
+		status = ""
+	}
+
+	rows, err := buildRows(ctx, infra, status)
+	if err != nil {
+		return fmt.Errorf("build issue rows: %w", err)
+	}
+
 	if flags.jsonOut {
-		rows, err := buildRows(ctx, infra, flags.status)
-		if err != nil {
-			return fmt.Errorf("build issue rows: %w", err)
-		}
 		if err := json.NewEncoder(w).Encode(normalizeRows(rows)); err != nil {
 			return fmt.Errorf("encode json: %w", err)
 		}
@@ -98,30 +105,14 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 		return nil
 	}
 
-	if flags.stdout {
-		rows, err := buildRows(ctx, infra, flags.status)
-		if err != nil {
-			return fmt.Errorf("build issue rows: %w", err)
-		}
-		if len(rows) == 0 {
-			fmt.Fprintln(w, "No issues found.")
-
-			return nil
-		}
-
-		tty.RenderIssueTable(w, rows)
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "No issues found.")
 
 		return nil
 	}
 
-	// TUI path: fetch all rows; status filter lives inside the table model.
-	rows, err := buildRows(ctx, infra, "")
-	if err != nil {
-		return fmt.Errorf("build issue rows: %w", err)
-	}
-
-	if len(rows) == 0 {
-		fmt.Fprintln(w, "No issues found.")
+	if flags.stdout {
+		tty.RenderIssueTable(w, rows)
 
 		return nil
 	}

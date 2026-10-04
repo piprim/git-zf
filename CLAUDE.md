@@ -10,7 +10,7 @@ make install           # copy binary to $(git --exec-path)/git-zf
 ./bin/git-zf install # alternative install without make
 ```
 
-The Makefile auto-detects OS (Linux/Darwin/Windows) and sets `GOOS`/`GOARCH`. Version info is injected via ldflags from `git describe` and `git log`.
+The Makefile builds for the host platform (`go build` defaults). Version info is injected via ldflags from `git describe` and `git log`.
 
 ## Running & Testing
 
@@ -157,7 +157,7 @@ Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.to
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (4051 symbols, 15823 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (4036 symbols, 15735 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

@@ -275,7 +275,7 @@ func (b Branch) pruneTrackerRunE(cmd *cobra.Command, flags pruneTrackerFlags) er
 		return fmt.Errorf("build tracker: %w", err)
 	}
 
-	var prompter TrackerPrunePrompter = newHuhTrackerPrunePrompter()
+	var prompter TrackerPrunePrompter = &huhTrackerPrunePrompter{}
 
 	switch {
 	case flags.safeDelete:

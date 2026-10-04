@@ -613,7 +613,9 @@ func (c *Client) RemoteBranchExists(ctx context.Context, branchName string) bool
 // cfgBase is used as the switch target; when empty the repo's default
 // base branch (main/master) is auto-detected.
 // On any checkout failure the function returns the error immediately.
-func (c *Client) DeleteLocalBranchSafe(ctx context.Context, branchName string, force bool, cfgBase string) error {
+// The delete is forced (-D): every caller removes a branch that may hold
+// commits its base never received.
+func (c *Client) DeleteLocalBranchSafe(ctx context.Context, branchName, cfgBase string) error {
 	if cur, curErr := c.CurrentBranch(); curErr == nil && cur == branchName {
 		base := cfgBase
 		if base == "" {
@@ -627,7 +629,8 @@ func (c *Client) DeleteLocalBranchSafe(ctx context.Context, branchName string, f
 			return fmt.Errorf("checkout %s before delete: %w", base, err)
 		}
 	}
-	return c.DeleteLocalBranch(ctx, branchName, force)
+
+	return c.DeleteLocalBranch(ctx, branchName, true)
 }
 
 // RunGitAt runs an arbitrary git command in dir with the client's IO streams.

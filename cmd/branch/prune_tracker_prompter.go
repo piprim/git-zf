@@ -43,10 +43,6 @@ var _ TrackerPrunePrompter = (*fixedActionPrompter)(nil)
 // "safe" is pre-selected.
 type huhTrackerPrunePrompter struct{}
 
-func newHuhTrackerPrunePrompter() *huhTrackerPrunePrompter {
-	return &huhTrackerPrunePrompter{}
-}
-
 func (p *huhTrackerPrunePrompter) DecideReap(ctx context.Context, candidates []trackerCandidate) (map[string]string, error) {
 	if len(candidates) == 0 {
 		return map[string]string{}, nil

@@ -415,7 +415,7 @@ func TestRunPrune_YesFlagSkipsConfirm(t *testing.T) {
 	rig.seedIssueAndBranch(t, "DEL-1", "DEL-1@feat@gone", "feat")
 
 	// Mirror what pruneRunE does when --yes is set: use autoConfirmPrunePrompter directly.
-	prompter := newAutoConfirmPrunePrompter()
+	prompter := &autoConfirmPrunePrompter{}
 
 	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{yes: true}); err != nil {
 		t.Fatalf("runPrune: %v", err)
