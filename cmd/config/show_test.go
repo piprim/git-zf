@@ -8,10 +8,21 @@ import (
 	appconfig "github.com/piprim/git-zf/config"
 )
 
-func TestToConfigOutput(t *testing.T) {
+func TestMaskedJSON(t *testing.T) {
 	t.Parallel()
 
-	t.Run("masks non-empty token with asterisks", func(t *testing.T) {
+	render := func(t *testing.T, cfg *appconfig.AppConfig) string {
+		t.Helper()
+
+		b, err := maskedJSON(cfg)
+		if err != nil {
+			t.Fatalf("maskedJSON: %v", err)
+		}
+
+		return string(b)
+	}
+
+	t.Run("masks a non-empty token and leaves the caller's config untouched", func(t *testing.T) {
 		t.Parallel()
 
 		cfg := &appconfig.AppConfig{
@@ -22,38 +33,39 @@ func TestToConfigOutput(t *testing.T) {
 			},
 		}
 
-		out := toConfigOutput(cfg)
+		out := render(t, cfg)
 
-		if out.IssueTracker.Token != "***" {
-			t.Errorf("token = %q, want %q", out.IssueTracker.Token, "***")
+		if strings.Contains(out, "super-secret") {
+			t.Errorf("output leaks the token:\n%s", out)
 		}
-		if out.IssueTracker.Type != "plane" {
-			t.Errorf("type = %q, want %q", out.IssueTracker.Type, "plane")
+		if !strings.Contains(out, `"token": "***"`) {
+			t.Errorf("output has no masked token:\n%s", out)
 		}
-	})
-
-	t.Run("leaves empty token unchanged", func(t *testing.T) {
-		t.Parallel()
-
-		out := toConfigOutput(&appconfig.AppConfig{})
-
-		if out.IssueTracker.Token != "" {
-			t.Errorf("empty token should stay empty, got %q", out.IssueTracker.Token)
+		if !strings.Contains(out, `"type": "plane"`) {
+			t.Errorf("output lost the tracker type:\n%s", out)
+		}
+		if cfg.IssueTracker.Token != "super-secret" {
+			t.Errorf("config token = %q after rendering, want it unchanged", cfg.IssueTracker.Token)
 		}
 	})
 
-	t.Run("excludes ProgName from marshalled output", func(t *testing.T) {
+	t.Run("leaves an empty token empty", func(t *testing.T) {
 		t.Parallel()
 
-		cfg := &appconfig.AppConfig{ProgName: "git-zf"}
-		out := toConfigOutput(cfg)
-
-		b, err := marshalConfig(&out)
-		if err != nil {
-			t.Fatalf("marshalConfig: %v", err)
+		if out := render(t, &appconfig.AppConfig{}); !strings.Contains(out, `"token": ""`) {
+			t.Errorf("empty token should stay empty, got:\n%s", out)
 		}
-		if strings.Contains(string(b), "ProgName") {
-			t.Errorf("output must not contain ProgName, got: %s", b)
+	})
+
+	t.Run("excludes ProgName and ConfigFile from the output", func(t *testing.T) {
+		t.Parallel()
+
+		out := render(t, &appconfig.AppConfig{ProgName: "git-zf", ConfigFile: "/tmp/zf.toml"})
+
+		for _, hidden := range []string{"ProgName", "git-zf", "ConfigFile", "/tmp/zf.toml"} {
+			if strings.Contains(out, hidden) {
+				t.Errorf("output must not contain %q, got:\n%s", hidden, out)
+			}
 		}
 	})
 }
