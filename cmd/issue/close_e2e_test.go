@@ -102,7 +102,7 @@ func seedCloseRig(t *testing.T, dir string) *closeTestRig {
 
 	trackerType := "fake"
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "ABC-1", Title: "Add thing", StatusID: store.StatusIDInProgress, TrackerType: &trackerType},
+		&store.Issue{IDSlug: "ABC-1", Title: "Add thing", TrackerType: &trackerType},
 		&store.Branch{Name: "ABC-1@feat@add-thing", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed branch: %v", err)
@@ -989,7 +989,7 @@ func TestClose_ReviewPreflight_IncorporatesRemoteOnlyReviewerCommits(t *testing.
 	t.Cleanup(func() { _ = bobStore.Close() })
 
 	if err := bobStore.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "ABC-1", Title: "thing", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "ABC-1", Title: "thing"},
 		&store.Branch{Name: "ABC-1@feat@thing", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -1142,7 +1142,7 @@ func TestClose_SubtaskDryRunFallsBackToRemoteBase(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.2", Title: "part-two", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X.2", Title: "part-two"},
 		&store.Branch{Name: "X.2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed branch: %v", err)
@@ -1276,7 +1276,7 @@ func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.1", Title: "part-one", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X.1", Title: "part-one"},
 		&store.Branch{Name: "X.1@feat@part-one", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed branch: %v", err)
@@ -1383,20 +1383,20 @@ func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
 	// Re-seed store: parent X, and two children X.1 (merged) and X.2 (in_progress).
 	trackerType := "fake"
 	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X", Title: "big", StatusID: store.StatusIDInProgress, TrackerType: &trackerType},
+		&store.Issue{IDSlug: "X", Title: "big", TrackerType: &trackerType},
 		&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed X: %v", err)
 	}
 	now := time.Now()
 	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.1", Title: "one", StatusID: store.StatusIDMerged},
+		&store.Issue{IDSlug: "X.1", Title: "one"},
 		&store.Branch{Name: "X.1@feat@one", Type: "feat", StatusID: store.StatusIDMerged, MergedAt: &now},
 	); err != nil {
 		t.Fatalf("seed X.1: %v", err)
 	}
 	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.2", Title: "two", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X.2", Title: "two"},
 		&store.Branch{Name: "X.2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed X.2: %v", err)
@@ -1664,7 +1664,7 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 	// close. The picker must not offer it.
 	trackerType := "fake"
 	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "DEF-2", Title: "two", StatusID: store.StatusIDInProgress, TrackerType: &trackerType},
+		&store.Issue{IDSlug: "DEF-2", Title: "two", TrackerType: &trackerType},
 		&store.Branch{Name: "DEF-2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed DEF-2: %v", err)
@@ -1807,7 +1807,7 @@ func newCloseOriginRig(t *testing.T) (closeDeps, string, string, string) {
 	// Seed the store and a tracker-born branch ref.
 	trackerType := "fake"
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "ABC-1", Title: "Push test", StatusID: store.StatusIDInProgress, TrackerType: &trackerType},
+		&store.Issue{IDSlug: "ABC-1", Title: "Push test", TrackerType: &trackerType},
 		&store.Branch{Name: "ABC-1@feat@push-test", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed branch: %v", err)

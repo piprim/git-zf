@@ -35,7 +35,7 @@ func seedMergedElsewhere(t *testing.T, rig *reviewE2ERig, slug, branchName strin
 	t.Helper()
 
 	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: slug, Title: slug, StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: slug, Title: slug},
 		&store.Branch{Name: branchName, Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed %s: %v", slug, err)
@@ -82,13 +82,13 @@ func TestReviewSync_ExcludesSubtaskMergedInSiblingClone(t *testing.T) {
 
 	// Parent X with two sub-tasks; X.2 was closed in a sibling clone.
 	if err := rig.store.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X", Title: "big", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X", Title: "big"},
 		&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed X: %v", err)
 	}
 	if err := rig.store.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X.1", Title: "one", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X.1", Title: "one"},
 		&store.Branch{Name: "X.1@feat@one", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed X.1: %v", err)

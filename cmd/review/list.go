@@ -14,16 +14,7 @@ func (r Review) getListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all issues currently in review or approved",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			deps, err := buildReviewDeps(ctx, cmd, r.appConfig)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = deps.store.Close() }()
-
-			return runReviewList(ctx, deps)
-		},
+		RunE:  withDeps(r.appConfig, runReviewList),
 	}
 }
 

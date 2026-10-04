@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,9 +23,8 @@ const (
 )
 
 type githubAdapter struct {
-	client   *gogithub.Client
-	cfg      config.IssueTrackerConfig
-	projects map[string]struct{}
+	client *gogithub.Client
+	cfg    config.IssueTrackerConfig
 }
 
 // New creates a GitHub adapter from cfg.
@@ -43,26 +43,7 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 		}
 	}
 
-	return &githubAdapter{
-		client:   c,
-		cfg:      cfg,
-		projects: toProjectSet(cfg.Projects),
-	}, nil
-}
-
-// toProjectSet builds a lookup set from cfg.Projects. Returns nil when the
-// slice is empty so callers can short-circuit the filter.
-func toProjectSet(list []string) map[string]struct{} {
-	if len(list) == 0 {
-		return nil
-	}
-
-	out := make(map[string]struct{}, len(list))
-	for _, p := range list {
-		out[p] = struct{}{}
-	}
-
-	return out
+	return &githubAdapter{client: c, cfg: cfg}, nil
 }
 
 // ListIssues fetches open issues assigned to the authenticated user across all
@@ -89,10 +70,8 @@ func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error)
 			}
 
 			proj := iss.GetRepository().GetFullName()
-			if a.projects != nil {
-				if _, ok := a.projects[proj]; !ok {
-					continue
-				}
+			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.Projects, proj) {
+				continue
 			}
 
 			out = append(out, tracker.Issue{

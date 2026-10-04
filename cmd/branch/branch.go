@@ -14,6 +14,7 @@ import (
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tty"
@@ -227,14 +228,6 @@ base branch. Use --dry-run to preview, --yes to skip the confirm prompt.`,
 	return cmd
 }
 
-// pruner is the subset of git.Client that branchPrune needs,
-// allowing tests to inject a fake without a real git repository.
-type pruner interface {
-	DefaultBaseBranch() (string, error)
-	LocalBranchNames() ([]string, error)
-	IsMergedInto(branchName, base string) (bool, error)
-}
-
 func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	ctx := cmd.Context()
 	s, err := store.OpenRepo(ctx)
@@ -261,17 +254,17 @@ func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 // the store. Otherwise it delegates the destructive confirmation to prompter
 // (huh-driven in production, auto-confirm under --yes, scripted in tests) and
 // then calls executePrune.
-func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, prompter PrunePrompter, flags pruneFlags) error {
+func runPrune(ctx context.Context, w io.Writer, s *store.Store, client *git.Client, prompter PrunePrompter, flags pruneFlags) error {
 	base := flags.base
 	if base == "" {
 		var err error
-		base, err = pruner.DefaultBaseBranch()
+		base, err = client.DefaultBaseBranch()
 		if err != nil {
 			return fmt.Errorf("detect base branch: %w", err)
 		}
 	}
 
-	localNames, err := pruner.LocalBranchNames()
+	localNames, err := client.LocalBranchNames()
 	if err != nil {
 		return fmt.Errorf("list local branches: %w", err)
 	}
@@ -295,7 +288,7 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, pruner pruner, p
 			continue
 		}
 
-		merged, mergeErr := pruner.IsMergedInto(rows[i].BranchName, base)
+		merged, mergeErr := client.IsMergedInto(rows[i].BranchName, base)
 		if mergeErr != nil {
 			slog.Warn("merge check failed", "branch", rows[i].BranchName, "error", mergeErr)
 

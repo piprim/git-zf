@@ -30,7 +30,7 @@ func TestBranchList(t *testing.T) {
 
 		s := openTestBranchStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "ABC-42", Title: "Add OAuth login", StatusID: 1},
+			&store.Issue{IDSlug: "ABC-42", Title: "Add OAuth login"},
 			&store.Branch{Name: "ABC-42@feat@add-oauth-login@550e8400", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -82,7 +82,7 @@ func TestBranchList(t *testing.T) {
 
 		s := openTestBranchStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "XY-1", Title: "Some feature", StatusID: 1},
+			&store.Issue{IDSlug: "XY-1", Title: "Some feature"},
 			&store.Branch{Name: "XY-1@feat@some-feature@aabbccdd", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)

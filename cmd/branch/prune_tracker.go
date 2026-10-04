@@ -51,9 +51,8 @@ type trackerCandidate struct {
 	StoreRow   *store.BranchRow // nil → branch unknown to git-zf; no store flip after delete.
 }
 
-// trackerPruner is the git surface area prune-tracker depends on.
-// Same dependency-inversion shape as the existing `pruner` interface
-// (see branch.go) — keeps tests off a real repo.
+// trackerPruner is the git surface area prune-tracker depends on. It keeps
+// tests off a real repo.
 type trackerPruner interface {
 	DefaultBaseBranch() (string, error)
 	LocalBranchNames() ([]string, error)

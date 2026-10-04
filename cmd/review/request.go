@@ -2,7 +2,6 @@ package review
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -19,16 +18,9 @@ func (r Review) getRequestCmd() *cobra.Command {
 		Use:   "request",
 		Short: "Submit an issue branch for code review (locks the branch)",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			deps, err := buildReviewDeps(ctx, cmd, r.appConfig)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = deps.store.Close() }()
-
+		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewRequestInteractive(ctx, deps, newHuhReviewPrompter())
-		},
+		}),
 	}
 	pushflow.AddFlags(cmd)
 	return cmd
@@ -93,20 +85,9 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 		if !ok {
 			return fmt.Errorf("request aborted: run 'git zf review sync' to incorporate reviewer commits first")
 		}
-		if dirty, dErr := deps.client.IsDirty(ctx); dErr == nil && dirty {
-			return fmt.Errorf("working tree has uncommitted changes — cannot merge %s.\n"+
-				"Run 'git stash', then 'git zf review sync', then 'git stash pop'", pending.EffectiveRef)
-		}
-		if mErr := deps.client.MergeLeaveConflicts(ctx, pending.EffectiveRef, picked.BranchName); mErr != nil {
-			if errors.Is(mErr, git.ErrMergeConflicts) {
-				fmt.Fprintf(deps.client.IO().Out,
-					"Merge left in progress with conflicts.\n"+
-						"Resolve the conflict markers, then run 'git zf commit' to conclude the merge.\n")
-				return nil
-			}
+		if conflicted, mErr := mergeReviewerCommits(ctx, deps, pending, picked.BranchName); mErr != nil || conflicted {
 			return mErr
 		}
-		fmt.Fprintf(deps.client.IO().Out, "Reviewer commits incorporated into %q.\n", picked.BranchName)
 	}
 
 	if err := runReviewRequest(ctx, deps, picked.IssueSlug); err != nil {

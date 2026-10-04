@@ -66,7 +66,7 @@ func TestInsertIssueWithBranch(t *testing.T) {
 
 		s := openTestStore(t)
 
-		issue := Issue{IDSlug: "ABC-42", Title: "Add OAuth Login", StatusID: 1}
+		issue := Issue{IDSlug: "ABC-42", Title: "Add OAuth Login"}
 		branch := Branch{
 			Name:     "ABC-42@feat@add-oauth-login@550e8400",
 			Type:     "feat",
@@ -104,7 +104,7 @@ func TestInsertIssueWithBranch(t *testing.T) {
 		s := openTestStore(t)
 
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "TRK-1", Title: "Pre-tracker issue", StatusID: 1},
+			&Issue{IDSlug: "TRK-1", Title: "Pre-tracker issue"},
 			&Branch{Name: "TRK-1@feat@pre-tracker@trk-uuid-1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -127,7 +127,7 @@ func TestInsertIssueWithBranch(t *testing.T) {
 
 		tt := "redmine"
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "TRK-2", Title: "Tracker issue", StatusID: 1, TrackerType: &tt},
+			&Issue{IDSlug: "TRK-2", Title: "Tracker issue", TrackerType: &tt},
 			&Branch{Name: "TRK-2@feat@tracker-issue@trk-uuid-2", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -156,13 +156,13 @@ func TestListBranches(t *testing.T) {
 		s := openTestStore(t)
 
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "A-1", Title: "First", StatusID: 1},
+			&Issue{IDSlug: "A-1", Title: "First"},
 			&Branch{Name: "A-1@feat@first@uuid-1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "A-2", Title: "Second", StatusID: 1},
+			&Issue{IDSlug: "A-2", Title: "Second"},
 			&Branch{Name: "A-2@fix@second@uuid-2", Type: "fix", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -183,7 +183,7 @@ func TestListBranches(t *testing.T) {
 		s := openTestStore(t)
 
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "B-1", Title: "In progress issue", StatusID: 1},
+			&Issue{IDSlug: "B-1", Title: "In progress issue"},
 			&Branch{Name: "B-1@feat@in-progress@uuid-ip", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert in_progress: %v", err)
@@ -207,7 +207,7 @@ func TestListBranches(t *testing.T) {
 		s := openTestStore(t)
 
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "C-1", Title: "Merged issue", StatusID: 1},
+			&Issue{IDSlug: "C-1", Title: "Merged issue"},
 			&Branch{Name: "C-1@feat@merged@uuid-mg", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -298,7 +298,7 @@ func TestListBranches(t *testing.T) {
 
 		s := openTestStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "U-1", Title: "branch name test", StatusID: 1},
+			&Issue{IDSlug: "U-1", Title: "branch name test"},
 			&Branch{Name: "U-1@feat@branch-name-test@deadbeef", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -322,7 +322,7 @@ func TestListBranches(t *testing.T) {
 		s := openTestStore(t)
 
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "X-1", Title: "IssueID test", StatusID: 1},
+			&Issue{IDSlug: "X-1", Title: "IssueID test"},
 			&Branch{Name: "X-1@feat@issueid@uuid-x1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("InsertIssueWithBranch: %v", err)
@@ -348,7 +348,7 @@ func TestUpdateBranchStatus_merged(t *testing.T) {
 
 	s := openTestStore(t)
 
-	issue := Issue{IDSlug: "ABC-1", Title: "Some issue", StatusID: 1}
+	issue := Issue{IDSlug: "ABC-1", Title: "Some issue"}
 	branch := Branch{Name: "ABC-1@fix@some-issue@aabbccdd", Type: "fix", StatusID: 1}
 	if err := s.InsertIssueWithBranch(t.Context(), &issue, &branch); err != nil {
 		t.Fatalf("InsertIssueWithBranch: %v", err)
@@ -384,13 +384,13 @@ func TestListBranchesByIssueSlugs(t *testing.T) {
 		s := openTestStore(t)
 
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "ABC-1", Title: "First", StatusID: 1},
+			&Issue{IDSlug: "ABC-1", Title: "First"},
 			&Branch{Name: "ABC-1@feat@first@uuid-s1", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "ABC-2", Title: "Second", StatusID: 1},
+			&Issue{IDSlug: "ABC-2", Title: "Second"},
 			&Branch{Name: "ABC-2@fix@second@uuid-s2", Type: "fix", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -439,7 +439,7 @@ func TestDeleteBranch(t *testing.T) {
 
 		s := openTestStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "DEL-1", Title: "to delete", StatusID: 1},
+			&Issue{IDSlug: "DEL-1", Title: "to delete"},
 			&Branch{Name: "DEL-1@fix@to-delete@cafebabe", Type: "fix", StatusID: 1},
 		); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -604,7 +604,7 @@ func TestReviewStore(t *testing.T) {
 
 	// Seed an issue + branch so subsequent tests can reference a real slug.
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&Issue{IDSlug: "42", Title: "test issue", StatusID: StatusIDInProgress},
+		&Issue{IDSlug: "42", Title: "test issue"},
 		&Branch{Name: "42@feature@test", Type: "feature", StatusID: StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed issue: %v", err)
@@ -808,7 +808,7 @@ func TestIssueRelationsStore(t *testing.T) {
 
 	t.Run("ChildrenAllMerged returns false when child branch in_progress", func(t *testing.T) {
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&Issue{IDSlug: "10.1", Title: "sub-task", StatusID: StatusIDInProgress},
+			&Issue{IDSlug: "10.1", Title: "sub-task"},
 			&Branch{Name: "10.1@feature@sub-task", Type: "feature", StatusID: StatusIDInProgress},
 		); err != nil {
 			t.Fatalf("seed child branch: %v", err)
@@ -937,7 +937,7 @@ func TestOpenRepo_linkedWorktreeSharesMainStore(t *testing.T) {
 		t.Fatalf("Open main store: %v", err)
 	}
 	if err := mainStore.InsertIssueWithBranch(t.Context(),
-		&Issue{IDSlug: "ABC-7", Title: "Shared", StatusID: StatusIDInProgress},
+		&Issue{IDSlug: "ABC-7", Title: "Shared"},
 		&Branch{Name: "ABC-7@feat@shared", Type: "feat", StatusID: StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -989,7 +989,7 @@ func TestStoredTimes(t *testing.T) {
 
 	t.Run("a CURRENT_TIMESTAMP default is read as a UTC time", func(t *testing.T) {
 		if err := s.InsertIssueWithBranch(ctx,
-			&Issue{IDSlug: "T-1", Title: "times", StatusID: 1},
+			&Issue{IDSlug: "T-1", Title: "times"},
 			&Branch{Name: "T-1@feat@times", Type: "feat", StatusID: 1},
 		); err != nil {
 			t.Fatalf("InsertIssueWithBranch: %v", err)

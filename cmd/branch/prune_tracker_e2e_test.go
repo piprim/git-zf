@@ -91,7 +91,7 @@ func (r *pruneTrackerTestRig) seedMergedBranch(t *testing.T, issueSlug, branchNa
 	runGit("branch", branchName)
 
 	if err := r.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: issueSlug, Title: issueSlug + " title", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: issueSlug, Title: issueSlug + " title"},
 		&store.Branch{Name: branchName, Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("InsertIssueWithBranch: %v", err)
@@ -122,7 +122,7 @@ func (r *pruneTrackerTestRig) seedDivergentBranch(t *testing.T, issueSlug, branc
 	runGit("checkout", "master")
 
 	if err := r.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: issueSlug, Title: issueSlug + " title", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: issueSlug, Title: issueSlug + " title"},
 		&store.Branch{Name: branchName, Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("InsertIssueWithBranch: %v", err)

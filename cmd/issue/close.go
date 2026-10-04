@@ -657,7 +657,7 @@ func getPickedBranch(
 	return picked, nil
 }
 
-// updateClosedStatus marks the branch and issue as merged in the store and,
+// updateClosedStatus marks the branch as merged in the store and,
 // when a tracker is configured, drives the status-picker form. Every error
 // here is non-fatal — the merge already committed, so the operator must be
 // able to clean up store/tracker drift manually.
@@ -665,10 +665,6 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.Branc
 	now := time.Now()
 	if err := deps.store.UpdateBranchStatus(ctx, picked.BranchName, store.StatusIDMerged, &now); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: update branch status: %v\n", err)
-	}
-
-	if err := deps.store.UpdateIssueStatus(ctx, picked.IssueID, store.StatusIDMerged); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: update issue status: %v\n", err)
 	}
 
 	// Stamp the branch ref as merged and push so sibling developers on other

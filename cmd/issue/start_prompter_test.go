@@ -5,6 +5,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
+	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
 )
@@ -151,7 +152,7 @@ func (s *scriptedStartPrompter) PickTrackerStatus(_ context.Context, _, _ string
 //	ConflictAbort   → return (nil, nil)
 //	ConflictBranch  → return (ConflictBranch, nil)
 //	default         → return the branch passed in, unchanged (no-collision path)
-func (s *scriptedStartPrompter) ResolveBranchConflict(_ context.Context, _ issueflow.BranchClient, b *branch.Branch, _ *issuepkg.Issue) (*branch.Branch, error) {
+func (s *scriptedStartPrompter) ResolveBranchConflict(_ context.Context, _ *git.Client, b *branch.Branch, _ *issuepkg.Issue) (*branch.Branch, error) {
 	if s.ConflictErr != nil {
 		return nil, s.ConflictErr
 	}

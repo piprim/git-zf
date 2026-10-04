@@ -14,16 +14,9 @@ func (r Review) getApproveCmd() *cobra.Command {
 		Use:   "approve",
 		Short: "Approve a review — signals the branch is ready to close",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			deps, err := buildReviewDeps(ctx, cmd, r.appConfig)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = deps.store.Close() }()
-
+		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewApproveInteractive(ctx, deps, newHuhReviewPrompter())
-		},
+		}),
 	}
 	pushflow.AddFlags(cmd)
 	return cmd

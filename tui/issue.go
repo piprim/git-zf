@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	btable "github.com/charmbracelet/bubbles/table"
@@ -29,7 +28,6 @@ const (
 
 	projectAll                = "all"
 	issueTableColWidthProject = 18
-	issueTableMaxCols         = 7
 )
 
 var (
@@ -164,7 +162,7 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 }
 
 func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, error) {
-	projects := uniqueProjects(rows)
+	projects := store.UniqueProjects(rows)
 	includeProj := len(projects) > 1
 	cols := buildIssueTableColumns(rows)
 
@@ -198,23 +196,6 @@ func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, er
 	}, nil
 }
 
-func issueRowToTableRow(r *store.IssueRow, includeProject bool) btable.Row {
-	row := make(btable.Row, 0, issueTableMaxCols)
-	row = append(row, r.IssueSlug)
-
-	if includeProject {
-		row = append(row, r.Project)
-	}
-
-	return append(row,
-		store.TitleWithLabels(r),
-		store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
-		store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
-		store.TrackerStatusOrNA(r.TrackerStatus),
-		store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.CreatedAt.Format("2006-01-02") }),
-	)
-}
-
 // buildIssueTableColumns returns the bubbletea columns. The Project column
 // appears only when rows span more than one project.
 func buildIssueTableColumns(rows []store.IssueRow) []btable.Column {
@@ -222,7 +203,7 @@ func buildIssueTableColumns(rows []store.IssueRow) []btable.Column {
 		{Title: "Issue ID", Width: issueTableColWidthIssueID},
 	}
 
-	if len(uniqueProjects(rows)) > 1 {
+	if len(store.UniqueProjects(rows)) > 1 {
 		cols = append(cols, btable.Column{Title: "Project", Width: issueTableColWidthProject})
 	}
 
@@ -274,7 +255,7 @@ func applyFilters(rows []store.IssueRow, status, text, project string, includePr
 			continue
 		}
 
-		row := issueRowToTableRow(r, includeProject)
+		row := store.IssueRowCells(r, includeProject)
 
 		if q != "" {
 			matched := false
@@ -306,28 +287,6 @@ func nextStatus(current string) string {
 	default:
 		return statusOpen
 	}
-}
-
-// uniqueProjects returns the deduplicated, sorted list of non-empty
-// IssueRow.Project values.
-func uniqueProjects(rows []store.IssueRow) []string {
-	seen := make(map[string]struct{})
-	for _, r := range rows {
-		if r.Project == "" {
-			continue
-		}
-
-		seen[r.Project] = struct{}{}
-	}
-
-	out := make([]string, 0, len(seen))
-	for p := range seen {
-		out = append(out, p)
-	}
-
-	slices.Sort(out)
-
-	return out
 }
 
 // projectPickerOptions returns the ordered list ["all", p1, p2, …] used both

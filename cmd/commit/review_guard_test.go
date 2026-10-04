@@ -67,7 +67,7 @@ func newGuardRig(t *testing.T) *guardRig {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "42", Title: "title", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "42", Title: "title"},
 		&store.Branch{Name: "42@feat@title", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed: %v", err)

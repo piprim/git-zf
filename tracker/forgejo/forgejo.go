@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -53,9 +54,8 @@ type issue struct {
 type forgejoAdapter struct {
 	http        *http.Client
 	cfg         config.IssueTrackerConfig
-	apiBase     string // "<instance root>/api/v1", no trailing slash
-	trackerType string // cfg.Type as configured ("forgejo" or "gitea")
-	projects    map[string]struct{}
+	apiBase     string        // "<instance root>/api/v1", no trailing slash
+	trackerType string        // cfg.Type as configured ("forgejo" or "gitea")
 	proxyAuth   *url.Userinfo // credentials from the URL's userinfo; nil when absent
 }
 
@@ -91,24 +91,8 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 		cfg:         cfg,
 		apiBase:     base + apiPrefix,
 		trackerType: cmp.Or(cfg.Type, trackerType),
-		projects:    toProjectSet(cfg.Projects),
 		proxyAuth:   proxyAuth,
 	}, nil
-}
-
-// toProjectSet builds a lookup set from cfg.Projects. Returns nil when the
-// slice is empty so callers can short-circuit the filter.
-func toProjectSet(list []string) map[string]struct{} {
-	if len(list) == 0 {
-		return nil
-	}
-
-	out := make(map[string]struct{}, len(list))
-	for _, p := range list {
-		out[p] = struct{}{}
-	}
-
-	return out
 }
 
 // doJSON issues one authenticated request against the API base. path is
@@ -233,10 +217,8 @@ func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 				proj = iss.Repository.FullName
 			}
 
-			if a.projects != nil {
-				if _, ok := a.projects[proj]; !ok {
-					continue
-				}
+			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.Projects, proj) {
+				continue
 			}
 
 			out = append(out, tracker.Issue{

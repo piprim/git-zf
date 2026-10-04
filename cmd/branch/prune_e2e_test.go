@@ -78,7 +78,7 @@ func (r *pruneTestRig) seedIssueAndBranch(t *testing.T, issueSlug, branchName, b
 	t.Helper()
 
 	if err := r.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: issueSlug, Title: issueSlug, StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: issueSlug, Title: issueSlug},
 		&store.Branch{Name: branchName, Type: branchType, StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed %q: %v", branchName, err)

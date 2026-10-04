@@ -92,7 +92,7 @@ func newReviewE2ERig(t *testing.T) *reviewE2ERig {
 	t.Cleanup(func() { _ = s.Close() })
 
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "77", Title: "my feature", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "77", Title: "my feature"},
 		&store.Branch{Name: "77@feat@my-feature", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed issue: %v", err)
@@ -362,7 +362,7 @@ func newReviewE2ERigWithOrigin(t *testing.T) *reviewE2ERig {
 	t.Cleanup(func() { _ = s.Close() })
 
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "77", Title: "my feature", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "77", Title: "my feature"},
 		&store.Branch{Name: "77@feat@my-feature", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed issue: %v", err)
@@ -926,13 +926,13 @@ func TestReviewSync_UsesRemoteParentBase(t *testing.T) {
 
 	// Seed alice's store: parent X and child X.1 with relation.
 	if err := aliceStore.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X", Title: "big", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X", Title: "big"},
 		&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed X: %v", err)
 	}
 	if err := aliceStore.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X.1", Title: "one", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X.1", Title: "one"},
 		&store.Branch{Name: "X.1@feat@one", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed X.1: %v", err)
@@ -1223,18 +1223,6 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		return reviewDeps{client: c, store: s, cfg: cfg}, s
 	}
 
-	getIssueID := func(s *store.Store, slug string) int64 {
-		t.Helper()
-		rows, _ := s.ListBranches(ctx, store.BranchStatusAll)
-		for _, r := range rows {
-			if r.IssueSlug == slug {
-				return r.IssueID
-			}
-		}
-		t.Fatalf("issue %q not found in store", slug)
-		return 0
-	}
-
 	// ── PHASE 0: infrastructure ───────────────────────────────────────────────
 
 	if err := os.MkdirAll(originDir, 0o755); err != nil {
@@ -1291,9 +1279,9 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		issue  store.Issue
 		branch store.Branch
 	}{
-		{store.Issue{IDSlug: "X", Title: "big feature", StatusID: store.StatusIDInProgress}, store.Branch{Name: "X@feat@big-feature", Type: "feat", StatusID: store.StatusIDInProgress}},
-		{store.Issue{IDSlug: "X.1", Title: "part one", StatusID: store.StatusIDInProgress}, store.Branch{Name: "X.1@feat@part-one", Type: "feat", StatusID: store.StatusIDInProgress}},
-		{store.Issue{IDSlug: "X.2", Title: "part two", StatusID: store.StatusIDInProgress}, store.Branch{Name: "X.2@feat@part-two", Type: "feat", StatusID: store.StatusIDInProgress}},
+		{store.Issue{IDSlug: "X", Title: "big feature"}, store.Branch{Name: "X@feat@big-feature", Type: "feat", StatusID: store.StatusIDInProgress}},
+		{store.Issue{IDSlug: "X.1", Title: "part one"}, store.Branch{Name: "X.1@feat@part-one", Type: "feat", StatusID: store.StatusIDInProgress}},
+		{store.Issue{IDSlug: "X.2", Title: "part two"}, store.Branch{Name: "X.2@feat@part-two", Type: "feat", StatusID: store.StatusIDInProgress}},
 	} {
 		if err := aliceStore.InsertIssueWithBranch(ctx, &row.issue, &row.branch); err != nil {
 			t.Fatalf("alice InsertIssueWithBranch %s: %v", row.issue.IDSlug, err)
@@ -1315,17 +1303,11 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	run(bobDir, "checkout", "main")
 	bobDeps, bobStore := newDeps(bobDir)
 	if err := bobStore.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X.2", Title: "part two", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X.2", Title: "part two"},
 		&store.Branch{Name: "X.2@feat@part-two", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("bob InsertIssueWithBranch: %v", err)
 	}
-
-	// Cache issue IDs before any status mutations.
-	aliceX1ID := getIssueID(aliceStore, "X.1")
-	aliceX2ID := getIssueID(aliceStore, "X.2")
-	aliceXID := getIssueID(aliceStore, "X")
-	bobX2ID := getIssueID(bobStore, "X.2")
 
 	// ── PHASE 1: development ─────────────────────────────────────────────────
 
@@ -1481,17 +1463,11 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	if err := bobStore.UpdateBranchStatus(ctx, "X.2@feat@part-two", store.StatusIDMerged, &mergedAt); err != nil {
 		t.Fatalf("bob UpdateBranchStatus X.2: %v", err)
 	}
-	if err := bobStore.UpdateIssueStatus(ctx, bobX2ID, store.StatusIDMerged); err != nil {
-		t.Fatalf("bob UpdateIssueStatus X.2: %v", err)
-	}
 	run(bobDir, "push", "origin", "X@feat@big-feature")
 
 	// Sync alice's store for X.2 so ChildrenAllMerged("X") returns true in Phase 10.
 	if err := aliceStore.UpdateBranchStatus(ctx, "X.2@feat@part-two", store.StatusIDMerged, &mergedAt); err != nil {
 		t.Fatalf("alice UpdateBranchStatus X.2: %v", err)
-	}
-	if err := aliceStore.UpdateIssueStatus(ctx, aliceX2ID, store.StatusIDMerged); err != nil {
-		t.Fatalf("alice UpdateIssueStatus X.2: %v", err)
 	}
 
 	// ── PHASE 8: Alice syncs X.1 (X.2 landed in parent) ─────────────────────
@@ -1526,9 +1502,6 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	mergedAt = time.Now()
 	if err := aliceStore.UpdateBranchStatus(ctx, "X.1@feat@part-one", store.StatusIDMerged, &mergedAt); err != nil {
 		t.Fatalf("alice UpdateBranchStatus X.1: %v", err)
-	}
-	if err := aliceStore.UpdateIssueStatus(ctx, aliceX1ID, store.StatusIDMerged); err != nil {
-		t.Fatalf("alice UpdateIssueStatus X.1: %v", err)
 	}
 	run(aliceDir, "push", "origin", "X@feat@big-feature")
 
@@ -1576,9 +1549,6 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	mergedAt = time.Now()
 	if err := aliceStore.UpdateBranchStatus(ctx, "X@feat@big-feature", store.StatusIDMerged, &mergedAt); err != nil {
 		t.Fatalf("alice UpdateBranchStatus X: %v", err)
-	}
-	if err := aliceStore.UpdateIssueStatus(ctx, aliceXID, store.StatusIDMerged); err != nil {
-		t.Fatalf("alice UpdateIssueStatus X: %v", err)
 	}
 	run(aliceDir, "push", "origin", "main")
 

@@ -174,7 +174,7 @@ func TestUniqueProjects(t *testing.T) {
 		{Project: "z/y"},
 	}
 
-	got := uniqueProjects(rows)
+	got := store.UniqueProjects(rows)
 	want := []string{"a/b", "z/y"} // sorted, no empty, deduplicated
 	if !slices.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
@@ -244,14 +244,14 @@ func TestMatchesStatus_RepoIssueState(t *testing.T) {
 
 func TestIssueRowToTableRow_Labels(t *testing.T) {
 	t.Run("labels are appended to the title cell", func(t *testing.T) {
-		row := issueRowToTableRow(&store.IssueRow{IssueSlug: "1a2b3c4", Title: "Login fails", Labels: []string{"bug", "ui"}}, false)
+		row := store.IssueRowCells(&store.IssueRow{IssueSlug: "1a2b3c4", Title: "Login fails", Labels: []string{"bug", "ui"}}, false)
 		if row[1] != "Login fails [bug, ui]" {
 			t.Errorf("title cell = %q", row[1])
 		}
 	})
 
 	t.Run("no labels leaves the bare title", func(t *testing.T) {
-		row := issueRowToTableRow(&store.IssueRow{IssueSlug: "1", Title: "Plain"}, false)
+		row := store.IssueRowCells(&store.IssueRow{IssueSlug: "1", Title: "Plain"}, false)
 		if row[1] != "Plain" {
 			t.Errorf("title cell = %q", row[1])
 		}

@@ -36,13 +36,13 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	// One repo issue has a branch; one store row is a legacy issue with no record.
 	if err := s.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: started.ShortID(), Title: "Started", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: started.ShortID(), Title: "Started"},
 		&store.Branch{Name: started.ShortID() + "@feat@started", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	if err := s.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "JIRA-7", Title: "Legacy", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "JIRA-7", Title: "Legacy"},
 		&store.Branch{Name: "JIRA-7@feat@legacy", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("insert: %v", err)

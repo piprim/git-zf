@@ -21,8 +21,8 @@ type IssueStartFlags struct {
 //     a tracker backend. Embedded below as the external/source representation.
 //   - issue.Issue (this type) — the domain entity used while a branch is being
 //     started: a tracker.Issue plus the branch Type (feat/fix/doc…).
-//   - store.Issue — the SQLite persistence row (int64 PK, StatusID, and a
-//     *string TrackerType where nil means a manual entry). The durable record
+//   - store.Issue — the SQLite persistence row (int64 PK and a *string
+//     TrackerType where nil means a manual entry). The durable record
 //     after the branch exists.
 //
 // The data flows tracker.Issue (fetched) → issue.Issue (typed in the form) →

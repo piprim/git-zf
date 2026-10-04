@@ -79,7 +79,7 @@ func TestResolveCommitMergeParent(t *testing.T) {
 
 		// Seed the parent branch + the parent→child relation.
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "X", Title: "big", StatusID: store.StatusIDInProgress},
+			&store.Issue{IDSlug: "X", Title: "big"},
 			&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
 		); err != nil {
 			t.Fatalf("seed parent: %v", err)

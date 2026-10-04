@@ -75,7 +75,7 @@ func TestResolveParentSlug_fromLinkedWorktree(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	if err := mainStore.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "PARENT-1", Title: "Parent", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "PARENT-1", Title: "Parent"},
 		&store.Branch{Name: "integration", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed: %v", err)

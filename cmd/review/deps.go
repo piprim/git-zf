@@ -66,6 +66,35 @@ func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppCon
 	return deps, nil
 }
 
+// withDeps returns the RunE of a review subcommand: it builds the shared
+// dependencies, runs fn, and closes the store.
+func withDeps(
+	cfg *config.AppConfig, fn func(ctx context.Context, deps reviewDeps) error,
+) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		ctx := cmd.Context()
+
+		deps, err := buildReviewDeps(ctx, cmd, cfg)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = deps.store.Close() }()
+
+		return fn(ctx, deps)
+	}
+}
+
+// branchNameForIssue returns the name of issueSlug's most recent branch in the
+// store, or "" when the store has none.
+func branchNameForIssue(ctx context.Context, s *store.Store, issueSlug string) (string, error) {
+	rows, err := s.ListBranchesByIssueSlugs(ctx, []string{issueSlug})
+	if err != nil {
+		return "", fmt.Errorf("list branches: %w", err)
+	}
+
+	return rows[issueSlug].BranchName, nil
+}
+
 // inReviewBranches returns synthetic BranchRows for issues currently in_review,
 // built from git refs rather than the local store. This works on fresh reviewer
 // clones where the store is empty and no git zf issue start has been run.
@@ -187,15 +216,9 @@ func recordReviewDecision(
 
 	d := reviewDecision{round: latest.Round, reviewBranch: branch.ReviewBranchName(issueSlug)}
 
-	branches, branchErr := deps.store.ListBranches(ctx, store.BranchStatusAll)
-	if branchErr != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: list branches: %v (has_commits will be false)\n", branchErr)
-	}
-	for _, b := range branches {
-		if b.IssueSlug == issueSlug {
-			d.featureBranch = b.BranchName
-			break
-		}
+	var branchErr error
+	if d.featureBranch, branchErr = branchNameForIssue(ctx, deps.store, issueSlug); branchErr != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: %v (has_commits will be false)\n", branchErr)
 	}
 
 	// Detect reviewer commits on <issueSlug>@review.

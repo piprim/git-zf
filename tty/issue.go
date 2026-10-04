@@ -10,7 +10,7 @@ import (
 )
 
 func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
-	includeProject := hasMultipleProjects(rows)
+	includeProject := len(store.UniqueProjects(rows)) > 1
 
 	headers := []string{"ISSUE ID"}
 	if includeProject {
@@ -30,44 +30,8 @@ func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
 		})
 
 	for i := range rows {
-		r := &rows[i]
-		cells := []string{r.IssueSlug}
-		if includeProject {
-			cells = append(cells, r.Project)
-		}
-
-		cells = append(cells,
-			store.TitleWithLabels(r),
-			store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.BranchName }),
-			store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return string(b.Status) }),
-			store.TrackerStatusOrNA(r.TrackerStatus),
-			store.BranchFieldOrEmpty(r.Branch, func(b *store.BranchRow) string { return b.CreatedAt.Format("2006-01-02") }),
-		)
-
-		t.Row(cells...)
+		t.Row(store.IssueRowCells(&rows[i], includeProject)...)
 	}
 
 	fmt.Fprintln(w, t.Render())
-}
-
-func hasMultipleProjects(rows []store.IssueRow) bool {
-	first := ""
-	seen := false
-
-	for _, r := range rows {
-		if r.Project == "" {
-			continue
-		}
-		if !seen {
-			first = r.Project
-			seen = true
-
-			continue
-		}
-		if r.Project != first {
-			return true
-		}
-	}
-
-	return false
 }

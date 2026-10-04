@@ -648,7 +648,7 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X", Title: "big feature", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X", Title: "big feature"},
 		&store.Branch{Name: parentBranch, Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		_ = s.Close()
@@ -891,7 +891,7 @@ func TestRunIssueStart_WritesBranchRef_WithParent(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X", Title: "big-feature", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "X", Title: "big-feature"},
 		&store.Branch{Name: "X@feat@big-feature", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		_ = s.Close()

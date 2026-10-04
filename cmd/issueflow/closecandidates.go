@@ -163,8 +163,7 @@ func TrackCandidate(
 	}
 	if insErr := s.InsertIssueWithBranch(ctx,
 		&store.Issue{
-			IDSlug: picked.IssueSlug, Title: picked.Title,
-			StatusID: store.StatusIDInProgress, TrackerType: trackerType,
+			IDSlug: picked.IssueSlug, Title: picked.Title, TrackerType: trackerType,
 		},
 		&store.Branch{Name: picked.BranchName, Type: picked.Type, StatusID: store.StatusIDInProgress},
 	); insErr != nil {

@@ -24,7 +24,7 @@ func TestIssueTitleFromStore(t *testing.T) {
 	t.Run("returns the stored title for a known slug", func(t *testing.T) {
 		s := newStore(t)
 		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "ABC-1", Title: "Add OAuth login", StatusID: store.StatusIDInProgress},
+			&store.Issue{IDSlug: "ABC-1", Title: "Add OAuth login"},
 			&store.Branch{Name: "ABC-1@feat@add-oauth-login", Type: "feat", StatusID: store.StatusIDInProgress},
 		); err != nil {
 			t.Fatalf("seed: %v", err)

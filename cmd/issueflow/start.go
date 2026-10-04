@@ -295,7 +295,7 @@ func issueFromRecord(rec *issue.Record) *issue.Issue {
 // the manual path (the manual callback) on error/empty-list, or drives the
 // tracker picker (PickIssueFromTracker). All form opening is delegated to p.
 func getFromTracker(
-	ctx context.Context, p Prompter, t tracker.Tracker, allowedTypes []string,
+	ctx context.Context, p StartPrompter, t tracker.Tracker, allowedTypes []string,
 	manual func() (*issue.Issue, error),
 ) (*issue.Issue, error) {
 	errMsg := ""
@@ -529,24 +529,13 @@ func resolveParentSlug(ctx context.Context, c *git.Client, baseBranch string) st
 	return ""
 }
 
-// BaseBrancher is the slice of *git.Client that baseBranchCandidates needs:
-// the local and remote-tracking branch listers. Declared as a tiny interface so
-// candidate assembly is unit-testable without a real repository.
-type BaseBrancher interface {
-	LocalBranchNames() ([]string, error)
-	RemoteBranchNames() ([]string, error)
-}
-
-// Compile-time check that the production client satisfies the role.
-var _ BaseBrancher = (*git.Client)(nil)
-
 // baseBranchCandidates returns the branches offerable as a base for a new
 // sub-task: every local branch plus every remote-tracking branch (with the
 // remote prefix stripped), deduplicated with locals taking precedence. A branch
 // present both locally and on the remote appears once. Including remote-only
 // branches is what lets a fresh-clone teammate base a sub-task on a parent
 // integration branch that has been pushed but never checked out locally.
-func baseBranchCandidates(c BaseBrancher) ([]string, error) {
+func baseBranchCandidates(c *git.Client) ([]string, error) {
 	locals, err := c.LocalBranchNames()
 	if err != nil {
 		return nil, fmt.Errorf("list local branches: %w", err)
@@ -657,7 +646,7 @@ func persist(
 	defer func() { _ = s.Close() }()
 
 	if err := s.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: b.IssueID(), Title: rawTitle, StatusID: store.StatusIDInProgress, TrackerType: trackerType},
+		&store.Issue{IDSlug: b.IssueID(), Title: rawTitle, TrackerType: trackerType},
 		&store.Branch{Name: b.Name(), Type: b.Type(), StatusID: store.StatusIDInProgress},
 	); err != nil {
 		return fmt.Errorf("insert issue with branch: %w", err)

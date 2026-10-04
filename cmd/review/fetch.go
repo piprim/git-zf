@@ -11,16 +11,7 @@ func (r Review) getFetchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "fetch",
 		Short: "Fetch all review refs from remote and reconcile local store",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			deps, err := buildReviewDeps(ctx, cmd, r.appConfig)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = deps.store.Close() }()
-
-			return runReviewFetch(ctx, deps)
-		},
+		RunE:  withDeps(r.appConfig, runReviewFetch),
 	}
 }
 

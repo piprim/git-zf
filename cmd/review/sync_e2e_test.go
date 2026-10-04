@@ -127,7 +127,7 @@ func seedParent(t *testing.T, rig *reviewE2ERig) {
 	mustRunGit(t, rig.dir, "commit", "-m", "feat(7): parent commit")
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
 	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "7", Title: "parent", StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: "7", Title: "parent"},
 		&store.Branch{Name: "7@feat@parent", Type: "feat", StatusID: store.StatusIDInProgress},
 	); err != nil {
 		t.Fatalf("seed parent: %v", err)

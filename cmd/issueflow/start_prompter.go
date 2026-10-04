@@ -7,38 +7,10 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/internal/pkg"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tui"
 )
-
-// BranchClient is the subset of *git.Client that ResolveBranchConflict
-// needs. Declared as a small interface so tests can substitute a fake without
-// constructing a full *git.Client.
-type BranchClient interface {
-	BranchExists(name string) (bool, error)
-	Checkout(ctx context.Context, branch string) error
-	IO() *pkg.IO
-}
-
-// Prompter resolves the issue-input forms: manual entry, the tracker picker,
-// and the tracker-error note. It is the slice of StartPrompter that getFromRepoOrUser
-// and getFromTracker drive, kept as its own interface so those helpers can be
-// unit-tested without the rest of the start flow. It lives here in the
-// application layer (not the issue domain package) because every method is a
-// UI-form concern.
-type Prompter interface {
-	// PickIssueFromUser opens the manual issue-input form (issue ID, subject, type).
-	PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error)
-
-	// PickIssueFromTracker opens the picker over a pre-fetched issues list.
-	PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error)
-
-	// NotifyTrackerError shows a one-line error note when the tracker errors
-	// out or returns no open issues. Returning a non-nil error aborts the flow.
-	NotifyTrackerError(ctx context.Context, message string) error
-}
 
 // StartPrompter resolves every user-facing decision in the issue-start flow.
 // The production implementation drives huh forms; the test implementation in
@@ -50,9 +22,15 @@ type Prompter interface {
 // the issue and its branch type, so the mapping is interface→form, not 1:1
 // for every UI element.
 type StartPrompter interface {
-	// Prompter contributes the three issue-input methods used by
-	// getFromRepoOrUser and getFromTracker.
-	Prompter
+	// PickIssueFromUser opens the manual issue-input form (issue ID, subject, type).
+	PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error)
+
+	// PickIssueFromTracker opens the picker over a pre-fetched issues list.
+	PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error)
+
+	// NotifyTrackerError shows a one-line error note when the tracker errors
+	// out or returns no open issues. Returning a non-nil error aborts the flow.
+	NotifyTrackerError(ctx context.Context, message string) error
 
 	// PickIssueFromRepo opens the picker over the open issues stored in the
 	// repository. Called only when at least one exists. A nil record with a
@@ -93,12 +71,10 @@ type StartPrompter interface {
 	// clean no-collision path. Returns (nil, nil) to signal "stop here, do
 	// not create or persist" (operator chose abort or checked out the
 	// existing branch). Returns (nil, err) on input or git failures.
-	ResolveBranchConflict(ctx context.Context, client BranchClient, b *branch.Branch, picked *issuepkg.Issue) (*branch.Branch, error)
+	ResolveBranchConflict(
+		ctx context.Context, client *git.Client, b *branch.Branch, picked *issuepkg.Issue,
+	) (*branch.Branch, error)
 }
-
-// Compile-time check that *git.Client satisfies BranchClient (the
-// production caller). Catches accidental signature drift on *git.Client.
-var _ BranchClient = (*git.Client)(nil)
 
 // Compile-time check.
 var _ StartPrompter = (*HuhStartPrompter)(nil)
@@ -224,7 +200,9 @@ func (p *HuhStartPrompter) PickTrackerStatus(
 // ResolveBranchConflict is the production conflict-resolution loop. It is the
 // body of the pre-refactor cmd/issue/conflict.go:resolveBranchConflict lifted
 // verbatim onto the prompter so tests can substitute a scripted result.
-func (p *HuhStartPrompter) ResolveBranchConflict(ctx context.Context, client BranchClient, b *branch.Branch, picked *issuepkg.Issue) (*branch.Branch, error) {
+func (*HuhStartPrompter) ResolveBranchConflict(
+	ctx context.Context, client *git.Client, b *branch.Branch, picked *issuepkg.Issue,
+) (*branch.Branch, error) {
 	for {
 		exists, err := client.BranchExists(b.Name())
 		if err != nil {

@@ -31,16 +31,7 @@ Use this when you checked out a branch with plain 'git checkout' instead of
                                 git zf review track
                                 git zf review approve`,
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			deps, err := buildReviewDeps(ctx, cmd, appConfig)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = deps.store.Close() }()
-
-			return runTrack(ctx, deps)
-		},
+		RunE: withDeps(appConfig, runTrack),
 	}
 }
 
@@ -84,7 +75,7 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 	title := strings.ReplaceAll(b.Title(), "-", " ")
 
 	if err := deps.store.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: b.IssueID(), Title: title, StatusID: store.StatusIDInProgress},
+		&store.Issue{IDSlug: b.IssueID(), Title: title},
 		&store.Branch{Name: branchName, Type: b.Type(), StatusID: store.StatusIDInProgress},
 	); err != nil {
 		return fmt.Errorf("register branch in store: %w", err)

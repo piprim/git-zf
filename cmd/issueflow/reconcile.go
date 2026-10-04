@@ -36,7 +36,7 @@ func ReconcileMergedFromRefs(ctx context.Context, s *store.Store, client *git.Cl
 }
 
 // MarkMergedFromRef reads branch b's refs/zf/branches/<slug> ref and, when it
-// carries Merged=true, marks the branch and its issue merged in the local
+// carries Merged=true, marks the branch merged in the local
 // store. now is shared across a reconcile pass so a batch of reconciled
 // branches share one timestamp. Errors are non-fatal (best-effort cache sync).
 func MarkMergedFromRef(ctx context.Context, s *store.Store, client *git.Client, b store.BranchRow, now time.Time) {
@@ -46,5 +46,4 @@ func MarkMergedFromRef(ctx context.Context, s *store.Store, client *git.Client, 
 	}
 
 	_ = s.UpdateBranchStatus(ctx, b.BranchName, store.StatusIDMerged, &now)
-	_ = s.UpdateIssueStatus(ctx, b.IssueID, store.StatusIDMerged)
 }

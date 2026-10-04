@@ -36,7 +36,6 @@ type Issue struct {
 	// tracker string ID: "ABC-42", "42", …
 	IDSlug      string
 	Title       string
-	StatusID    int64
 	TrackerType *string // nil = manual entry; non-nil = tracker type (e.g. "redmine")
 }
 
@@ -170,8 +169,8 @@ func (s *Store) InsertIssueWithBranch(ctx context.Context, issue *Issue, branch 
 	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO issues (id_slug, title, status_id, tracker_type) VALUES (?, ?, ?, ?)`,
-		issue.IDSlug, issue.Title, issue.StatusID, issue.TrackerType,
+		`INSERT INTO issues (id_slug, title, tracker_type) VALUES (?, ?, ?)`,
+		issue.IDSlug, issue.Title, issue.TrackerType,
 	)
 	if err != nil {
 		return fmt.Errorf("insert issue: %w", err)
@@ -200,34 +199,18 @@ func (s *Store) InsertIssueWithBranch(ctx context.Context, issue *Issue, branch 
 // UpdateBranchStatus updates a branch's status. mergedAt must be non-nil
 // when statusID == 2 (merged); the enforce_merged_at trigger rejects nil.
 func (s *Store) UpdateBranchStatus(ctx context.Context, name string, statusID int64, mergedAt *time.Time) error {
-	res, err := s.db.ExecContext(ctx,
+	return s.execOne(ctx, "update branch status", fmt.Sprintf("branch with name %q", name),
 		`UPDATE branches SET status_id = ?, merged_at = ? WHERE name = ?`,
-		statusID, mergedAt, name,
-	)
-	if err != nil {
-		return fmt.Errorf("update branch status: %w", err)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-
-	if n == 0 {
-		return fmt.Errorf("update branch status: no branch with name %q", name)
-	}
-
-	return nil
+		statusID, mergedAt, name)
 }
 
-// UpdateIssueStatus updates an issue's status.
-func (s *Store) UpdateIssueStatus(ctx context.Context, issueID, statusID int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE issues SET status_id = ? WHERE id = ?`,
-		statusID, issueID,
-	)
+// execOne runs a statement that must change at least one existing row. what
+// names the operation in errors; missing names the row that was not found
+// ("update branch status: no branch with name ...").
+func (s *Store) execOne(ctx context.Context, what, missing, query string, args ...any) error {
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("update issue status: %w", err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 
 	n, err := res.RowsAffected()
@@ -236,7 +219,7 @@ func (s *Store) UpdateIssueStatus(ctx context.Context, issueID, statusID int64) 
 	}
 
 	if n == 0 {
-		return fmt.Errorf("update issue status: no issue with id %d", issueID)
+		return fmt.Errorf("%s: no %s", what, missing)
 	}
 
 	return nil
@@ -351,21 +334,8 @@ func scanBranchRow(rows *sql.Rows) (BranchRow, error) {
 
 // DeleteBranch removes the branch record identified by name.
 func (s *Store) DeleteBranch(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM branches WHERE name = ?`, name)
-	if err != nil {
-		return fmt.Errorf("delete branch: %w", err)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-
-	if n == 0 {
-		return fmt.Errorf("delete branch: no branch with name %q", name)
-	}
-
-	return nil
+	return s.execOne(ctx, "delete branch", fmt.Sprintf("branch with name %q", name),
+		`DELETE FROM branches WHERE name = ?`, name)
 }
 
 // OpenRepo opens the local store inside the current git repository's common
@@ -520,7 +490,9 @@ func (s *Store) GetLatestReview(ctx context.Context, issueSlug string) (*ReviewR
 	return scanReviewRow(row)
 }
 
-func scanReviewRow(row *sql.Row) (*ReviewRow, error) {
+// scanReviewRow scans one review row from a *sql.Row or the current row of a
+// *sql.Rows. It returns nil, nil when a *sql.Row matched nothing.
+func scanReviewRow(row interface{ Scan(dest ...any) error }) (*ReviewRow, error) {
 	var r ReviewRow
 
 	err := row.Scan(&r.ID, &r.IssueSlug, &r.Round, &r.Reviewer,
@@ -543,23 +515,9 @@ func (s *Store) UpdateReviewStatus(ctx context.Context, id int64, status ReviewS
 		hasCommitsInt = 1
 	}
 
-	res, err := s.db.ExecContext(ctx,
+	return s.execOne(ctx, "update review status", fmt.Sprintf("review with id %d", id),
 		`UPDATE reviews SET status = ?, has_commits = ?, resolved_at = ? WHERE id = ?`,
-		string(status), hasCommitsInt, now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("update review status: %w", err)
-	}
-
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("update review status: no review with id %d", id)
-	}
-
-	return nil
+		string(status), hasCommitsInt, now, id)
 }
 
 // UpdateReviewerIdentity sets the reviewer field on an existing review row.
@@ -595,14 +553,12 @@ func (s *Store) ListReviews(ctx context.Context, issueSlug string) ([]ReviewRow,
 
 	var result []ReviewRow
 	for rows.Next() {
-		var r ReviewRow
-
-		if err := rows.Scan(&r.ID, &r.IssueSlug, &r.Round, &r.Reviewer,
-			(*string)(&r.Status), &r.HasCommits, &r.CreatedAt, &r.ResolvedAt); err != nil {
-			return nil, fmt.Errorf("scan review row: %w", err)
+		r, err := scanReviewRow(rows)
+		if err != nil {
+			return nil, err
 		}
 
-		result = append(result, r)
+		result = append(result, *r)
 	}
 
 	if err := rows.Err(); err != nil {
