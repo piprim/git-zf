@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -67,9 +66,7 @@ func parseWorktreeList(out string) []Worktree {
 
 // Worktrees lists every working tree of the repository (main first).
 func (c *Client) Worktrees(ctx context.Context) ([]Worktree, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "worktree", "list", "--porcelain")
+	cmd := c.gitCmd(ctx, "worktree", "list", "--porcelain")
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 
 	out, err := cmd.Output()
@@ -123,9 +120,7 @@ func (c *Client) HoldingWorktree(ctx context.Context, branch string) (*Worktree,
 // own safety checks (modified or untracked files) apply and the error carries
 // git's reason.
 func (c *Client) RemoveWorktree(ctx context.Context, path string) error {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "worktree", "remove", path)
+	cmd := c.gitCmd(ctx, "worktree", "remove", path)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -139,21 +134,7 @@ func (c *Client) RemoveWorktree(ctx context.Context, path string) error {
 // every worktree. In the main tree it equals GitDir; in a linked worktree
 // GitDir is .git/worktrees/<name> while CommonDir is the main .git.
 func (c *Client) CommonDir() (string, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(context.Background(), "git", "-C", root, "rev-parse", "--git-common-dir")
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse --git-common-dir: %w", err)
-	}
-
-	dir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(root, dir)
-	}
-
-	return dir, nil
+	return c.revParsePath("--git-common-dir")
 }
 
 // MainTree returns a client anchored on the main working tree. When c already

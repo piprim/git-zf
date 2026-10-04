@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -24,10 +23,7 @@ type StatusEntry struct {
 // `git -C <root> status --porcelain=v2`. It shells out to the system git
 // binary (like IsDirty) so semantics match git exactly.
 func (c *Client) StatusEntries(ctx context.Context) ([]StatusEntry, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain=v2")
-	out, err := cmd.Output()
+	out, err := c.gitCmd(ctx, "status", "--porcelain=v2").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git status: %w", err)
 	}

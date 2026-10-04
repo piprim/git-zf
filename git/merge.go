@@ -30,12 +30,8 @@ func (c *Client) runInteractive(ctx context.Context, dir string, args ...string)
 // are not traversed. Returns the list of conflicting file paths, or nil if clean.
 func (c *Client) MergeDryRun(ctx context.Context, branchName, baseBranch string) ([]string, error) {
 	slog.Debug("Git dry run merge…")
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root,
-		"merge-tree", "--write-tree", baseBranch, branchName)
 	slog.Debug("git merge-tree --write-tree…")
-	out, err := cmd.CombinedOutput()
+	out, err := c.gitCmd(ctx, "merge-tree", "--write-tree", baseBranch, branchName).CombinedOutput()
 	if err == nil {
 		return nil, nil
 	}
@@ -172,14 +168,12 @@ func (c *Client) FastForwardOnly(ctx context.Context, sourceBranch, targetBranch
 // DeleteLocalBranch deletes the local branch by name.
 // force=true uses -D (required after squash merges); force=false uses -d (safe).
 func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool) error {
-	root := c.root
-
 	flag := "-d"
 	if force {
 		flag = "-D"
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "branch", flag, name)
+	cmd := c.gitCmd(ctx, "branch", flag, name)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 
 	out, err := cmd.CombinedOutput()
@@ -220,20 +214,12 @@ func (c *Client) Fetch(ctx context.Context) error {
 // Wraps `git merge-base --is-ancestor child ancestor`: exit code 0 → true,
 // exit code 1 → false, any other exit code → wrapped error.
 func (c *Client) IsAncestor(ctx context.Context, child, ancestor string) (bool, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", child, ancestor)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return true, nil
+	ok, err := c.succeeds(ctx, "merge-base", "--is-ancestor", child, ancestor)
+	if err != nil {
+		return false, fmt.Errorf("merge-base --is-ancestor %s %s: %w", child, ancestor, err)
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return false, nil
-	}
-
-	return false, fmt.Errorf("merge-base --is-ancestor %s %s: %w: %s", child, ancestor, err, out)
+	return ok, nil
 }
 
 // ResetHard runs `git reset --hard <target>`. Used by the close orchestrator

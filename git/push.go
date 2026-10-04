@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 )
 
@@ -44,10 +43,7 @@ func (c *Client) PushDryRun(ctx context.Context, branch string) (PushOutcome, bo
 		return PushOutcome{}, false, nil
 	}
 
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root,
-		"push", "--porcelain", "--dry-run", remote, branch+":"+branch)
+	cmd := c.gitCmd(ctx, "push", "--porcelain", "--dry-run", remote, branch+":"+branch)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	out, runErr := cmd.CombinedOutput()
 

@@ -1,7 +1,6 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -164,21 +163,22 @@ func (c *Client) WorkingTreeRoot() string {
 // not a directory). For a linked worktree it is the per-worktree git dir.
 // Resolved by shelling out to `git rev-parse --git-dir` to handle all forms.
 func (c *Client) GitDir() (string, error) {
-	root := c.root
+	return c.revParsePath("--git-dir")
+}
 
-	cmd := exec.CommandContext(context.Background(), "git", "-C", root, "rev-parse", "--git-dir")
-
-	out, err := cmd.Output()
+// revParsePath resolves `git rev-parse <flag>` (--git-dir, --git-common-dir)
+// to an absolute path.
+func (c *Client) revParsePath(flag string) (string, error) {
+	dir, err := c.output(context.Background(), "rev-parse", flag)
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse --git-dir: %w", err)
+		return "", fmt.Errorf("git rev-parse %s: %w", flag, err)
 	}
 
-	gitDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(root, gitDir)
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(c.root, dir)
 	}
 
-	return gitDir, nil
+	return dir, nil
 }
 
 // IO returns the injected IO streams. Callers should write status/diagnostic
@@ -194,15 +194,12 @@ func (c *Client) IO() *pkg.IO {
 // does not touch untracked content, so their presence does not put user work
 // at risk during rollback.
 func (c *Client) IsDirty(ctx context.Context) (bool, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=no")
-	out, err := cmd.Output()
+	out, err := c.output(ctx, "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return false, fmt.Errorf("git status: %w", err)
 	}
 
-	return len(out) > 0, nil
+	return out != "", nil
 }
 
 // Checkout switches the working tree to branchName. Wraps `git checkout <name>`.
@@ -279,11 +276,7 @@ func (c *Client) CurrentBranch() (string, error) {
 // .idx). The current git config identity is prepended as the first
 // (default) entry.
 func (c *Client) Authors(ctx context.Context) ([]string, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "shortlog", "-sne", "--all")
-
-	out, err := cmd.Output()
+	out, err := c.output(ctx, "shortlog", "-sne", "--all")
 	if err != nil {
 		// shortlog exits non-zero on a brand-new repo with no refs.
 		// Treat that as "no authors", consistent with prior behaviour.
@@ -297,7 +290,7 @@ func (c *Client) Authors(ctx context.Context) ([]string, error) {
 
 	seen := make(map[string]struct{})
 	var list []string
-	for line := range strings.SplitSeq(string(out), "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		_, after, ok := strings.Cut(line, "\t")
 		if !ok {
 			continue
@@ -344,36 +337,24 @@ func gitStderr(err error) error {
 	return err
 }
 
-// runGitPathspecStdin runs `git -C root <sub> --pathspec-from-file=- --pathspec-file-nul`
+// runGitPathspecStdin runs `git <sub> --pathspec-from-file=- --pathspec-file-nul`
 // feeding the NUL-separated pathspec list (raw `ls-files -z` output) on stdin.
 // Streaming the list avoids the ARG_MAX limit an unignored build/vendor
 // directory of untracked files would otherwise hit, handles paths with spaces,
 // and surfaces git's stderr on failure. Used for both the `add` (stage) and the
 // `reset` (rollback) of the untracked set.
-func (c *Client) runGitPathspecStdin(ctx context.Context, root string, nulPaths []byte, sub string) error {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, sub,
-		"--pathspec-from-file=-", "--pathspec-file-nul")
-	cmd.Stdin = bytes.NewReader(nulPaths)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+func (c *Client) runGitPathspecStdin(ctx context.Context, nulPaths []byte, sub string) error {
+	_, err := c.outputStdin(ctx, nulPaths, sub, "--pathspec-from-file=-", "--pathspec-file-nul")
 
-	if err := cmd.Run(); err != nil {
-		if s := strings.TrimSpace(stderr.String()); s != "" {
-			return fmt.Errorf("%w: %s", err, s)
-		}
-
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // untrackedPaths returns the NUL-separated list of untracked, non-ignored files
 // (raw `ls-files --others --exclude-standard -z` output; .gitignore and
 // .git/info/exclude respected). Empty when the working tree has none.
-func (c *Client) untrackedPaths(ctx context.Context, root string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, "git", "-C", root,
-		"ls-files", "--others", "--exclude-standard", "-z").Output()
+func (c *Client) untrackedPaths(ctx context.Context) ([]byte, error) {
+	// Raw Output, not c.output: the NUL-separated list must not be trimmed.
+	out, err := c.gitCmd(ctx, "ls-files", "--others", "--exclude-standard", "-z").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list untracked files: %w", gitStderr(err))
 	}
@@ -387,8 +368,8 @@ func (c *Client) untrackedPaths(ctx context.Context, root string) ([]byte, error
 // that list so it can roll the exact paths back out of the index if the commit
 // later fails. The list is captured before staging because afterwards the files
 // are no longer "others" and cannot be re-derived.
-func (c *Client) stageUntracked(ctx context.Context, root string) ([]byte, error) {
-	paths, err := c.untrackedPaths(ctx, root)
+func (c *Client) stageUntracked(ctx context.Context) ([]byte, error) {
+	paths, err := c.untrackedPaths(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +377,7 @@ func (c *Client) stageUntracked(ctx context.Context, root string) ([]byte, error
 		return nil, nil
 	}
 
-	if err := c.runGitPathspecStdin(ctx, root, paths, "add"); err != nil {
+	if err := c.runGitPathspecStdin(ctx, paths, "add"); err != nil {
 		return nil, fmt.Errorf("stage untracked files: %w", err)
 	}
 
@@ -412,7 +393,7 @@ func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) err
 	if opts.IncludeUntracked {
 		var err error
 
-		stagedUntracked, err = c.stageUntracked(ctx, root)
+		stagedUntracked, err = c.stageUntracked(ctx)
 		if err != nil {
 			return err // wrapped by stageUntracked; commit does not proceed
 		}
@@ -461,7 +442,7 @@ func (c *Client) Commit(ctx context.Context, msg []byte, opts CommitOptions) err
 		// temporary index and never mutates the real one on failure. Files that
 		// were already staged before the commit keep their staging.
 		if len(stagedUntracked) > 0 {
-			if rbErr := c.runGitPathspecStdin(ctx, root, stagedUntracked, "reset"); rbErr != nil {
+			if rbErr := c.runGitPathspecStdin(ctx, stagedUntracked, "reset"); rbErr != nil {
 				return fmt.Errorf("commit failed (%w); additionally, unstaging the untracked files staged by --include-untracked failed (%v) — they remain staged", err, rbErr)
 			}
 		}
@@ -581,18 +562,14 @@ func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
 // CommitsAhead returns the number of commits in branchName that are not reachable
 // from baseBranch. Uses `git rev-list --count <baseBranch>..<branchName>`.
 func (c *Client) CommitsAhead(ctx context.Context, branchName, baseBranch string) (int, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root,
-		"rev-list", "--count", baseBranch+".."+branchName)
-	out, err := cmd.Output()
+	out, err := c.output(ctx, "rev-list", "--count", baseBranch+".."+branchName)
 	if err != nil {
 		return 0, fmt.Errorf("rev-list --count %s..%s: %w", baseBranch, branchName, err)
 	}
 
 	var n int
-	if _, err := fmt.Sscan(strings.TrimSpace(string(out)), &n); err != nil {
-		return 0, fmt.Errorf("parse rev-list count %q: %w", strings.TrimSpace(string(out)), err)
+	if _, err := fmt.Sscan(out, &n); err != nil {
+		return 0, fmt.Errorf("parse rev-list count %q: %w", out, err)
 	}
 
 	return n, nil
@@ -626,10 +603,8 @@ func (c *Client) RemoteBranchExists(ctx context.Context, branchName string) bool
 	if err != nil || remote == "" {
 		return false
 	}
-	root := c.root
-	cmd := exec.CommandContext(ctx, "git", "-C", root,
-		"ls-remote", "--exit-code", "--heads", remote, branchName)
-	return cmd.Run() == nil
+
+	return c.gitCmd(ctx, "ls-remote", "--exit-code", "--heads", remote, branchName).Run() == nil
 }
 
 // DeleteLocalBranchSafe deletes branchName locally, switching to the
@@ -664,20 +639,12 @@ func (c *Client) RunGitAt(ctx context.Context, dir string, args ...string) error
 // ConfigUser returns the git config user identity as "Name <email>".
 // Returns an empty string when not configured.
 func (c *Client) ConfigUser(ctx context.Context) (string, error) {
-	root := c.root
-
-	nameCmd := exec.CommandContext(ctx, "git", "-C", root, "config", "user.name")
-	nameOut, err := nameCmd.Output()
+	name, err := c.output(ctx, "config", "user.name")
 	if err != nil {
 		return "", nil
 	}
 
-	emailCmd := exec.CommandContext(ctx, "git", "-C", root, "config", "user.email")
-	emailOut, _ := emailCmd.Output()
-
-	name := strings.TrimSpace(string(nameOut))
-	email := strings.TrimSpace(string(emailOut))
-	if email != "" {
+	if email, _ := c.output(ctx, "config", "user.email"); email != "" {
 		return name + " <" + email + ">", nil
 	}
 	return name, nil
@@ -795,11 +762,8 @@ func (c *Client) ForceDeleteBranch(name string) error {
 // as a remote-tracking ref on a reviewer's clone so the merge strategies can
 // resolve it by bare name.
 func (c *Client) CreateLocalBranch(ctx context.Context, name, startPoint string) error {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "branch", name, startPoint)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git branch %s %s: %w: %s", name, startPoint, err, out)
+	if _, err := c.output(ctx, "branch", name, startPoint); err != nil {
+		return fmt.Errorf("git branch %s %s: %w", name, startPoint, err)
 	}
 
 	return nil

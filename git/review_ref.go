@@ -3,7 +3,6 @@ package git
 import (
 	"context"
 	"fmt"
-	"os/exec"
 )
 
 const reviewRefPrefix = "refs/zf/reviews/"
@@ -58,12 +57,8 @@ func (c *Client) FetchReviewRef(ctx context.Context, issueID string) {
 		return
 	}
 
-	root := c.root
-
 	refName := reviewRefPrefix + issueID
-	cmd := exec.CommandContext(ctx, "git", "-C", root,
-		"fetch", "--quiet", remote, refName+":"+refName)
-	_ = cmd.Run()
+	_ = c.gitCmd(ctx, "fetch", "--quiet", remote, refName+":"+refName).Run()
 }
 
 // PushReviewRef pushes refs/zf/reviews/<issueID> to the remote using
@@ -113,19 +108,16 @@ func (c *Client) ListReviewRefs(ctx context.Context) (map[string]*ReviewRef, err
 // DeleteReviewRef deletes refs/zf/reviews/<issueID> locally. If a remote is
 // configured, also attempts to delete it there (best-effort; errors are ignored).
 func (c *Client) DeleteReviewRef(ctx context.Context, issueID string) error {
-	root := c.root
-
 	refName := reviewRefPrefix + issueID
 
 	// Delete local ref.
-	delCmd := exec.CommandContext(ctx, "git", "-C", root, "update-ref", "-d", refName)
-	if out, err := delCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("delete local review ref %s: %w: %s", refName, err, out)
+	if _, err := c.output(ctx, "update-ref", "-d", refName); err != nil {
+		return fmt.Errorf("delete local review ref %s: %w", refName, err)
 	}
 
 	// Delete remote ref best-effort.
 	if remote, _ := c.Remote(); remote != "" {
-		_ = c.runInteractive(ctx, root, "push", remote, "--delete", refName)
+		_ = c.runInteractive(ctx, c.root, "push", remote, "--delete", refName)
 	}
 
 	return nil
