@@ -483,19 +483,21 @@ func (m *issueTableModel) View() string {
 	return view + "    " + hint
 }
 
-// IssueBranchPicker presents in-progress branches for the close flow.
-// The branch matching currentBranch is pre-selected; falls back to the first row.
-func IssueBranchPicker(rows []store.BranchRow, currentBranch string, selected *store.BranchRow) *huh.Group {
+// BranchPicker presents a list of branches under title (close and the review
+// commands). The first row for which preselect reports true is pre-selected;
+// it falls back to the first row.
+func BranchPicker(
+	title string, rows []store.BranchRow, preselect func(*store.BranchRow) bool, selected *store.BranchRow,
+) *huh.Group {
 	opts := make([]huh.Option[store.BranchRow], len(rows))
 	for i := range rows {
 		label := fmt.Sprintf("[%s] %s (%s)", rows[i].IssueSlug, rows[i].Title, rows[i].BranchName)
 		opts[i] = huh.NewOption(label, rows[i])
 	}
 
-	// Pre-select current branch; default to first row if not found.
 	*selected = rows[0]
 	for i := range rows {
-		if rows[i].BranchName == currentBranch {
+		if preselect(&rows[i]) {
 			*selected = rows[i]
 
 			break
@@ -504,7 +506,7 @@ func IssueBranchPicker(rows []store.BranchRow, currentBranch string, selected *s
 
 	return huh.NewGroup(
 		huh.NewSelect[store.BranchRow]().
-			Title("Select branch to close:").
+			Title(title).
 			Options(opts...).
 			Value(selected),
 	)

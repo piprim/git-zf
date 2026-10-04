@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mattn/go-redmine"
-
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/tracker"
 )
@@ -47,9 +45,8 @@ type issuesResponse struct {
 }
 
 type redmineAdapter struct {
-	client *redmine.Client
-	cfg    config.IssueTrackerConfig
-	http   *http.Client
+	cfg  config.IssueTrackerConfig
+	http *http.Client
 }
 
 // New creates a Redmine adapter from cfg.
@@ -61,9 +58,7 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 		return nil, errors.New("redmine: Token is required")
 	}
 
-	c := redmine.NewClient(cfg.URL, cfg.Token)
-
-	return &redmineAdapter{client: c, cfg: cfg, http: &http.Client{}}, nil
+	return &redmineAdapter{cfg: cfg, http: &http.Client{}}, nil
 }
 
 // ListIssues fetches open issues. With cfg.Projects set, it asks each project
@@ -94,29 +89,9 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 //
 // ponytail: one page of 100; walk offset/total_count if a listing outgrows it.
 func (a *redmineAdapter) fetchIssues(ctx context.Context, path, project string) ([]tracker.Issue, error) {
-	endpoint := strings.TrimRight(a.cfg.URL, "/") + path
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("build redmine issues request: %w", err)
-	}
-
-	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
-
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch redmine issues: %w", err)
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch redmine issues: unexpected status %d", resp.StatusCode)
-	}
-
 	var payload issuesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode redmine issues: %w", err)
+	if _, err := a.getJSON(ctx, path, &payload); err != nil {
+		return nil, fmt.Errorf("fetch redmine issues: %w", err)
 	}
 
 	result := make([]tracker.Issue, 0, len(payload.Issues))
@@ -139,11 +114,55 @@ func (a *redmineAdapter) fetchIssues(ctx context.Context, path, project string) 
 	return result, nil
 }
 
-// ListStatuses returns every available status name from GET /issue_statuses.json.
-func (a *redmineAdapter) ListStatuses(_ context.Context) ([]string, error) {
-	statuses, err := a.client.IssueStatuses()
+// getJSON GETs path, relative to the tracker URL, and decodes a 200 response
+// into dst. It returns the HTTP status (0 when the request did not complete)
+// so a caller can tell a 404 apart.
+func (a *redmineAdapter) getJSON(ctx context.Context, path string, dst any) (int, error) {
+	endpoint := strings.TrimRight(a.cfg.URL, "/") + path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
+		return 0, fmt.Errorf("build request: %w", err)
+	}
+
+	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+		return resp.StatusCode, fmt.Errorf("decode response: %w", err)
+	}
+
+	return resp.StatusCode, nil
+}
+
+// issueStatuses fetches every status from GET /issue_statuses.json.
+func (a *redmineAdapter) issueStatuses(ctx context.Context) ([]status, error) {
+	var payload struct {
+		//nolint:tagliatelle // Redmine wire format
+		Statuses []status `json:"issue_statuses"`
+	}
+	if _, err := a.getJSON(ctx, "/issue_statuses.json", &payload); err != nil {
 		return nil, fmt.Errorf("fetch issue statuses: %w", err)
+	}
+
+	return payload.Statuses, nil
+}
+
+// ListStatuses returns every available status name.
+func (a *redmineAdapter) ListStatuses(ctx context.Context) ([]string, error) {
+	statuses, err := a.issueStatuses(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	names := make([]string, len(statuses))
@@ -155,14 +174,13 @@ func (a *redmineAdapter) ListStatuses(_ context.Context) ([]string, error) {
 }
 
 // UpdateIssueStatus resolves statusName via GET /issue_statuses.json then PUTs
-// only the status_id. We send a minimal payload instead of using go-redmine's
-// UpdateIssue because that serializes every Issue field (including category_id:0
-// without omitempty), which triggers Redmine validation errors on issues with no
-// category assigned.
+// only the status_id: a minimal payload, because sending every issue field
+// (category_id:0 among them) triggers Redmine validation errors on issues with
+// no category assigned.
 func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusNameOrID string) error {
-	statuses, err := a.client.IssueStatuses()
+	statuses, err := a.issueStatuses(ctx)
 	if err != nil {
-		return fmt.Errorf("fetch issue statuses: %w", err)
+		return err
 	}
 
 	var statusID int
@@ -173,7 +191,7 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 			continue
 		}
 
-		statusID = s.Id
+		statusID = s.ID
 		found = true
 
 		break
@@ -252,31 +270,6 @@ func (a *redmineAdapter) putIssue(ctx context.Context, issueID, what string, pay
 // IsIssueClosed asks Redmine for the issue and reads status.is_closed.
 // HTTP 404 → tracker.ErrIssueNotFound; other failures are wrapped.
 func (a *redmineAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
-	base := strings.TrimRight(a.cfg.URL, "/")
-	endpoint := fmt.Sprintf("%s/issues/%s.json", base, issueID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
-	if err != nil {
-		return false, fmt.Errorf("redmine: build request: %w", err)
-	}
-
-	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
-
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("redmine: get issue %s: %w", issueID, err)
-	}
-
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return false, tracker.ErrIssueNotFound
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("redmine: get issue %s: unexpected status %d", issueID, resp.StatusCode)
-	}
-
 	var payload struct {
 		Issue struct {
 			Status struct {
@@ -284,8 +277,13 @@ func (a *redmineAdapter) IsIssueClosed(ctx context.Context, issueID string) (boo
 			} `json:"status"`
 		} `json:"issue"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return false, fmt.Errorf("redmine: decode issue %s: %w", issueID, err)
+
+	code, err := a.getJSON(ctx, "/issues/"+issueID+".json", &payload)
+	if code == http.StatusNotFound {
+		return false, tracker.ErrIssueNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("redmine: get issue %s: %w", issueID, err)
 	}
 
 	return payload.Issue.Status.IsClosed, nil

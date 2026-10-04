@@ -77,30 +77,11 @@ func (c *Client) Worktrees(ctx context.Context) ([]Worktree, error) {
 	return parseWorktreeList(string(out)), nil
 }
 
-// WorktreeFor returns the linked worktree that has branch checked out, or nil
-// when the branch is not checked out in any linked worktree. The main working
-// tree is never returned. A returned entry may be Prunable (its directory is
-// gone but git still records it); callers decide how to treat that.
-func (c *Client) WorktreeFor(ctx context.Context, branch string) (*Worktree, error) {
-	list, err := c.Worktrees(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for i := range list {
-		if !list[i].Main && list[i].Branch == branch {
-			return &list[i], nil
-		}
-	}
-
-	return nil, nil //nolint:nilnil // nil,nil is the documented "not in a worktree" answer
-}
-
 // HoldingWorktree returns the working tree — main or linked — that has branch
-// checked out, or nil when no tree holds it. Unlike WorktreeFor it includes
-// the main working tree, for callers that themselves run from a linked
-// worktree and need to know where a branch lives regardless of which tree it
-// is. A returned entry may be Prunable.
+// checked out, or nil when no tree holds it. The main working tree is
+// included, for callers that themselves run from a linked worktree and need
+// to know where a branch lives regardless of which tree it is. A returned
+// entry may be Prunable (its directory is gone but git still records it).
 func (c *Client) HoldingWorktree(ctx context.Context, branch string) (*Worktree, error) {
 	list, err := c.Worktrees(ctx)
 	if err != nil {

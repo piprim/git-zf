@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/mergeflow"
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
@@ -68,35 +69,22 @@ var _ mergeflow.Prompter = (*huhPrompter)(nil)
 // close-only pickers. It is constructed once per `issue close` invocation.
 type huhPrompter struct {
 	mergeflow.HuhPrompter
+	issueflow.HuhPickers // PickTrackerStatus, PickBaseBranch
 }
 
 func newHuhPrompter(client *git.Client, s *store.Store, cfg *config.AppConfig) *huhPrompter {
-	return &huhPrompter{mergeflow.HuhPrompter{Client: client, Store: s, Cfg: cfg, TargetLabel: "local base"}}
+	return &huhPrompter{
+		HuhPrompter: mergeflow.HuhPrompter{Client: client, Store: s, Cfg: cfg, TargetLabel: "local base"},
+	}
 }
 
 func (p *huhPrompter) PickBranch(ctx context.Context, branches []store.BranchRow, current string) (*store.BranchRow, error) {
 	var picked store.BranchRow
-	if err := huh.NewForm(tui.IssueBranchPicker(branches, current, &picked)).RunWithContext(ctx); err != nil {
+	onCurrent := func(b *store.BranchRow) bool { return b.BranchName == current }
+	if err := huh.NewForm(
+		tui.BranchPicker("Select branch to close:", branches, onCurrent, &picked)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}
 
 	return &picked, nil
-}
-
-func (p *huhPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
-	var selected string
-	if err := huh.NewForm(tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("status picker form: %w", err)
-	}
-
-	return selected, nil
-}
-
-func (p *huhPrompter) PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error) {
-	var picked string
-	if err := huh.NewForm(tui.BaseBranchPicker(defaultBase, branches, &picked)).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("base branch picker: %w", err)
-	}
-
-	return picked, nil
 }

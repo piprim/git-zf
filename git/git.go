@@ -529,34 +529,14 @@ func (c *Client) RepoName() (string, error) {
 // IsMergedInto reports whether branchName's tip commit is reachable from baseBranch,
 // i.e. whether the branch has been merged into base (mirrors git merge-base --is-ancestor).
 func (c *Client) IsMergedInto(branchName, baseBranch string) (bool, error) {
-	branchHash, err := c.ResolveRef("refs/heads/" + branchName)
+	// ResolveBranchRef falls back to the remote-tracking branch when the base
+	// was never checked out locally.
+	baseHash, err := c.ResolveBranchRef(baseBranch)
 	if err != nil {
-		return false, fmt.Errorf("resolve branch %q: %w", branchName, err)
+		return false, fmt.Errorf("resolve base branch: %w", err)
 	}
 
-	baseHash, err := c.ResolveRef("refs/heads/" + baseBranch)
-	if err != nil {
-		// Try remote tracking branch as fallback when a remote is configured.
-		remote, rErr := c.Remote()
-		if rErr != nil {
-			return false, fmt.Errorf("resolve remote: %w", rErr)
-		}
-
-		if remote != "" {
-			baseHash, err = c.ResolveRef("refs/remotes/" + remote + "/" + baseBranch)
-		}
-
-		if err != nil {
-			return false, fmt.Errorf("resolve base branch %q: %w", baseBranch, err)
-		}
-	}
-
-	merged, err := c.succeeds(context.Background(), "merge-base", "--is-ancestor", branchHash.String(), baseHash.String())
-	if err != nil {
-		return false, fmt.Errorf("is ancestor: %w", err)
-	}
-
-	return merged, nil
+	return c.IsAncestor(context.Background(), "refs/heads/"+branchName, baseHash.String())
 }
 
 // CommitsAhead returns the number of commits in branchName that are not reachable

@@ -81,7 +81,36 @@ var _ StartPrompter = (*HuhStartPrompter)(nil)
 
 // HuhStartPrompter is the production StartPrompter. It opens real huh forms.
 // Constructed once per `issue start` (or `branch new`) invocation.
-type HuhStartPrompter struct{}
+type HuhStartPrompter struct{ HuhPickers }
+
+// HuhPickers holds the huh forms the start, close and review prompters share.
+// Each of them embeds it.
+type HuhPickers struct{}
+
+// PickTrackerStatus presents the tracker's status list and returns the chosen
+// status name, or "" when the operator skips.
+func (HuhPickers) PickTrackerStatus(
+	ctx context.Context, issueID, trackerType string, statuses []string,
+) (string, error) {
+	var selected string
+	if err := huh.NewForm(
+		tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("status picker form: %w", err)
+	}
+
+	return selected, nil
+}
+
+// PickBaseBranch lets the operator choose a base branch among branches, with
+// defaultBase pre-selected.
+func (HuhPickers) PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error) {
+	var picked string
+	if err := huh.NewForm(tui.BaseBranchPicker(defaultBase, branches, &picked)).RunWithContext(ctx); err != nil {
+		return "", fmt.Errorf("base branch picker: %w", err)
+	}
+
+	return picked, nil
+}
 
 // NewHuhStartPrompter constructs the production huh-driven StartPrompter.
 func NewHuhStartPrompter() *HuhStartPrompter {
@@ -159,15 +188,6 @@ func (p *HuhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {
 	return use, nil
 }
 
-func (p *HuhStartPrompter) PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error) {
-	var picked string
-	if err := huh.NewForm(tui.BaseBranchPicker(defaultBase, branches, &picked)).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("base branch picker: %w", err)
-	}
-
-	return picked, nil
-}
-
 func (p *HuhStartPrompter) ConfirmCreateBranch(ctx context.Context, message string) (bool, error) {
 	var confirmed = true
 	if err := huh.NewForm(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
@@ -184,17 +204,6 @@ func (p *HuhStartPrompter) ConfirmCreateWorktree(ctx context.Context, message st
 	}
 
 	return confirmed, nil
-}
-
-func (p *HuhStartPrompter) PickTrackerStatus(
-	ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
-	var selected string
-	if err := huh.NewForm(
-		tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("status picker form: %w", err)
-	}
-
-	return selected, nil
 }
 
 // ResolveBranchConflict is the production conflict-resolution loop. It is the

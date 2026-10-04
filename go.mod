@@ -8,7 +8,6 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/go-github/v73 v73.0.0
-	github.com/mattn/go-redmine v0.0.3
 	github.com/pelletier/go-toml v1.8.0
 	github.com/spf13/cobra v1.1.3
 	golang.org/x/term v0.42.0

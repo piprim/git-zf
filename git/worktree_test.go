@@ -75,52 +75,6 @@ func newRepoWithWorktree(t *testing.T) (*Client, string, string) {
 	return c, dir, wt
 }
 
-func TestWorktreeFor(t *testing.T) {
-	t.Parallel()
-
-	c, _, wt := newRepoWithWorktree(t)
-
-	t.Run("finds the linked worktree holding the branch", func(t *testing.T) {
-		got, err := c.WorktreeFor(t.Context(), "feat/x")
-		if err != nil {
-			t.Fatalf("WorktreeFor: %v", err)
-		}
-		if got == nil || !SamePath(got.Path, wt) || got.Main || got.Prunable {
-			t.Fatalf("WorktreeFor = %+v, want linked entry at %s", got, wt)
-		}
-	})
-	t.Run("returns nil for the branch checked out in the main tree", func(t *testing.T) {
-		got, err := c.WorktreeFor(t.Context(), "main")
-		if err != nil {
-			t.Fatalf("WorktreeFor: %v", err)
-		}
-		if got != nil {
-			t.Fatalf("WorktreeFor(main) = %+v, want nil", got)
-		}
-	})
-	t.Run("returns nil for an unknown branch", func(t *testing.T) {
-		got, err := c.WorktreeFor(t.Context(), "nope")
-		if err != nil {
-			t.Fatalf("WorktreeFor: %v", err)
-		}
-		if got != nil {
-			t.Fatalf("WorktreeFor(nope) = %+v, want nil", got)
-		}
-	})
-	t.Run("reports a prunable entry once the directory is gone", func(t *testing.T) {
-		if err := os.RemoveAll(wt); err != nil {
-			t.Fatalf("remove worktree dir: %v", err)
-		}
-		got, err := c.WorktreeFor(t.Context(), "feat/x")
-		if err != nil {
-			t.Fatalf("WorktreeFor: %v", err)
-		}
-		if got == nil || !got.Prunable {
-			t.Fatalf("WorktreeFor after rm = %+v, want Prunable", got)
-		}
-	})
-}
-
 func TestCommonDir(t *testing.T) {
 	t.Parallel()
 
@@ -164,9 +118,9 @@ func TestRemoveWorktree(t *testing.T) {
 		if _, err := os.Stat(wt); !os.IsNotExist(err) {
 			t.Fatalf("worktree dir still present: %v", err)
 		}
-		got, err := c.WorktreeFor(t.Context(), "feat/x")
+		got, err := c.HoldingWorktree(t.Context(), "feat/x")
 		if err != nil {
-			t.Fatalf("WorktreeFor: %v", err)
+			t.Fatalf("HoldingWorktree: %v", err)
 		}
 		if got != nil {
 			t.Fatalf("entry still listed: %+v", got)
@@ -260,6 +214,18 @@ func TestHoldingWorktree(t *testing.T) {
 		}
 		if got != nil {
 			t.Fatalf("HoldingWorktree(idle) = %+v, want nil", got)
+		}
+	})
+	t.Run("reports a prunable entry once the directory is gone", func(t *testing.T) {
+		if err := os.RemoveAll(wt); err != nil {
+			t.Fatalf("remove worktree dir: %v", err)
+		}
+		got, err := c.HoldingWorktree(t.Context(), "feat/x")
+		if err != nil {
+			t.Fatalf("HoldingWorktree: %v", err)
+		}
+		if got == nil || !got.Prunable {
+			t.Fatalf("HoldingWorktree after rm = %+v, want Prunable", got)
 		}
 	})
 }

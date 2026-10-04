@@ -121,23 +121,27 @@ func TestNextStatus(t *testing.T) {
 	}
 }
 
-func TestIssueBranchPicker(t *testing.T) {
+func TestBranchPicker(t *testing.T) {
 	rows := []store.BranchRow{
 		{IssueSlug: "A-1", Title: "First", BranchName: "feature-a"},
 		{IssueSlug: "B-1", Title: "Second", BranchName: "feature-b"},
 	}
 
-	t.Run("pre-selects the row matching the current branch name", func(t *testing.T) {
+	named := func(name string) func(*store.BranchRow) bool {
+		return func(b *store.BranchRow) bool { return b.BranchName == name }
+	}
+
+	t.Run("pre-selects the row the predicate matches", func(t *testing.T) {
 		var selected store.BranchRow
-		IssueBranchPicker(rows, "feature-b", &selected)
+		BranchPicker("pick:", rows, named("feature-b"), &selected)
 		if selected.BranchName != "feature-b" {
 			t.Errorf("pre-selected = %q, want %q", selected.BranchName, "feature-b")
 		}
 	})
 
-	t.Run("defaults to first row when current branch is not in the list", func(t *testing.T) {
+	t.Run("defaults to first row when no row matches", func(t *testing.T) {
 		var selected store.BranchRow
-		IssueBranchPicker(rows, "not-in-list", &selected)
+		BranchPicker("pick:", rows, named("not-in-list"), &selected)
 		if selected.BranchName != "feature-a" {
 			t.Errorf("pre-selected = %q, want first row %q", selected.BranchName, "feature-a")
 		}

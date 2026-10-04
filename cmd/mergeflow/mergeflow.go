@@ -28,7 +28,7 @@ type Params struct {
 	SourceMaterialized bool
 
 	// SourceClient is a client opened at the linked worktree that has Source
-	// checked out (see git.Client.WorktreeFor). When nil the engine runs
+	// checked out (see SourceTree). When nil the engine runs
 	// single-tree on the client passed to Run. When set, Rebase performs its
 	// source-side steps (merge, soft reset, commit) on that tree, because git
 	// refuses to check out a branch that another worktree holds.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
@@ -34,22 +35,17 @@ type ReviewPrompter interface {
 // Compile-time check.
 var _ ReviewPrompter = (*huhReviewPrompter)(nil)
 
-type huhReviewPrompter struct{}
+type huhReviewPrompter struct {
+	issueflow.HuhPickers // PickTrackerStatus
+}
 
 func (p *huhReviewPrompter) PickBranch(ctx context.Context, title string, branches []store.BranchRow, currentSlug string) (*store.BranchRow, error) {
 	var picked store.BranchRow
-	if err := huh.NewForm(tui.ReviewBranchPicker(title, branches, currentSlug, &picked)).RunWithContext(ctx); err != nil {
+	onCurrent := func(b *store.BranchRow) bool { return b.IssueSlug == currentSlug }
+	if err := huh.NewForm(tui.BranchPicker(title, branches, onCurrent, &picked)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}
 	return &picked, nil
-}
-
-func (p *huhReviewPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
-	var selected string
-	if err := huh.NewForm(tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("status picker form: %w", err)
-	}
-	return selected, nil
 }
 
 func (p *huhReviewPrompter) Confirm(ctx context.Context, title string) (bool, error) {
