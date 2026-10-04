@@ -2,7 +2,8 @@
 // `branch merge`. It owns the generic middle of a branch merge — dry-run →
 // pick strategy → confirm → execute (Classic/Squash/Rebase) — and knows nothing
 // about issues, stores, or trackers. The engine advances Target; Source is
-// merged into it. Each caller supplies its own Prompter and PrefillFunc.
+// merged into it. Each caller supplies its own Prompter and PrefillFunc;
+// HuhPrompter holds the huh forms both callers share.
 package mergeflow
 
 import (
@@ -34,8 +35,8 @@ type Params struct {
 	SourceClient *git.Client
 }
 
-// Prompter resolves the generic user-facing merge decisions. issue close's
-// *huhPrompter already satisfies it; branch merge ships its own implementation.
+// Prompter resolves the generic user-facing merge decisions. HuhPrompter is
+// the production implementation, embedded by both callers' prompters.
 type Prompter interface {
 	PickStrategy(ctx context.Context) (commit.MergeStrategy, error)
 	ConfirmMerge(ctx context.Context, source, target string, s commit.MergeStrategy) (confirmed bool, err error)

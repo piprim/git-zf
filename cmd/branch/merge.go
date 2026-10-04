@@ -170,7 +170,7 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		}
 	}
 
-	if del, derr := prompter.ConfirmDeleteSource(ctx, source.Name); derr != nil {
+	if del, derr := prompter.ConfirmDeleteBranch(ctx, source.Name); derr != nil {
 		return derr //nolint:wrapcheck // prompter already wraps
 	} else if del {
 		if wt != nil && !worktreeRemoved {

@@ -3,12 +3,10 @@ package issue
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/mergeflow"
 	"github.com/piprim/git-zf/commit"
-	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/store"
@@ -66,18 +64,14 @@ var _ ClosePrompter = (*huhPrompter)(nil)
 // the same production prompter satisfies mergeflow.Prompter.
 var _ mergeflow.Prompter = (*huhPrompter)(nil)
 
-// huhPrompter is the production ClosePrompter. It is constructed once per
-// `issue close` invocation and holds the dependencies needed to drive the
-// commit-message form (client for Authors(), store as the history backend,
-// cfg for the form template).
+// huhPrompter is the production ClosePrompter: the shared merge forms plus the
+// close-only pickers. It is constructed once per `issue close` invocation.
 type huhPrompter struct {
-	client *git.Client
-	store  *store.Store
-	cfg    *config.AppConfig
+	mergeflow.HuhPrompter
 }
 
 func newHuhPrompter(client *git.Client, s *store.Store, cfg *config.AppConfig) *huhPrompter {
-	return &huhPrompter{client: client, store: s, cfg: cfg}
+	return &huhPrompter{mergeflow.HuhPrompter{Client: client, Store: s, Cfg: cfg, TargetLabel: "local base"}}
 }
 
 func (p *huhPrompter) PickBranch(ctx context.Context, branches []store.BranchRow, current string) (*store.BranchRow, error) {
@@ -89,62 +83,6 @@ func (p *huhPrompter) PickBranch(ctx context.Context, branches []store.BranchRow
 	return &picked, nil
 }
 
-func (p *huhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, error) {
-	var picked string
-	form := tui.IssueMergeStrategy(&picked, []tui.StrategyOption{
-		{
-			Value: string(commit.MergeStrategyRebase),
-			Label: "Rebase",
-			Hint:  "Single clean commit on local base, submodule-safe (recommended)",
-		},
-		{
-			Value: string(commit.MergeStrategySquash),
-			Label: "Squash",
-			Hint:  "git merge --squash — fast, but not submodule-safe",
-		},
-		{
-			Value: string(commit.MergeStrategyClassic),
-			Label: "Classic",
-			Hint:  "git merge --no-ff with commitizen message — preserves full history",
-		},
-	})
-	if err := huh.NewForm(form).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("strategy picker: %w", err)
-	}
-
-	return commit.MergeStrategy(picked), nil
-}
-
-func (p *huhPrompter) ConfirmMerge(ctx context.Context, branch, base string, strategy commit.MergeStrategy) (bool, error) {
-	var confirmed bool
-	if err := huh.NewForm(tui.IssueMergeConfirm(branch, base, string(strategy), &confirmed)).RunWithContext(ctx); err != nil {
-		return false, fmt.Errorf("confirm form: %w", err)
-	}
-
-	return confirmed, nil
-}
-
-func (p *huhPrompter) ComposeMessage(ctx context.Context, prefill map[string]any) ([]byte, tui.CommitOption, error) {
-	authors, err := p.client.Authors(ctx)
-	if err != nil {
-		slog.Warn("could not load author list", "error", err)
-
-		authors = []string{}
-	}
-
-	defaults := tui.CommitOption{Authors: authors}
-	if len(authors) > 0 {
-		defaults.Author = authors[0]
-	}
-
-	msg, opts, err := commitpkg.FillOutForm(ctx, p.cfg, defaults, p.store, prefill, nil)
-	if err != nil {
-		return nil, tui.CommitOption{}, fmt.Errorf("fill commit form: %w", err)
-	}
-
-	return msg, opts, nil
-}
-
 func (p *huhPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
 	var selected string
 	if err := huh.NewForm(tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
@@ -152,24 +90,6 @@ func (p *huhPrompter) PickTrackerStatus(ctx context.Context, issueID, trackerTyp
 	}
 
 	return selected, nil
-}
-
-func (p *huhPrompter) ConfirmDeleteBranch(ctx context.Context, branchName string) (bool, error) {
-	var shouldDelete bool
-	if err := huh.NewForm(tui.IssueDeleteBranch(branchName, &shouldDelete)).RunWithContext(ctx); err != nil {
-		return false, fmt.Errorf("delete branch form: %w", err)
-	}
-
-	return shouldDelete, nil
-}
-
-func (p *huhPrompter) ConfirmRemoveWorktree(ctx context.Context, path string) (bool, error) {
-	var remove bool
-	if err := huh.NewForm(tui.IssueRemoveWorktree(path, &remove)).RunWithContext(ctx); err != nil {
-		return false, fmt.Errorf("remove worktree form: %w", err)
-	}
-
-	return remove, nil
 }
 
 func (p *huhPrompter) PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error) {

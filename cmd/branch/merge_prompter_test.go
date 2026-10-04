@@ -45,7 +45,7 @@ func (s *scriptedMergePrompter) ComposeMessage(context.Context, map[string]any) 
 	return s.Message, tui.CommitOption{}, nil
 }
 
-func (s *scriptedMergePrompter) ConfirmDeleteSource(context.Context, string) (bool, error) {
+func (s *scriptedMergePrompter) ConfirmDeleteBranch(context.Context, string) (bool, error) {
 	s.ConfirmDeleteCalls++
 
 	return s.DeleteSource, nil
