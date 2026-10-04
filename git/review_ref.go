@@ -1,12 +1,9 @@
 package git
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strings"
 )
 
 const reviewRefPrefix = "refs/zf/reviews/"
@@ -26,64 +23,18 @@ type ReviewRef struct {
 // local ref refs/zf/reviews/<issueID> using CAS. oldSHA must be the current
 // ref SHA — pass "" for the first write (no prior value). Returns the new SHA.
 func (c *Client) WriteReviewRef(ctx context.Context, issueID string, ref ReviewRef, oldSHA string) (string, error) {
-	root := c.root
-
-	data, err := json.Marshal(ref)
-	if err != nil {
-		return "", fmt.Errorf("marshal review ref: %w", err)
-	}
-
-	// Write blob object.
-	hashCmd := exec.CommandContext(ctx, "git", "-C", root, "hash-object", "-w", "--stdin")
-	hashCmd.Stdin = bytes.NewReader(data)
-	out, err := hashCmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git hash-object: %w", err)
-	}
-	newSHA := strings.TrimSpace(string(out))
-
-	// Atomic CAS update of the ref.
-	refName := reviewRefPrefix + issueID
-	args := []string{"-C", root, "update-ref", refName, newSHA}
-	if oldSHA != "" {
-		args = append(args, oldSHA)
-	}
-
-	updateCmd := exec.CommandContext(ctx, "git", args...)
-	if out, err := updateCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git update-ref (CAS): %w: %s", err, out)
-	}
-
-	return newSHA, nil
+	return c.writeBlobRef(ctx, reviewRefPrefix+issueID, ref, oldSHA)
 }
 
 // ReadReviewRef reads the ReviewRef for issueID from the local ref store.
 // Returns (nil, "", nil) when the ref does not exist.
 // The returned currentSHA is suitable as oldSHA in the next WriteReviewRef call.
 func (c *Client) ReadReviewRef(ctx context.Context, issueID string) (*ReviewRef, string, error) {
-	root := c.root
-
-	refName := reviewRefPrefix + issueID
-
-	// Resolve ref to SHA.
-	showCmd := exec.CommandContext(ctx, "git", "-C", root, "show-ref", "--verify", "--hash", refName)
-	shaOut, err := showCmd.Output()
-	if err != nil {
-		// show-ref exits 1 when the ref does not exist — not an error.
-		return nil, "", nil
-	}
-	currentSHA := strings.TrimSpace(string(shaOut))
-
-	// Read blob contents.
-	catCmd := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", currentSHA)
-	blobOut, err := catCmd.Output()
-	if err != nil {
-		return nil, "", fmt.Errorf("git cat-file blob %s: %w", currentSHA, err)
-	}
-
 	var ref ReviewRef
-	if err := json.Unmarshal(blobOut, &ref); err != nil {
-		return nil, "", fmt.Errorf("unmarshal review ref: %w", err)
+
+	currentSHA, err := c.readBlobRef(ctx, reviewRefPrefix+issueID, &ref)
+	if currentSHA == "" || err != nil {
+		return nil, "", err
 	}
 
 	return &ref, currentSHA, nil
@@ -92,24 +43,9 @@ func (c *Client) ReadReviewRef(ctx context.Context, issueID string) (*ReviewRef,
 // FetchReviewRefs fetches refs/zf/reviews/* from the remote into the local ref
 // namespace. No-op when no remote is configured.
 func (c *Client) FetchReviewRefs(ctx context.Context) error {
-	remote, err := c.Remote()
-	if err != nil {
-		return fmt.Errorf("resolve remote: %w", err)
-	}
-	if remote == "" {
-		return nil
-	}
-
-	root := c.root
-
 	// --prune removes local refs/zf/reviews/* that no longer exist on the
 	// remote (e.g. deleted when a sibling developer closed their issue).
-	refspec := reviewRefPrefix + "*:" + reviewRefPrefix + "*"
-	if err := c.runInteractive(ctx, root, "fetch", "--prune", remote, refspec); err != nil {
-		return fmt.Errorf("fetch review refs: %w", err)
-	}
-
-	return nil
+	return c.fetchRefs(ctx, reviewRefPrefix, "--prune")
 }
 
 // FetchReviewRef fetches refs/zf/reviews/<issueID> from the remote into the
@@ -164,46 +100,12 @@ func (c *Client) PushReviewRef(ctx context.Context, issueID, expectedOldSHA stri
 // issueID → ReviewRef. Call FetchReviewRefs first to ensure the local
 // namespace is up to date. Does not require the issue to exist in the store.
 func (c *Client) ListReviewRefs(ctx context.Context) (map[string]*ReviewRef, error) {
-	root := c.root
-
-	// List all refs under refs/zf/reviews/ with their SHA.
-	cmd := exec.CommandContext(ctx, "git", "-C", root,
-		"for-each-ref", "--format=%(objectname) %(refname)", reviewRefPrefix)
-	out, err := cmd.Output()
-	if err != nil {
-		// No refs exist yet — return empty map, not an error.
-		return map[string]*ReviewRef{}, nil
-	}
-
 	result := make(map[string]*ReviewRef)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		sha := parts[0]
-		refName := parts[1] // e.g. refs/zf/reviews/X.1
 
-		issueID := strings.TrimPrefix(refName, reviewRefPrefix)
-		if issueID == "" {
-			continue
-		}
-
-		catCmd := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", sha)
-		blobOut, catErr := catCmd.Output()
-		if catErr != nil {
-			continue // skip malformed ref
-		}
-
-		var ref ReviewRef
-		if jsonErr := json.Unmarshal(blobOut, &ref); jsonErr != nil {
-			continue
-		}
-		result[issueID] = &ref
-	}
+	// A failing for-each-ref is reported as "no review refs", not as an error.
+	_ = eachBlobRef(ctx, c, reviewRefPrefix, func(issueID string, ref *ReviewRef) {
+		result[issueID] = ref
+	})
 
 	return result, nil
 }

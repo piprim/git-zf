@@ -1,12 +1,8 @@
 package git
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"os/exec"
-	"strings"
 )
 
 const branchRefPrefix = "refs/zf/branches/"
@@ -39,53 +35,17 @@ type BranchRef struct {
 // overwrite (e.g. re-running issue start) simply replaces the blob.
 // Returns the new blob SHA.
 func (c *Client) WriteBranchRef(ctx context.Context, issueSlug string, ref BranchRef) (string, error) {
-	root := c.root
-
-	data, err := json.Marshal(ref)
-	if err != nil {
-		return "", fmt.Errorf("marshal branch ref: %w", err)
-	}
-
-	hashCmd := exec.CommandContext(ctx, "git", "-C", root, "hash-object", "-w", "--stdin")
-	hashCmd.Stdin = bytes.NewReader(data)
-	out, err := hashCmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git hash-object: %w", err)
-	}
-	newSHA := strings.TrimSpace(string(out))
-
-	refName := branchRefPrefix + issueSlug
-	updateCmd := exec.CommandContext(ctx, "git", "-C", root, "update-ref", refName, newSHA)
-	if out, err := updateCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git update-ref: %w: %s", err, out)
-	}
-
-	return newSHA, nil
+	return c.writeBlobRef(ctx, branchRefPrefix+issueSlug, ref, "")
 }
 
 // ReadBranchRef reads the BranchRef for issueSlug from the local ref store.
 // Returns (nil, nil) when the ref does not exist.
 func (c *Client) ReadBranchRef(ctx context.Context, issueSlug string) (*BranchRef, error) {
-	root := c.root
-
-	refName := branchRefPrefix + issueSlug
-
-	showCmd := exec.CommandContext(ctx, "git", "-C", root, "show-ref", "--verify", "--hash", refName)
-	shaOut, err := showCmd.Output()
-	if err != nil {
-		return nil, nil // ref does not exist
-	}
-	sha := strings.TrimSpace(string(shaOut))
-
-	catCmd := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", sha)
-	blobOut, err := catCmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git cat-file blob %s: %w", sha, err)
-	}
-
 	var ref BranchRef
-	if err := json.Unmarshal(blobOut, &ref); err != nil {
-		return nil, fmt.Errorf("unmarshal branch ref: %w", err)
+
+	sha, err := c.readBlobRef(ctx, branchRefPrefix+issueSlug, &ref)
+	if sha == "" || err != nil {
+		return nil, err
 	}
 
 	return &ref, nil
@@ -94,22 +54,7 @@ func (c *Client) ReadBranchRef(ctx context.Context, issueSlug string) (*BranchRe
 // FetchBranchRefs fetches refs/zf/branches/* from the remote into the local
 // ref namespace. No-op when no remote is configured.
 func (c *Client) FetchBranchRefs(ctx context.Context) error {
-	remote, err := c.Remote()
-	if err != nil {
-		return fmt.Errorf("resolve remote: %w", err)
-	}
-	if remote == "" {
-		return nil
-	}
-
-	root := c.root
-
-	refspec := branchRefPrefix + "*:" + branchRefPrefix + "*"
-	if err := c.runInteractive(ctx, root, "fetch", remote, refspec); err != nil {
-		return fmt.Errorf("fetch branch refs: %w", err)
-	}
-
-	return nil
+	return c.fetchRefs(ctx, branchRefPrefix)
 }
 
 // PushBranchRef pushes refs/zf/branches/<issueSlug> to the remote.
@@ -138,42 +83,16 @@ func (c *Client) PushBranchRef(ctx context.Context, issueSlug string) error {
 // ListBranchRefs returns all locally available branch refs (refs/zf/branches/*).
 // Call FetchBranchRefs first to refresh the namespace from the remote. Returns
 // an empty slice (not an error) when none exist; malformed blobs are skipped.
-// Mirrors ListReviewRefs.
 func (c *Client) ListBranchRefs(ctx context.Context) ([]BranchRef, error) {
-	root := c.root
-
-	cmd := exec.CommandContext(ctx, "git", "-C", root,
-		"for-each-ref", "--format=%(objectname) %(refname)", branchRefPrefix)
-	out, err := cmd.Output()
-	if err != nil {
-		// Genuine git failure. for-each-ref exits 0 with empty output when no
-		// refs match, so "no refs yet" never lands here — callers that want
-		// best-effort behavior (CloseCandidates) degrade on this error.
-		return nil, fmt.Errorf("for-each-ref %s: %w", branchRefPrefix, err)
-	}
-
 	result := []BranchRef{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		sha := parts[0]
 
-		catCmd := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", sha)
-		blobOut, catErr := catCmd.Output()
-		if catErr != nil {
-			continue // skip malformed ref
-		}
-
-		var ref BranchRef
-		if jsonErr := json.Unmarshal(blobOut, &ref); jsonErr != nil {
-			continue
-		}
-		result = append(result, ref)
+	// A genuine git failure is returned: callers that want best-effort
+	// behavior (CloseCandidates) degrade on this error.
+	err := eachBlobRef(ctx, c, branchRefPrefix, func(_ string, ref *BranchRef) {
+		result = append(result, *ref)
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return result, nil
