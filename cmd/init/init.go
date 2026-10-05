@@ -83,6 +83,10 @@ await incorporation.
 Works correctly in git submodules: the hooks are written to the submodule's own
 git directory (resolved via 'git rev-parse --git-dir'), not the parent repo.
 
+It also adds two fetch refspecs to every remote, so that a plain 'git fetch'
+brings the reviews and issues stored under refs/zf/ and 'git fetch --prune'
+does not delete their tracking refs.
+
 Run 'git zf install' first to make the 'git zf' binary available in the git
 exec-path, then run 'git zf init' once per repository (and per submodule).`,
 		RunE: i.runE,
@@ -112,6 +116,16 @@ func (i Init) runE(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
+
+	remotes, err := client.ConfigureChainFetch(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("configure fetch refspecs: %w", err)
+	}
+	for _, remote := range remotes {
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"remote %q: `git fetch` now brings reviews and issues (refs/zf/reviews/*, refs/zf/issues/*)\n", remote)
+	}
+
 	return nil
 }
 

@@ -1,10 +1,11 @@
 package issue
 
 import (
-	"cmp"
 	"encoding/json"
 	"slices"
 	"time"
+
+	"github.com/piprim/git-zf/internal/chain"
 )
 
 // OpVersion is the op.json schema version this binary writes and understands.
@@ -105,14 +106,16 @@ func Fold(id string, ops []Op) Record {
 	rec := Record{ID: id, State: StateOpen, Labels: []string{}, Comments: []Comment{}}
 	labels := make(map[string]bool)
 
-	ordered := linearize(ops)
+	ordered := chain.Order(ops, func(op *Op) chain.Node {
+		return chain.Node{ID: op.ID, Parents: op.Parents, At: op.At}
+	})
 	for i := range ordered {
 		op := &ordered[i]
 		switch op.Type {
 		case OpCreate:
 			rec.Title, rec.Description, rec.BranchType = op.Title, op.Description, op.BranchType
 			if op.ID == id {
-				rec.CreatedAt = parseAt(op.At)
+				rec.CreatedAt = chain.ParseAt(op.At)
 			}
 		case OpSetState:
 			if op.Value == StateOpen || op.Value == StateClosed {
@@ -123,7 +126,7 @@ func Fold(id string, ops []Op) Record {
 		case OpRemoveLabel:
 			delete(labels, op.Value)
 		case OpAddComment:
-			rec.Comments = append(rec.Comments, Comment{ID: op.ID, Author: op.Author, At: parseAt(op.At), Body: op.Body})
+			rec.Comments = append(rec.Comments, Comment{ID: op.ID, Author: op.Author, At: chain.ParseAt(op.At), Body: op.Body})
 		}
 	}
 
@@ -133,68 +136,4 @@ func Fold(id string, ops []Op) Record {
 	slices.Sort(rec.Labels)
 
 	return rec
-}
-
-func parseAt(s string) time.Time {
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return time.Time{}
-	}
-
-	return t.UTC()
-}
-
-// linearize orders ops so that every op comes after all of its parents. Ops
-// with no ordering between them (written concurrently on two clones) are
-// ordered by At, then by ID, so every clone computes the same sequence.
-func linearize(ops []Op) []Op {
-	byID := make(map[string]*Op, len(ops))
-	for i := range ops {
-		byID[ops[i].ID] = &ops[i]
-	}
-
-	pending := make(map[string]int, len(ops))
-	children := make(map[string][]string, len(ops))
-	for i := range ops {
-		for _, p := range ops[i].Parents {
-			if _, known := byID[p]; !known {
-				continue
-			}
-			pending[ops[i].ID]++
-			children[p] = append(children[p], ops[i].ID)
-		}
-	}
-
-	var ready []string
-	for i := range ops {
-		if pending[ops[i].ID] == 0 {
-			ready = append(ready, ops[i].ID)
-		}
-	}
-
-	out := make([]Op, 0, len(ops))
-	for len(ready) > 0 {
-		// ponytail: re-sorts the ready set at every step, O(n² log n) worst
-		// case; switch to container/heap if a chain reaches thousands of ops.
-		slices.SortFunc(ready, func(a, b string) int {
-			if c := parseAt(byID[a].At).Compare(parseAt(byID[b].At)); c != 0 {
-				return c
-			}
-
-			return cmp.Compare(a, b)
-		})
-
-		next := ready[0]
-		ready = ready[1:]
-		out = append(out, *byID[next])
-
-		for _, child := range children[next] {
-			pending[child]--
-			if pending[child] == 0 {
-				ready = append(ready, child)
-			}
-		}
-	}
-
-	return out
 }

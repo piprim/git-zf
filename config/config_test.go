@@ -309,3 +309,31 @@ func TestDefaultTOML_isValidTOML(t *testing.T) {
 		t.Error("DefaultTOML missing 'commit-types' key")
 	}
 }
+
+func TestLoadReviewRequireSigned(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults to false", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Review.RequireSigned {
+			t.Fatalf("Review.RequireSigned = true, want false (default)")
+		}
+	})
+
+	t.Run("can be set to true", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := config.Load(writeTOML(t, "[review]\nrequire-signed = true\n"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.Review.RequireSigned {
+			t.Fatalf("Review.RequireSigned = false, want true (override)")
+		}
+	})
+}

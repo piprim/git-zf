@@ -82,7 +82,7 @@ levels, all on real on-disk repos:
 
 - `issue/record_test.go` — the fold (pure, no git).
 - `git/issue_ref_test.go`, `git/issue_ref_sync_test.go` — plumbing: write and
-  read a chain, fetch into `refs/zf/remote/issues/*`, reconcile, push.
+  read a chain, fetch into `refs/remotes/<remote>/zf/issues/*`, reconcile, push.
 - `issue/repo_test.go` — the glue (`Create`, `Append`, `Load`, `Resolve`,
   `Sync`), including two clones diverging and merging.
 - `cmd/issue/record_e2e_test.go`, `record_ops_e2e_test.go` — the `new`, `show`,
@@ -99,6 +99,35 @@ The start, close and list integrations live next to their flows:
 When adding an op type, add its constant and its `Fold` case in
 `issue/record.go` with a table case in `TestFold`. Unknown types must keep
 being skipped: an older binary reads refs written by a newer one.
+
+### Testing the review chains
+
+Reviews stored in the repository (`refs/zf/reviews/*`) share the chain plumbing
+of the issues (`git/chain_ref.go`, `git/chain_ref_sync.go`, parameterized by
+`git.IssueRefs` / `git.ReviewRefs`) and are tested at the same levels:
+
+- `internal/chain/chain_test.go` — the op ordering both folds use.
+- `review/record_test.go` — the fold (pure, no git), including the concurrent
+  cases.
+- `git/chain_ref_test.go` — the review namespace, tracking refs under
+  `refs/remotes/<remote>/zf/`, legacy blob refs.
+- `review/repo_test.go` — `Append`, `Load`, `List`, `Sync`, two clones
+  approving offline.
+- `cmd/review/chain_e2e_test.go`, and `^TestClose_SignedGate` /
+  `^TestClose_ReviewPreflight` in `cmd/issue/close_e2e_test.go` — the commands
+  and the signing gate.
+
+    mise exec -- go test ./internal/chain/... ./review/... -v
+    mise exec -- go test ./git/... -run "TestChainRef|TestCommitSignature" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestClose_SignedGate" -v
+
+Seed a review in another package's test with `reviewtest.Seed` (never by
+writing refs by hand). Tests that sign use `gittest.SSHSigner`, which skips
+when `ssh-keygen` is missing.
+
+When adding a review op type, add its constant and its case in `apply`
+(`review/record.go`) with a table case in `TestFold`. Unknown types must keep
+being skipped.
 
 ### Testing the menus
 

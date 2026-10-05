@@ -181,14 +181,14 @@ $ git zf review request   # developer: submit an issue branch for review (locks 
 $ git zf review start     # reviewer: create <IssueID>@review from the locked snapshot
 $ git zf review approve   # reviewer: approve — the branch is ready to close
 $ git zf review reject    # reviewer: request changes — unlocks the branch
-$ git zf review list      # list issues currently in review or approved
+$ git zf review list      # list open reviews: issues in review or approved
 $ git zf review status    # show the round-by-round history for an issue
-$ git zf review fetch     # fetch review refs from the remote, reconcile the store
+$ git zf review fetch     # sync review refs with the remote (fetch, merge, push)
 $ git zf review sync      # bring a branch up to date: reviewer commits + parent drift
 $ git zf review track     # register a branch created with plain git checkout
 ```
 
-Peer-to-peer code review with no server-side component. Review state lives in git refs under `refs/zf/reviews/<IssueID>` — a JSON blob with the status, round number, the feature HEAD SHA captured at lock time and the reviewer identity — pushed to and fetched from the remote. The refs are the source of truth; the local store is a cache. Ref writes and pushes use compare-and-swap, so two machines cannot silently overwrite each other's decision.
+Peer-to-peer code review with no server-side component. Review state lives in git refs under `refs/zf/reviews/<IssueID>`, one commit per action (see [Reviews in the repository](#reviews-in-the-repository)), pushed to and fetched from the remote. The refs are the source of truth; the local store is a cache. Concurrent actions from two machines are merged, never overwritten.
 
 A review round:
 
@@ -201,11 +201,25 @@ A review round:
 
 `request`, `approve` and `reject` accept `--push` / `--no-push`, and propose a tracker status update when the issue came from a tracker.
 
-- **`review list`** reads `refs/zf/reviews/*` directly (works on a fresh clone with an empty store) and prints every `in_review` or `approved` issue with its round number.
+- **`review list`** reads `refs/zf/reviews/*` directly (works on a fresh clone with an empty store) and prints every open review, `in_review` or `approved`, with its round number. A closed review stays in the repository but is not listed.
 - **`review status`** shows a round-by-round history for an issue: status, reviewer, timestamps, whether the reviewer pushed commits. The latest round is reconciled from the ref, so decisions made elsewhere show up.
-- **`review fetch`** fetches `refs/zf/reviews/*` (pruning refs deleted remotely) and reconciles the store. The interactive commands fetch on their own; use this before scripting around review state.
+- **`review fetch`** fetches the review chains, merges them with the local ones, and pushes the ones the remote lacks. Nothing is pruned locally. The interactive commands sync on their own; use this before scripting around review state.
 - **`review sync`** brings an in-progress branch up to date (the current one is pre-selected). First it merges pending reviewer commits from `<IssueID>@review`; on conflict the merge is left in progress for you to resolve, then `git zf commit` concludes it. Then, for sub-task branches only, it merges the parent branch (`origin/<parent>`) into the sub-task; a conflict there is aborted and reported. A dirty working tree is refused for the first step (`git stash` first).
 - **`review track`** registers the current branch in the store without creating anything, for branches made with plain `git checkout`.
+
+#### Reviews in the repository
+
+A review is stored under `refs/zf/reviews/<issue>` as a chain of commits, one
+per action (request, start, approve, reject, close). Two people acting on the
+same review at once never get a rejected push: their actions are merged. The
+review stays in the repository after the issue is closed. See
+[docs/review-refs.md](docs/review-refs.md).
+
+To require signed approvals, set `require-signed = true` under `[review]` in
+`.git-zf.toml`: `review approve` then signs, and `issue close` refuses to merge
+without an approval that `git verify-commit` accepts and that covers the commit
+being merged. When the close is refused, `git zf review request` starts a new
+round on the approved branch.
 
 ### Init
 
@@ -217,6 +231,10 @@ Installs two hooks in the current repository:
 
 - **pre-push** blocks pushes to branches locked for review. Bypass: `git push --no-verify`.
 - **pre-commit** blocks commits on a feature branch while reviewer commits await incorporation. Bypass: `git commit --no-verify`.
+
+It also configures every remote so that `git fetch` brings the reviews and issues stored under `refs/zf/`.
+
+**Upgrading:** after installing a git-zf that stores reviews as commit chains, re-run `git zf init` in each existing clone: it adds the fetch refspecs and removes the old tracking refs. A review that was in progress in the old format must be requested again (`git zf review request`).
 
 Run it once per repository and per submodule (hooks go to the submodule's own git directory). **Run it from the main checkout, not from a linked worktree**: git reads hooks from the common git dir, and inside a worktree they would be written where git never looks (see [ROADMAP.md](ROADMAP.md)). Re-running is safe and idempotent. A foreign hook is never overwritten; a warning prints the snippet to add to it instead.
 

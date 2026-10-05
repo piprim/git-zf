@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func payloads(commits []IssueCommit) []string {
+func payloads(commits []ChainCommit) []string {
 	out := make([]string, len(commits))
 	for i, c := range commits {
 		out[i] = string(c.Payload)
@@ -38,29 +38,29 @@ func TestIssueRef_CreateAppendRead(t *testing.T) {
 		}
 	})
 
-	second, err := client.AppendIssueCommit(ctx, id, []byte(`{"type":"add_comment"}`), "add_comment")
+	second, err := client.AppendChainCommit(ctx, IssueRefs, id, []byte(`{"type":"add_comment"}`), "add_comment", false)
 	if err != nil {
-		t.Fatalf("AppendIssueCommit: %v", err)
+		t.Fatalf("AppendChainCommit: %v", err)
 	}
 
-	t.Run("IssueTip returns the appended commit", func(t *testing.T) {
-		tip, err := client.IssueTip(ctx, id)
+	t.Run("ChainTip returns the appended commit", func(t *testing.T) {
+		tip, err := client.ChainTip(ctx, IssueRefs, id)
 		if err != nil || tip != second {
-			t.Errorf("IssueTip = %q, %v; want %q", tip, err, second)
+			t.Errorf("ChainTip = %q, %v; want %q", tip, err, second)
 		}
 	})
 
-	t.Run("IssueTip of an unknown issue is empty", func(t *testing.T) {
-		tip, err := client.IssueTip(ctx, "0000000000000000000000000000000000000001")
+	t.Run("ChainTip of an unknown issue is empty", func(t *testing.T) {
+		tip, err := client.ChainTip(ctx, IssueRefs, "0000000000000000000000000000000000000001")
 		if err != nil || tip != "" {
-			t.Errorf("IssueTip = %q, %v; want empty", tip, err)
+			t.Errorf("ChainTip = %q, %v; want empty", tip, err)
 		}
 	})
 
-	t.Run("ReadIssueCommits returns parents first with payloads and parent links", func(t *testing.T) {
-		commits, err := client.ReadIssueCommits(ctx, id)
+	t.Run("ReadChainCommits returns parents first with payloads and parent links", func(t *testing.T) {
+		commits, err := client.ReadChainCommits(ctx, IssueRefs, id)
 		if err != nil {
-			t.Fatalf("ReadIssueCommits: %v", err)
+			t.Fatalf("ReadChainCommits: %v", err)
 		}
 		got := payloads(commits)
 		if len(got) != 2 || got[0] != `{"type":"create"}` || got[1] != `{"type":"add_comment"}` {
@@ -74,15 +74,15 @@ func TestIssueRef_CreateAppendRead(t *testing.T) {
 		}
 	})
 
-	t.Run("ListIssueIDs lists the issue", func(t *testing.T) {
-		ids, err := client.ListIssueIDs(ctx)
+	t.Run("ListChainIDs lists the issue", func(t *testing.T) {
+		ids, err := client.ListChainIDs(ctx, IssueRefs)
 		if err != nil || len(ids) != 1 || ids[0] != id {
-			t.Errorf("ListIssueIDs = %v, %v", ids, err)
+			t.Errorf("ListChainIDs = %v, %v", ids, err)
 		}
 	})
 
-	t.Run("AppendIssueCommit on an unknown issue fails with ErrIssueNotFound", func(t *testing.T) {
-		_, err := client.AppendIssueCommit(ctx, "0000000000000000000000000000000000000001", []byte(`{}`), "x")
+	t.Run("AppendChainCommit on an unknown issue fails with ErrIssueNotFound", func(t *testing.T) {
+		_, err := client.AppendChainCommit(ctx, IssueRefs, "0000000000000000000000000000000000000001", []byte(`{}`), "x", false)
 		if !errors.Is(err, ErrIssueNotFound) {
 			t.Errorf("err = %v, want ErrIssueNotFound", err)
 		}
@@ -94,7 +94,7 @@ func TestIssueRef_CreateAppendRead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateIssueRef: %v", err)
 		}
-		commits, err := client.ReadIssueCommits(ctx, id2)
+		commits, err := client.ReadChainCommits(ctx, IssueRefs, id2)
 		if err != nil || len(commits) != 1 || string(commits[0].Payload) != body {
 			t.Errorf("payload = %q, %v", payloads(commits), err)
 		}
@@ -116,7 +116,7 @@ func TestIssueRef_Corrupt(t *testing.T) {
 		wrong := "1111111111111111111111111111111111111111"
 		mustGit(t, dir, "update-ref", "refs/zf/issues/"+wrong, id)
 
-		_, err := client.ReadIssueCommits(ctx, wrong)
+		_, err := client.ReadChainCommits(ctx, IssueRefs, wrong)
 		if !errors.Is(err, ErrIssueRefCorrupt) {
 			t.Errorf("err = %v, want ErrIssueRefCorrupt", err)
 		}
@@ -132,13 +132,13 @@ func TestIssueRef_Corrupt(t *testing.T) {
 		junk := strings.TrimSpace(string(out))
 		mustGit(t, dir, "update-ref", "refs/zf/issues/"+id, junk)
 
-		if _, err := client.AppendIssueCommit(ctx, id, []byte(`{"type":"add_label"}`), "add_label"); err != nil {
-			t.Fatalf("AppendIssueCommit: %v", err)
+		if _, err := client.AppendChainCommit(ctx, IssueRefs, id, []byte(`{"type":"add_label"}`), "add_label", false); err != nil {
+			t.Fatalf("AppendChainCommit: %v", err)
 		}
 
-		commits, err := client.ReadIssueCommits(ctx, id)
+		commits, err := client.ReadChainCommits(ctx, IssueRefs, id)
 		if err != nil {
-			t.Fatalf("ReadIssueCommits: %v", err)
+			t.Fatalf("ReadChainCommits: %v", err)
 		}
 		if len(commits) != 3 || commits[1].Payload != nil || string(commits[2].Payload) != `{"type":"add_label"}` {
 			t.Errorf("payloads = %q", payloads(commits))
@@ -171,7 +171,7 @@ func TestIssueRef_Signing(t *testing.T) {
 	})
 }
 
-// ReadIssueCommits must tell "no such issue" from a chain it cannot read.
+// ReadChainCommits must tell "no such issue" from a chain it cannot read.
 func TestIssueRef_ReadErrors(t *testing.T) {
 	t.Parallel()
 
@@ -179,7 +179,7 @@ func TestIssueRef_ReadErrors(t *testing.T) {
 	ctx := t.Context()
 
 	t.Run("an unknown issue is ErrIssueNotFound", func(t *testing.T) {
-		_, err := client.ReadIssueCommits(ctx, "0000000000000000000000000000000000000001")
+		_, err := client.ReadChainCommits(ctx, IssueRefs, "0000000000000000000000000000000000000001")
 		if !errors.Is(err, ErrIssueNotFound) {
 			t.Errorf("err = %v, want ErrIssueNotFound", err)
 		}
@@ -193,7 +193,7 @@ func TestIssueRef_ReadErrors(t *testing.T) {
 		blob := strings.TrimSpace(string(out))
 		mustGit(t, dir, "update-ref", "refs/zf/issues/"+blob, blob)
 
-		_, err = client.ReadIssueCommits(ctx, blob)
+		_, err = client.ReadChainCommits(ctx, IssueRefs, blob)
 		if err == nil || errors.Is(err, ErrIssueNotFound) {
 			t.Errorf("err = %v, want a read error distinct from ErrIssueNotFound", err)
 		}
@@ -202,15 +202,15 @@ func TestIssueRef_ReadErrors(t *testing.T) {
 
 // CreateIssueRef writes payload as the root commit of a new issue chain and
 // creates refs/zf/issues/<id>, where id is that commit's ID. Returns id.
-// Test-only: production code calls WriteIssueRoot and PublishIssueRoot
+// Test-only: production code calls WriteChainRoot and PublishChainRoot
 // separately, so nothing is published before the branch exists.
 func (c *Client) CreateIssueRef(ctx context.Context, payload []byte, message string) (string, error) {
-	id, err := c.WriteIssueRoot(ctx, payload, message)
+	id, err := c.WriteChainRoot(ctx, payload, message, false)
 	if err != nil {
 		return "", err
 	}
 
-	if err := c.PublishIssueRoot(ctx, id); err != nil {
+	if err := c.PublishChainRoot(ctx, IssueRefs, id, id); err != nil {
 		return "", err
 	}
 

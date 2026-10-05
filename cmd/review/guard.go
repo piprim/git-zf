@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/piprim/git-zf/branch"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -57,12 +58,12 @@ func runReviewGuard(ctx context.Context, deps reviewDeps, branchName string) err
 
 	// Fetch the latest decision for this issue before checking — the reviewer
 	// may have approved or rejected after the developer last fetched. Silent
-	// best-effort: if the fetch fails we fall back to the local ref.
-	deps.client.FetchReviewRef(ctx, issueSlug)
+	// and best-effort: if the fetch fails we fall back to the local chain.
+	_ = reviewpkg.Fetch(ctx, deps.client, true)
 
-	ref, _, err := deps.client.ReadReviewRef(ctx, issueSlug)
-	if err != nil || ref == nil {
-		return nil
+	ref, err := reviewpkg.Load(ctx, deps.client, issueSlug)
+	if err != nil || ref == nil || ref.Closed {
+		return nil // fail-open, legacy blob included
 	}
 
 	if ref.Status == string(store.ReviewStatusInReview) {

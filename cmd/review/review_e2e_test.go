@@ -3,7 +3,6 @@ package review
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,8 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
+	reviewpkg "github.com/piprim/git-zf/review"
+	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker/fake"
 )
@@ -235,19 +236,10 @@ func TestReviewLifecycle_RequestReject(t *testing.T) {
 		if err := rig.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatusChangesRequested, false); err != nil {
 			t.Fatalf("UpdateReviewStatus to changes_requested: %v", err)
 		}
-		// Also update the ref — the guard in runReviewRequest reads the ref (not
-		// the store) to avoid stale-cache false positives.
-		existingRef, currentSHA, _ := rig.client.ReadReviewRef(ctx, "77")
-		if existingRef != nil {
-			rejectRef := git.ReviewRef{
-				Status:     string(store.ReviewStatusChangesRequested),
-				Round:      latest.Round,
-				FeatureSHA: existingRef.FeatureSHA,
-				CreatedAt:  existingRef.CreatedAt,
-			}
-			if _, err := rig.client.WriteReviewRef(ctx, "77", rejectRef, currentSHA); err != nil {
-				t.Fatalf("WriteReviewRef changes_requested: %v", err)
-			}
+		// Also reject on the chain — the guard in runReviewRequest reads the
+		// chain (not the store) to avoid stale-cache false positives.
+		if err := reviewpkg.Append(ctx, rig.client, "77", &reviewpkg.Op{Type: reviewpkg.OpReject}, false); err != nil {
+			t.Fatalf("append reject: %v", err)
 		}
 	})
 
@@ -295,8 +287,8 @@ func TestReviewLifecycle_RequestReject(t *testing.T) {
 }
 
 // newReviewE2ERigWithOrigin builds a rig that has a bare remote (origin).
-// This is required to exercise PushReviewRef — without a remote the push
-// is a no-op and lease-correctness bugs are invisible.
+// This is required to exercise reviewpkg.Push — without a remote the push
+// is a no-op and push bugs are invisible.
 func newReviewE2ERigWithOrigin(t *testing.T) *reviewE2ERig {
 	t.Helper()
 
@@ -377,41 +369,42 @@ func newReviewE2ERigWithOrigin(t *testing.T) *reviewE2ERig {
 	}
 }
 
-// readRemoteReviewRef reads refs/zf/reviews/<issueID> from the bare origin
-// directory by shelling out to git cat-file, bypassing the local ref store.
-func readRemoteReviewRef(t *testing.T, originDir, issueID string) *git.ReviewRef {
+// readRemoteReviewRef folds refs/zf/reviews/<issueID> as the bare origin has
+// it, bypassing the local refs. nil when the origin has no such ref.
+func readRemoteReviewRef(t *testing.T, originDir, issueID string) *reviewpkg.State {
 	t.Helper()
 
-	refName := "refs/zf/reviews/" + issueID
-
-	// Resolve ref to SHA in the bare repo.
-	shaCmd := exec.CommandContext(t.Context(), "git", "-C", originDir,
-		"show-ref", "--verify", "--hash", refName)
-	shaOut, err := shaCmd.Output()
+	ref := "refs/zf/reviews/" + issueID
+	out, err := exec.CommandContext(t.Context(), "git", "-C", originDir,
+		"rev-list", "--topo-order", "--reverse", "--parents", ref).Output()
 	if err != nil {
 		return nil // ref does not exist
 	}
-	sha := string(shaOut[:len(shaOut)-1]) // trim newline
 
-	// Read blob.
-	blobCmd := exec.CommandContext(t.Context(), "git", "-C", originDir,
-		"cat-file", "blob", sha)
-	blobOut, err := blobCmd.Output()
-	if err != nil {
-		t.Fatalf("cat-file blob %s: %v", sha, err)
+	var ops []reviewpkg.Op
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		payload, err := exec.CommandContext(t.Context(), "git", "-C", originDir,
+			"cat-file", "blob", fields[0]+":op.json").Output()
+		if err != nil {
+			t.Fatalf("cat-file %s:op.json: %v", fields[0], err)
+		}
+		op, ok := reviewpkg.DecodeOp(fields[0], fields[1:], payload)
+		if !ok {
+			t.Fatalf("malformed op %s on origin", fields[0])
+		}
+		ops = append(ops, op)
 	}
 
-	var ref git.ReviewRef
-	if err := json.Unmarshal(blobOut, &ref); err != nil {
-		t.Fatalf("unmarshal remote review ref: %v", err)
-	}
-	return &ref
+	st := reviewpkg.Fold(issueID, ops)
+
+	return &st
 }
 
-// TestReviewRefPush_LeaseCorrectness verifies that the --force-with-lease SHA
-// passed to PushReviewRef is the remote's current value (not the new local SHA).
-// Without a remote, PushReviewRef is a no-op and this class of bug is invisible.
-func TestReviewRefPush_LeaseCorrectness(t *testing.T) {
+// TestReviewRefPush_ReachesRemote verifies that request and approve push their
+// op to the remote, so the other side sees the decision. Without a remote,
+// reviewpkg.Push is a no-op and this class of bug is invisible.
+func TestReviewRefPush_ReachesRemote(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -568,8 +561,8 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 	}
 
 	// Reviewer fetches refs — this is the only setup they do.
-	if err := reviewerClient.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("reviewer FetchReviewRefs: %v", err)
+	if err := reviewpkg.Fetch(ctx, reviewerClient, false); err != nil {
+		t.Fatalf("reviewer Fetch reviews: %v", err)
 	}
 
 	t.Run("review list shows issue on empty store after fetch", func(t *testing.T) {
@@ -661,23 +654,14 @@ func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 	run(reviewerDir, "config", "commit.gpgsign", "false")
 
 	// ── Developer: simulate reject + new commit + round 2 request ────────────
-	// Simulate reject: update ref to changes_requested.
+	// Simulate reject: append a reject op to the chain and push it.
 	round1Latest, _ := devRig.store.GetLatestReview(ctx, "77")
 	if round1Latest != nil {
 		_ = devRig.store.UpdateReviewStatus(ctx, round1Latest.ID, store.ReviewStatusChangesRequested, false)
-		existingRef, currentSHA, _ := devRig.client.ReadReviewRef(ctx, "77")
-		if existingRef != nil {
-			rejectRef := git.ReviewRef{
-				Status:     string(store.ReviewStatusChangesRequested),
-				Round:      round1Latest.Round,
-				FeatureSHA: existingRef.FeatureSHA,
-				CreatedAt:  existingRef.CreatedAt,
-			}
-			if _, err := devRig.client.WriteReviewRef(ctx, "77", rejectRef, currentSHA); err != nil {
-				t.Fatalf("WriteReviewRef changes_requested: %v", err)
-			}
-			_ = devRig.client.PushReviewRef(ctx, "77", currentSHA)
+		if err := reviewpkg.Append(ctx, devRig.client, "77", &reviewpkg.Op{Type: reviewpkg.OpReject}, false); err != nil {
+			t.Fatalf("append reject: %v", err)
 		}
+		_ = reviewpkg.Push(ctx, devRig.client, "77")
 	}
 
 	// Developer adds a new commit (the round-2 fix) and pushes it.
@@ -721,8 +705,8 @@ func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 	}
 
 	// Reviewer fetches ONLY review refs — does NOT do git fetch origin.
-	if err := reviewerClient.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("reviewer FetchReviewRefs: %v", err)
+	if err := reviewpkg.Fetch(ctx, reviewerClient, false); err != nil {
+		t.Fatalf("reviewer Fetch reviews: %v", err)
 	}
 
 	t.Run("review start succeeds even though reviewer lacks new commit", func(t *testing.T) {
@@ -815,8 +799,8 @@ func TestReviewApproveReject_WorkOnEmptyReviewerStore(t *testing.T) {
 	}
 
 	// Reviewer fetches — this is all they do before approving/rejecting.
-	if err := reviewerClient.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("reviewer FetchReviewRefs: %v", err)
+	if err := reviewpkg.Fetch(ctx, reviewerClient, false); err != nil {
+		t.Fatalf("reviewer Fetch reviews: %v", err)
 	}
 
 	t.Run("review reject works on empty store after fetch", func(t *testing.T) {
@@ -1087,20 +1071,12 @@ func TestTrack_Reviewer_RegistersReviewBranch(t *testing.T) {
 	ctx := context.Background()
 	rig := newReviewE2ERig(t)
 
-	// Simulate the developer having submitted for review: write an in_review ref.
+	// Simulate the developer having submitted for review: seed an in_review chain.
 	featureSHA, shaErr := rig.client.ResolveRef("refs/heads/77@feat@my-feature")
 	if shaErr != nil {
 		t.Fatalf("ResolveRef: %v", shaErr)
 	}
-	ref := git.ReviewRef{
-		Status:     "in_review",
-		Round:      1,
-		FeatureSHA: featureSHA.String(),
-		CreatedAt:  "2026-06-20T10:00:00Z",
-	}
-	if _, err := rig.client.WriteReviewRef(ctx, "77", ref, ""); err != nil {
-		t.Fatalf("WriteReviewRef: %v", err)
-	}
+	reviewtest.Seed(t, rig.client, "77", reviewpkg.StatusInReview, 1, featureSHA.String())
 
 	// Reviewer creates branch manually (no git zf review start).
 	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-b", "77@review"); err != nil {
@@ -1309,6 +1285,15 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		t.Fatalf("bob InsertIssueWithBranch: %v", err)
 	}
 
+	// closeReview marks a review closed and pushes it, as issue close does.
+	closeReview := func(deps reviewDeps, slug string) {
+		t.Helper()
+		if err := reviewpkg.Append(ctx, deps.client, slug, &reviewpkg.Op{Type: reviewpkg.OpClose}, false); err != nil {
+			t.Fatalf("close review %s: %v", slug, err)
+		}
+		_ = reviewpkg.Push(ctx, deps.client, slug)
+	}
+
 	// ── PHASE 1: development ─────────────────────────────────────────────────
 
 	// Alice commits to X.1@feat@part-one.
@@ -1351,8 +1336,8 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	run(carolDir, "config", "user.email", "carol@example.com")
 	run(carolDir, "config", "commit.gpgsign", "false")
 	carolDeps, _ := newDeps(carolDir)
-	if err := carolDeps.client.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("carol FetchReviewRefs: %v", err)
+	if err := reviewpkg.Fetch(ctx, carolDeps.client, false); err != nil {
+		t.Fatalf("carol Fetch reviews: %v", err)
 	}
 	if err := runReviewStart(ctx, carolDeps, "X.1"); err != nil {
 		t.Fatalf("carol runReviewStart X.1: %v", err)
@@ -1364,8 +1349,8 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	run(danDir, "config", "user.email", "dan@example.com")
 	run(danDir, "config", "commit.gpgsign", "false")
 	danDeps, _ := newDeps(danDir)
-	if err := danDeps.client.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("dan FetchReviewRefs: %v", err)
+	if err := reviewpkg.Fetch(ctx, danDeps.client, false); err != nil {
+		t.Fatalf("dan Fetch reviews: %v", err)
 	}
 	if err := runReviewStart(ctx, danDeps, "X.2"); err != nil {
 		t.Fatalf("dan runReviewStart X.2: %v", err)
@@ -1394,7 +1379,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 
 	// ── PHASE 5: Alice addresses feedback, round 2 ───────────────────────────
 
-	_ = aliceDeps.client.FetchReviewRefs(ctx)
+	_ = reviewpkg.Fetch(ctx, aliceDeps.client, false)
 	run(aliceDir, "checkout", "X.1@feat@part-one")
 	if err := os.WriteFile(filepath.Join(aliceDir, "part-one.txt"), []byte("part one impl\nfixed per review\n"), 0o644); err != nil {
 		t.Fatalf("write part-one.txt fix: %v", err)
@@ -1408,8 +1393,8 @@ func TestFullParallelReviewScenario(t *testing.T) {
 
 	// ── PHASE 6: Carol approves X.1 round 2 ──────────────────────────────────
 
-	if err := carolDeps.client.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("carol FetchReviewRefs round 2: %v", err)
+	if err := reviewpkg.Fetch(ctx, carolDeps.client, false); err != nil {
+		t.Fatalf("carol Fetch reviews round 2: %v", err)
 	}
 	if err := runReviewStart(ctx, carolDeps, "X.1"); err != nil {
 		t.Fatalf("carol runReviewStart X.1 round 2: %v", err)
@@ -1427,8 +1412,8 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	if err := bobDeps.client.Fetch(ctx); err != nil {
 		t.Fatalf("bob fetch: %v", err)
 	}
-	if err := bobDeps.client.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("bob FetchReviewRefs: %v", err)
+	if err := reviewpkg.Fetch(ctx, bobDeps.client, false); err != nil {
+		t.Fatalf("bob Fetch reviews: %v", err)
 	}
 
 	// Fetch Dan's review branch (it only exists on origin as a remote branch).
@@ -1445,7 +1430,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		t.Fatalf("bob delete X.2@review: %v", err)
 	}
 	run(bobDir, "push", "origin", "--delete", "X.2@review")
-	_ = bobDeps.client.DeleteReviewRef(ctx, "X.2")
+	closeReview(bobDeps, "X.2")
 
 	// Squash merge X.2@feat@part-two into X@feat@big-feature.
 	// git checkout uses DWIM: creates local X@feat@big-feature from origin/X@feat@big-feature.
@@ -1497,7 +1482,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	if err := aliceDeps.client.Commit(ctx, []byte("feat(X.1): close\n"), git.CommitOptions{}); err != nil {
 		t.Fatalf("alice commit close X.1: %v", err)
 	}
-	_ = aliceDeps.client.DeleteReviewRef(ctx, "X.1")
+	closeReview(aliceDeps, "X.1")
 
 	mergedAt = time.Now()
 	if err := aliceStore.UpdateBranchStatus(ctx, "X.1@feat@part-one", store.StatusIDMerged, &mergedAt); err != nil {
@@ -1514,8 +1499,8 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	}
 
 	// Carol fetches and starts + approves the integration review.
-	if err := carolDeps.client.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("carol FetchReviewRefs for X: %v", err)
+	if err := reviewpkg.Fetch(ctx, carolDeps.client, false); err != nil {
+		t.Fatalf("carol Fetch reviews for X: %v", err)
 	}
 	run(carolDir, "fetch", "origin") // get updated X@feat@big-feature
 	if err := runReviewStart(ctx, carolDeps, "X"); err != nil {
@@ -1526,8 +1511,8 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	}
 
 	// Alice fetches refs, checks ChildrenAllMerged, then squash merges into main.
-	if err := aliceDeps.client.FetchReviewRefs(ctx); err != nil {
-		t.Fatalf("alice FetchReviewRefs for X close: %v", err)
+	if err := reviewpkg.Fetch(ctx, aliceDeps.client, false); err != nil {
+		t.Fatalf("alice Fetch reviews for X close: %v", err)
 	}
 	allMerged, err := aliceStore.ChildrenAllMerged(ctx, "X")
 	if err != nil {
@@ -1544,7 +1529,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	if err := aliceDeps.client.Commit(ctx, []byte("feat(X): close into main\n"), git.CommitOptions{}); err != nil {
 		t.Fatalf("alice commit close X into main: %v", err)
 	}
-	_ = aliceDeps.client.DeleteReviewRef(ctx, "X")
+	closeReview(aliceDeps, "X")
 
 	mergedAt = time.Now()
 	if err := aliceStore.UpdateBranchStatus(ctx, "X@feat@big-feature", store.StatusIDMerged, &mergedAt); err != nil {

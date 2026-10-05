@@ -713,8 +713,9 @@ func (c *Client) RemoteBranchNames() ([]string, error) {
 
 	var names []string
 	for _, ref := range strings.Fields(out) {
-		// Skip the remote HEAD symref (refs/remotes/<remote>/HEAD).
-		if short := strings.TrimPrefix(ref, prefix); short != "" && short != "HEAD" {
+		// Skip the remote HEAD symref (refs/remotes/<remote>/HEAD) and the
+		// git-zf chain tracking refs under zf/, which are never branches.
+		if short := strings.TrimPrefix(ref, prefix); short != "" && short != "HEAD" && !strings.HasPrefix(short, "zf/") {
 			names = append(names, short)
 		}
 	}

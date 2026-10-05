@@ -5,6 +5,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -17,24 +18,14 @@ type PendingReview struct {
 	Status       store.ReviewStatus // approved | changes_requested
 }
 
-// PendingReviewCommits reports reviewer commits awaiting incorporation for
-// slug's featureBranch, or nil when nothing is pending. It reads only local
-// refs — no network — so it is cheap enough for a pre-commit hook and works
-// offline. The guard is armed only by a decided review ref: in_review means
-// the reviewer hasn't decided, and a stale review branch with no ref (e.g.
-// after a close) never trips it.
-func PendingReviewCommits(ctx context.Context, client *git.Client, slug, featureBranch string) (*PendingReview, error) {
-	ref, _, err := client.ReadReviewRef(ctx, slug)
-	if err != nil || ref == nil {
-		return nil, err
-	}
-	status := store.ReviewStatus(ref.Status)
-	if status != store.ReviewStatusApproved && status != store.ReviewStatusChangesRequested {
-		return nil, nil
-	}
-
+// ReviewBranchAhead finds the review branch that counts for slug and how many
+// commits it has that featureBranch lacks. effective is "42@review" or
+// "origin/42@review", "" when there is no review branch. It reads only local
+// refs, whatever the state of the review.
+func ReviewBranchAhead(
+	ctx context.Context, client *git.Client, slug, featureBranch string,
+) (effective string, n int, err error) {
 	reviewBranch := branch.ReviewBranchName(slug)
-	effective := ""
 	localExists, _ := client.BranchExists(reviewBranch)
 	if localExists {
 		effective = reviewBranch
@@ -58,13 +49,35 @@ func PendingReviewCommits(ctx context.Context, client *git.Client, slug, feature
 		}
 	}
 	if effective == "" {
+		return "", 0, nil
+	}
+
+	n, err = client.CommitsAhead(ctx, effective, featureBranch)
+
+	return effective, n, err
+}
+
+// PendingReviewCommits reports reviewer commits awaiting incorporation for
+// slug's featureBranch, or nil when nothing is pending. It reads only local
+// refs — no network — so it is cheap enough for a pre-commit hook and works
+// offline. The guard is armed only by a decided, open review: in_review means
+// the reviewer hasn't decided, and a closed review or a stale review branch
+// with no review never trips it.
+func PendingReviewCommits(ctx context.Context, client *git.Client, slug, featureBranch string) (*PendingReview, error) {
+	st, err := reviewpkg.Load(ctx, client, slug)
+	if err != nil || st == nil || st.Closed {
+		return nil, err
+	}
+	status := store.ReviewStatus(st.Status)
+	if status != store.ReviewStatusApproved && status != store.ReviewStatusChangesRequested {
 		return nil, nil
 	}
 
-	n, err := client.CommitsAhead(ctx, effective, featureBranch)
+	effective, n, err := ReviewBranchAhead(ctx, client, slug, featureBranch)
 	if err != nil || n == 0 {
 		return nil, err
 	}
+
 	return &PendingReview{EffectiveRef: effective, Commits: n, Status: status}, nil
 }
 

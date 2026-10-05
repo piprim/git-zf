@@ -76,3 +76,6 @@ token = ""
 
 [push]
 propose = true
+
+[review]
+require-signed = false

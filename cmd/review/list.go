@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/piprim/git-zf/store"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
-
-// store is used indirectly via ReviewStatusInReview/Approved constants.
 
 func (r Review) getListCmd() *cobra.Command {
 	return &cobra.Command{
@@ -19,24 +17,26 @@ func (r Review) getListCmd() *cobra.Command {
 }
 
 func runReviewList(ctx context.Context, deps reviewDeps) error {
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 
 	// Read directly from git refs — works even when the reviewer's store is
 	// empty (fresh clone that never ran git zf issue start).
-	allRefs, err := deps.client.ListReviewRefs(ctx)
+	states, warnings, err := reviewpkg.List(ctx, deps.client)
 	if err != nil {
 		return fmt.Errorf("list review refs: %w", err)
 	}
+	for _, w := range warnings {
+		fmt.Fprintln(deps.client.IO().Err, w)
+	}
 
 	printed := 0
-	for issueID, ref := range allRefs {
-		if ref.Status != string(store.ReviewStatusInReview) && ref.Status != string(store.ReviewStatusApproved) {
+	for _, st := range states {
+		if st.Closed || (st.Status != reviewpkg.StatusInReview && st.Status != reviewpkg.StatusApproved) {
 			continue
 		}
-		fmt.Fprintf(deps.client.IO().Out, "%-12s  round %-2d  %s\n",
-			issueID, ref.Round, ref.Status)
+		fmt.Fprintf(deps.client.IO().Out, "%-12s  round %-2d  %s\n", st.Slug, st.Round, st.Status)
 		printed++
 	}
 

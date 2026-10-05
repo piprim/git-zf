@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -22,7 +22,7 @@ func mustRunGit(t *testing.T, dir string, args ...string) {
 }
 
 // seedPendingReview creates 77@review with one commit ahead of the feature
-// branch and writes a local review ref with the given status.
+// branch and seeds a local review chain with the given status.
 func seedPendingReview(t *testing.T, rig *reviewE2ERig, status store.ReviewStatus) {
 	t.Helper()
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
@@ -33,11 +33,7 @@ func seedPendingReview(t *testing.T, rig *reviewE2ERig, status store.ReviewStatu
 	mustRunGit(t, rig.dir, "add", "reviewer.txt")
 	mustRunGit(t, rig.dir, "commit", "-m", "fix: reviewer nit")
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
-	if _, err := rig.client.WriteReviewRef(t.Context(), "77", git.ReviewRef{
-		Status: string(status), Round: 1, FeatureSHA: "unused", CreatedAt: "2026-07-08T00:00:00Z",
-	}, ""); err != nil {
-		t.Fatalf("write review ref: %v", err)
-	}
+	reviewtest.Seed(t, rig.client, "77", string(status), 1, "unused")
 }
 
 func TestGuardCommit(t *testing.T) {

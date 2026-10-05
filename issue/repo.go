@@ -50,7 +50,7 @@ func Prepare(ctx context.Context, c *git.Client, in NewIssue) (string, error) {
 		return "", err
 	}
 
-	id, err := c.WriteIssueRoot(ctx, payload, OpCreate)
+	id, err := c.WriteChainRoot(ctx, payload, OpCreate, false)
 	if err != nil {
 		return "", fmt.Errorf("prepare issue: %w", err)
 	}
@@ -60,7 +60,7 @@ func Prepare(ctx context.Context, c *git.Client, in NewIssue) (string, error) {
 
 // Publish makes the issue prepared under id exist. Nothing is pushed.
 func Publish(ctx context.Context, c *git.Client, id string) error {
-	if err := c.PublishIssueRoot(ctx, id); err != nil {
+	if err := c.PublishChainRoot(ctx, git.IssueRefs, id, id); err != nil {
 		return fmt.Errorf("publish issue %s: %w", id, err)
 	}
 
@@ -96,7 +96,7 @@ func Append(ctx context.Context, c *git.Client, id string, op *Op) error {
 		return err
 	}
 
-	if _, err := c.AppendIssueCommit(ctx, id, payload, op.Type); err != nil {
+	if _, err := c.AppendChainCommit(ctx, git.IssueRefs, id, payload, op.Type, false); err != nil {
 		return fmt.Errorf("write %s op on issue %s: %w", op.Type, id, err)
 	}
 
@@ -106,7 +106,7 @@ func Append(ctx context.Context, c *git.Client, id string, op *Op) error {
 // Load reads the chain of issue id and folds it. Malformed commits are skipped
 // and named in Record.Warnings.
 func Load(ctx context.Context, c *git.Client, id string) (Record, error) {
-	commits, err := c.ReadIssueCommits(ctx, id)
+	commits, err := c.ReadChainCommits(ctx, git.IssueRefs, id)
 	if err != nil {
 		return Record{}, fmt.Errorf("read issue %s: %w", id, err)
 	}
@@ -130,7 +130,7 @@ func Load(ctx context.Context, c *git.Client, id string) (Record, error) {
 // List loads every local issue, newest first. An unreadable ref is skipped;
 // warnings names it, along with every malformed op met on the way.
 func List(ctx context.Context, c *git.Client) (records []Record, warnings []string, err error) {
-	ids, err := c.ListIssueIDs(ctx)
+	ids, err := c.ListChainIDs(ctx, git.IssueRefs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list issues: %w", err)
 	}
@@ -156,7 +156,7 @@ func List(ctx context.Context, c *git.Client) (records []Record, warnings []stri
 // Resolve finds the issue designated by query: a full ID, or a unique ID
 // prefix of at least 4 characters.
 func Resolve(ctx context.Context, c *git.Client, query string) (Record, error) {
-	ids, err := c.ListIssueIDs(ctx)
+	ids, err := c.ListChainIDs(ctx, git.IssueRefs)
 	if err != nil {
 		return Record{}, fmt.Errorf("list issues: %w", err)
 	}
@@ -200,7 +200,7 @@ func Resolve(ctx context.Context, c *git.Client, query string) (Record, error) {
 // them, merging diverged chains. Returns the number of merges. No-op without
 // a remote.
 func Fetch(ctx context.Context, c *git.Client) (merged int, err error) {
-	if err := c.FetchIssueRefs(ctx); err != nil {
+	if err := c.FetchChainRefs(ctx, git.IssueRefs, false); err != nil {
 		return 0, fmt.Errorf("fetch issues: %w", err)
 	}
 
@@ -209,7 +209,7 @@ func Fetch(ctx context.Context, c *git.Client) (merged int, err error) {
 		return 0, err
 	}
 
-	merged, err = c.ReconcileIssueRefs(ctx, payload)
+	merged, err = c.ReconcileChainRefs(ctx, git.IssueRefs, payload)
 	if err != nil {
 		return merged, fmt.Errorf("reconcile issues: %w", err)
 	}
@@ -220,7 +220,7 @@ func Fetch(ctx context.Context, c *git.Client) (merged int, err error) {
 // Push pushes issue id. A rejected push (someone pushed first) triggers one
 // fetch, merge and retry. No-op without a remote.
 func Push(ctx context.Context, c *git.Client, id string) error {
-	firstErr := c.PushIssueRef(ctx, id)
+	firstErr := c.PushChainRef(ctx, git.IssueRefs, id)
 	if firstErr == nil {
 		return nil
 	}
@@ -229,7 +229,7 @@ func Push(ctx context.Context, c *git.Client, id string) error {
 		return errors.Join(firstErr, err)
 	}
 
-	if err := c.PushIssueRef(ctx, id); err != nil {
+	if err := c.PushChainRef(ctx, git.IssueRefs, id); err != nil {
 		return fmt.Errorf("push issue %s after merge: %w", id, err)
 	}
 
@@ -254,13 +254,13 @@ func Sync(ctx context.Context, c *git.Client) (SyncResult, error) {
 	}
 	res.Merged = merged
 
-	ids, err := c.ListIssueIDs(ctx)
+	ids, err := c.ListChainIDs(ctx, git.IssueRefs)
 	if err != nil {
 		return res, fmt.Errorf("list issues: %w", err)
 	}
 
 	for _, id := range ids {
-		pushed, err := c.IssueRefPushed(ctx, id)
+		pushed, err := c.ChainRefPushed(ctx, git.IssueRefs, id)
 		if err != nil {
 			res.Failed = append(res.Failed, fmt.Sprintf("%s: %v", id, err))
 

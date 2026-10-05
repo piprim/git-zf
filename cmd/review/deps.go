@@ -3,13 +3,13 @@ package review
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
@@ -99,27 +99,30 @@ func branchNameForIssue(ctx context.Context, s *store.Store, issueSlug string) (
 // built from git refs rather than the local store. This works on fresh reviewer
 // clones where the store is empty and no git zf issue start has been run.
 func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, error) {
-	// Fetch latest state (best-effort).
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
+	// Fetch latest state and push anything still local (best-effort).
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 
-	refs, err := deps.client.ListReviewRefs(ctx)
+	states, warnings, err := reviewpkg.List(ctx, deps.client)
 	if err != nil {
 		return nil, fmt.Errorf("list review refs: %w", err)
 	}
+	for _, w := range warnings {
+		fmt.Fprintln(deps.client.IO().Err, w)
+	}
 
 	var result []store.BranchRow
-	for issueID, ref := range refs {
-		if ref.Status != string(store.ReviewStatusInReview) {
+	for _, st := range states {
+		if st.Closed || st.Status != reviewpkg.StatusInReview {
 			continue
 		}
-		// Build a synthetic BranchRow from ref data. The reviewer's branch
+		// Build a synthetic BranchRow from the review. The reviewer's branch
 		// follows the <IssueID>@review convention.
 		result = append(result, store.BranchRow{
-			IssueSlug:  issueID,
-			BranchName: branch.ReviewBranchName(issueID),
-			Title:      issueID,
+			IssueSlug:  st.Slug,
+			BranchName: branch.ReviewBranchName(st.Slug),
+			Title:      st.Slug,
 		})
 	}
 	return result, nil
@@ -137,7 +140,7 @@ func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, 
 // round 2 — the store still shows round 1 / changes_requested).
 func ensureReviewRecord(ctx context.Context, deps reviewDeps, issueSlug string) (*store.ReviewRow, error) {
 	// Ref is always authoritative — read it first.
-	ref, _, refErr := deps.client.ReadReviewRef(ctx, issueSlug)
+	ref, refErr := reviewpkg.Load(ctx, deps.client, issueSlug)
 	if refErr != nil {
 		return nil, fmt.Errorf("read review ref: %w", refErr)
 	}
@@ -228,28 +231,37 @@ func recordReviewDecision(
 		d.hasCommits = countErr == nil && n > 0
 	}
 
-	currentRef, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
+	st, err := reviewpkg.Load(ctx, deps.client, issueSlug)
 	if err != nil {
 		return reviewDecision{}, fmt.Errorf("read review ref: %w", err)
 	}
-
-	newRef := git.ReviewRef{
-		Status:    string(status),
-		Round:     latest.Round,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		Comment:   comment,
-	}
-	if currentRef != nil {
-		newRef.FeatureSHA = currentRef.FeatureSHA
-		newRef.Reviewer = currentRef.Reviewer
+	for _, w := range st.Warnings {
+		fmt.Fprintln(deps.client.IO().Err, w)
 	}
 
-	if _, err := deps.client.WriteReviewRef(ctx, issueSlug, newRef, currentSHA); err != nil {
+	op := &reviewpkg.Op{Type: reviewpkg.OpReject, Comment: comment, HasCommits: d.hasCommits, Round: st.Round}
+	if status == store.ReviewStatusApproved {
+		// What the reviewer approved: their review branch when they have one,
+		// else the commit the developer submitted.
+		approved := st.FeatureSHA
+		if d.branchExists {
+			tip, tipErr := deps.client.ResolveRef("refs/heads/" + d.reviewBranch)
+			if tipErr != nil {
+				return reviewDecision{}, fmt.Errorf("resolve %s: %w", d.reviewBranch, tipErr)
+			}
+			approved = tip.String()
+		}
+		op = &reviewpkg.Op{Type: reviewpkg.OpApprove, ApprovedSHA: approved, HasCommits: d.hasCommits, Round: st.Round}
+	}
+
+	// review.require-signed: the approval is signed whatever commit.gpgsign
+	// says, and the command fails when it cannot be.
+	sign := status == store.ReviewStatusApproved && deps.cfg.Review.RequireSigned
+	if err := reviewpkg.Append(ctx, deps.client, issueSlug, op, sign); err != nil {
 		return reviewDecision{}, fmt.Errorf("write review ref: %w", err)
 	}
 
-	// expectedOldSHA is currentSHA — the value the remote has before this push.
-	if err := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); err != nil {
+	if err := reviewpkg.Push(ctx, deps.client, issueSlug); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
 	}
 

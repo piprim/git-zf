@@ -11,6 +11,7 @@ import (
 
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
+	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -72,12 +73,7 @@ func newGuardRig(t *testing.T) *guardRig {
 	); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := client.WriteReviewRef(t.Context(), "42", git.ReviewRef{
-		Status: string(store.ReviewStatusChangesRequested), Round: 1,
-		FeatureSHA: "unused", CreatedAt: "2026-07-08T00:00:00Z",
-	}, ""); err != nil {
-		t.Fatalf("write review ref: %v", err)
-	}
+	reviewtest.Seed(t, client, "42", string(store.ReviewStatusChangesRequested), 1, "unused")
 	return &guardRig{dir: dir, client: client, store: s, stdout: stdout}
 }
 

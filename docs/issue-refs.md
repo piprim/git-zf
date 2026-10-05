@@ -14,7 +14,7 @@ git show <commit>:op.json
 | Ref | Content |
 |---|---|
 | `refs/zf/issues/<id>` | The local issue. `<id>` is the full object ID of the issue's first commit. |
-| `refs/zf/remote/issues/<id>` | What the remote had at the last fetch or push. Never edited by hand. |
+| `refs/remotes/<remote>/zf/issues/<id>` | What the remote had at the last fetch or push. Never edited by hand. |
 
 The 7-character ID shown by `git zf issue list` and used in branch names is the
 start of `<id>`. Commands accept the full ID or any unique prefix of at least 4
@@ -51,7 +51,7 @@ skipped, so an older git-zf reads refs written by a newer one.
 
 ## Sharing
 
-`git zf issue sync` fetches `refs/zf/issues/*` into `refs/zf/remote/issues/*`,
+`git zf issue sync` fetches `refs/zf/issues/*` into `refs/remotes/<remote>/zf/issues/*`,
 then for each issue:
 
 - no local ref: the local ref is created;
@@ -63,6 +63,8 @@ Pushes are plain fast-forward pushes, never forced, so a push cannot discard
 someone else's ops. Every command that writes an op pushes it right away; when
 the push fails the op stays local and goes out with the next sync.
 
-A plain `git clone` or `git fetch` does not bring these refs. Run
-`git zf issue sync` (or any `git zf issue` command, which fetches them) once
-after cloning.
+A plain `git clone` does not bring these refs. Run `git zf init` once per
+clone: it adds the fetch refspec to every remote, so that a plain `git fetch`
+brings the issues and `git fetch --prune` does not delete their tracking refs.
+Without it, run `git zf issue sync`. The tracking refs appear in
+`git branch -r` as `<remote>/zf/issues/<id>`.

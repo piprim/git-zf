@@ -15,7 +15,10 @@ import (
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/gittest"
 	"github.com/piprim/git-zf/internal/pkg"
+	reviewpkg "github.com/piprim/git-zf/review"
+	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
@@ -830,8 +833,8 @@ func TestClose_ConflictAborts(t *testing.T) {
 	})
 }
 
-// seedReviewRef writes a git review ref so reviewPreflight (which reads the
-// ref as authoritative) can see the correct status in tests.
+// seedReviewRef writes a review chain so reviewPreflight (which reads the
+// chain as authoritative) can see the correct status in tests.
 func seedReviewRef(t *testing.T, rig *closeTestRig, issueSlug string, status store.ReviewStatus, round int) {
 	t.Helper()
 
@@ -839,15 +842,8 @@ func seedReviewRef(t *testing.T, rig *closeTestRig, issueSlug string, status sto
 	if err != nil {
 		t.Fatalf("rev-parse feature branch: %v", err)
 	}
-	ref := git.ReviewRef{
-		Status:     string(status),
-		Round:      round,
-		FeatureSHA: strings.TrimSpace(string(out)),
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if _, err := rig.client.WriteReviewRef(t.Context(), issueSlug, ref, ""); err != nil {
-		t.Fatalf("WriteReviewRef: %v", err)
-	}
+
+	reviewtest.Seed(t, rig.client, issueSlug, string(status), round, strings.TrimSpace(string(out)))
 }
 
 func TestClose_ReviewPreflight(t *testing.T) {
@@ -995,19 +991,13 @@ func TestClose_ReviewPreflight_IncorporatesRemoteOnlyReviewerCommits(t *testing.
 		t.Fatalf("seed: %v", err)
 	}
 
-	// Write approved review ref and push it to origin — FetchReviewRefs uses
-	// --prune, so any ref not on the remote would be deleted before the close reads it.
+	// Seed an approved review chain and push it to origin, as review approve
+	// would have.
 	featureSHA, _ := bobClient.ResolveRef("refs/heads/ABC-1@feat@thing")
-	reviewRef := git.ReviewRef{
-		Status: "approved", Round: 1,
-		FeatureSHA: featureSHA.String(),
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	reviewtest.Seed(t, bobClient, "ABC-1", reviewpkg.StatusApproved, 1, featureSHA.String())
+	if err := reviewpkg.Push(t.Context(), bobClient, "ABC-1"); err != nil {
+		t.Fatalf("push review: %v", err)
 	}
-	if _, err := bobClient.WriteReviewRef(t.Context(), "ABC-1", reviewRef, ""); err != nil {
-		t.Fatalf("WriteReviewRef: %v", err)
-	}
-	// Push the ref so --prune doesn't remove it from local on the next fetch.
-	runIn(bobDir, "push", "--force", "origin", "refs/zf/reviews/ABC-1")
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
@@ -1282,18 +1272,10 @@ func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 		t.Fatalf("seed branch: %v", err)
 	}
 
-	// Seed review ref so reviewPreflight passes (approved, no reviewer commits).
-	reviewRef := git.ReviewRef{
-		Status: "approved",
-		Round:  1,
-		// FeatureSHA is not checked by reviewPreflight for approved status
-		// when no X.1@review branch exists.
-		FeatureSHA: "ignored",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if _, err := client.WriteReviewRef(t.Context(), "X.1", reviewRef, ""); err != nil {
-		t.Fatalf("WriteReviewRef: %v", err)
-	}
+	// Seed review chain so reviewPreflight passes (approved, no reviewer
+	// commits). FeatureSHA is not checked by reviewPreflight for approved
+	// status when no X.1@review branch exists.
+	reviewtest.Seed(t, client, "X.1", reviewpkg.StatusApproved, 1, "ignored")
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
@@ -1908,9 +1890,12 @@ func TestClose_ReviewPreflight_DivergedCleanAutoMerges(t *testing.T) {
 		}
 	})
 	t.Run("cleanup deferred: review ref survives until the merge lands", func(t *testing.T) {
-		ref, _, _ := rig.client.ReadReviewRef(t.Context(), slug)
+		ref, _ := reviewpkg.Load(t.Context(), rig.client, slug)
 		if ref == nil {
 			t.Fatal("review ref must survive until the returned cleanup runs")
+		}
+		if ref.Closed {
+			t.Fatal("review marked closed before the returned cleanup runs")
 		}
 	})
 
@@ -1919,10 +1904,10 @@ func TestClose_ReviewPreflight_DivergedCleanAutoMerges(t *testing.T) {
 	}
 	cleanup(t.Context())
 
-	t.Run("review ref cleaned up", func(t *testing.T) {
-		ref, _, _ := rig.client.ReadReviewRef(t.Context(), slug)
-		if ref != nil {
-			t.Fatalf("want review ref deleted, got %+v", ref)
+	t.Run("review kept and marked closed", func(t *testing.T) {
+		ref, _ := reviewpkg.Load(t.Context(), rig.client, slug)
+		if ref == nil || !ref.Closed {
+			t.Fatalf("want review kept and marked closed, got %+v", ref)
 		}
 	})
 }
@@ -1968,9 +1953,12 @@ func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T)
 		}
 	})
 	t.Run("review ref NOT cleaned up", func(t *testing.T) {
-		ref, _, _ := rig.client.ReadReviewRef(t.Context(), slug)
+		ref, _ := reviewpkg.Load(t.Context(), rig.client, slug)
 		if ref == nil {
 			t.Fatal("review ref must survive a refused close")
+		}
+		if ref.Closed {
+			t.Fatal("review marked closed by a refused close")
 		}
 	})
 }
@@ -2364,8 +2352,7 @@ func TestClose_ReviewerInitiated_AbortKeepsReviewerCommitSources(t *testing.T) {
 
 	// Carol reviewed the branch herself: local ABC-1@review with one fix
 	// commit on top of the feature branch, pushed to origin, plus an approved
-	// review ref. The ref is pushed because FetchReviewRefs prunes local
-	// review refs missing from the remote.
+	// review chain, pushed as review approve would have.
 	mustRunGitAt(t, rig.dir, "checkout", "-b", "ABC-1@review", "origin/ABC-1@feat@thing")
 	writeFileAt(t, rig.dir, "feature.txt", "feature\nreviewer fix\n")
 	mustRunGitAt(t, rig.dir, "add", "feature.txt")
@@ -2377,14 +2364,10 @@ func TestClose_ReviewerInitiated_AbortKeepsReviewerCommitSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve feature: %v", err)
 	}
-	if _, err := rig.client.WriteReviewRef(t.Context(), "ABC-1", git.ReviewRef{
-		Status: "approved", Round: 1,
-		FeatureSHA: featureSHA.String(),
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}, ""); err != nil {
-		t.Fatalf("WriteReviewRef: %v", err)
+	reviewtest.Seed(t, rig.client, "ABC-1", reviewpkg.StatusApproved, 1, featureSHA.String())
+	if err := reviewpkg.Push(t.Context(), rig.client, "ABC-1"); err != nil {
+		t.Fatalf("push review: %v", err)
 	}
-	mustRunGitAt(t, rig.dir, "push", "--force", "origin", "refs/zf/reviews/ABC-1")
 
 	// ----- abort: decline at the confirm prompt, AFTER incorporation -----
 	abort := &scriptedPrompter{
@@ -2424,12 +2407,15 @@ func TestClose_ReviewerInitiated_AbortKeepsReviewerCommitSources(t *testing.T) {
 	})
 
 	t.Run("review ref survives the abort", func(t *testing.T) {
-		ref, _, rErr := rig.client.ReadReviewRef(t.Context(), "ABC-1")
+		ref, rErr := reviewpkg.Load(t.Context(), rig.client, "ABC-1")
 		if rErr != nil {
-			t.Fatalf("ReadReviewRef: %v", rErr)
+			t.Fatalf("Load: %v", rErr)
 		}
 		if ref == nil {
 			t.Fatal("review ref deleted by an aborted close")
+		}
+		if ref.Closed {
+			t.Fatal("review marked closed by an aborted close")
 		}
 	})
 
@@ -2464,13 +2450,13 @@ func TestClose_ReviewerInitiated_AbortKeepsReviewerCommitSources(t *testing.T) {
 		assertBranchAbsent(t, rig.client, "ABC-1@review")
 	})
 
-	t.Run("review ref cleaned up after the successful close", func(t *testing.T) {
-		ref, _, rErr := rig.client.ReadReviewRef(t.Context(), "ABC-1")
+	t.Run("review kept and marked closed after the successful close", func(t *testing.T) {
+		ref, rErr := reviewpkg.Load(t.Context(), rig.client, "ABC-1")
 		if rErr != nil {
-			t.Fatalf("ReadReviewRef: %v", rErr)
+			t.Fatalf("Load: %v", rErr)
 		}
-		if ref != nil {
-			t.Fatalf("review ref = %+v, want it deleted once the merge landed", ref)
+		if ref == nil || !ref.Closed {
+			t.Fatalf("review = %+v, want it kept and marked closed once the merge landed", ref)
 		}
 	})
 }
@@ -2868,10 +2854,10 @@ func TestClose_Worktree_IncorporatesReviewerCommits(t *testing.T) {
 	t.Run("review branch cleaned up", func(t *testing.T) {
 		assertBranchAbsent(t, rig.client, "ABC-1@review")
 	})
-	t.Run("review ref cleaned up", func(t *testing.T) {
-		ref, _, _ := rig.client.ReadReviewRef(t.Context(), "ABC-1")
-		if ref != nil {
-			t.Fatalf("want review ref deleted, got %+v", ref)
+	t.Run("review kept and marked closed", func(t *testing.T) {
+		ref, _ := reviewpkg.Load(t.Context(), rig.client, "ABC-1")
+		if ref == nil || !ref.Closed {
+			t.Fatalf("want review kept and marked closed, got %+v", ref)
 		}
 	})
 	t.Run("worktree removed", func(t *testing.T) {
@@ -2921,5 +2907,540 @@ func TestClose_Worktree_MergesDivergedReviewerCommits(t *testing.T) {
 	})
 	t.Run("worktree removed", func(t *testing.T) {
 		assertDirGone(t, wtDir)
+	})
+}
+
+func TestClose_ReviewPreflight_LegacyBlobRefuses(t *testing.T) {
+	rig := newCloseRig(t)
+	slug := rig.pickedBranchRow().IssueSlug
+
+	cmd := exec.CommandContext(t.Context(), "git", "-C", rig.dir, "hash-object", "-w", "--stdin")
+	cmd.Stdin = strings.NewReader(`{"status":"in_review","round":1}`)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("hash-object: %v", err)
+	}
+	mustRunGitAt(t, rig.dir, "update-ref", "refs/zf/reviews/"+slug, strings.TrimSpace(string(out)))
+
+	cleanup, pErr := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("close is refused with ErrLegacyReview", func(t *testing.T) {
+		if !errors.Is(pErr, reviewpkg.ErrLegacyReview) || cleanup != nil {
+			t.Fatalf("reviewPreflight = %v, cleanup nil: %v", pErr, cleanup == nil)
+		}
+	})
+	t.Run("the message tells how to restart or drop the review", func(t *testing.T) {
+		if pErr == nil {
+			t.Fatal("no error")
+		}
+		for _, want := range []string{"git zf review request", "git update-ref -d refs/zf/reviews/" + slug} {
+			if !strings.Contains(pErr.Error(), want) {
+				t.Errorf("message lacks %q:\n%v", want, pErr)
+			}
+		}
+	})
+}
+
+func TestClose_ReviewPreflight_ClosedReviewIsIgnored(t *testing.T) {
+	rig := newCloseRig(t)
+	slug := rig.pickedBranchRow().IssueSlug
+
+	reviewtest.Seed(t, rig.client, slug, reviewpkg.StatusInReview, 1, "f1")
+	if err := reviewpkg.Append(t.Context(), rig.client, slug, &reviewpkg.Op{Type: reviewpkg.OpClose}, false); err != nil {
+		t.Fatalf("append close: %v", err)
+	}
+
+	cleanup, pErr := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("a closed review does not lock the branch", func(t *testing.T) {
+		if pErr != nil || cleanup != nil {
+			t.Fatalf("reviewPreflight = %v, cleanup nil: %v", pErr, cleanup == nil)
+		}
+	})
+}
+
+// seedApproval puts slug in review at round 1, then appends one approve op
+// covering approvedSHA, signed when sign is true.
+func seedApproval(t *testing.T, rig *closeTestRig, slug, approvedSHA string, sign bool) {
+	t.Helper()
+
+	feature := revParseInDir(t, rig.dir, "refs/heads/"+rig.pickedBranchRow().BranchName)
+	if st, _ := reviewpkg.Load(t.Context(), rig.client, slug); st == nil {
+		reviewtest.Seed(t, rig.client, slug, reviewpkg.StatusInReview, 1, feature)
+	}
+
+	op := &reviewpkg.Op{Type: reviewpkg.OpApprove, ApprovedSHA: approvedSHA}
+	if err := reviewpkg.Append(t.Context(), rig.client, slug, op, sign); err != nil {
+		t.Fatalf("append approve: %v", err)
+	}
+}
+
+func newSignedCloseRig(t *testing.T) (*closeTestRig, string, string) {
+	t.Helper()
+
+	rig := newCloseRig(t)
+	rig.cfg.Review.RequireSigned = true
+	mustRunGitAt(t, rig.dir, "config", "commit.gpgsign", "false")
+	gittest.SSHSigner(t, rig.dir)
+
+	return rig, rig.pickedBranchRow().IssueSlug, rig.pickedBranchRow().BranchName
+}
+
+func TestClose_SignedGate_UnsignedApprovalRefused(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	seedApproval(t, rig, slug, revParseInDir(t, rig.dir, "refs/heads/"+feature), false)
+
+	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("close is refused with ErrApprovalNotSigned", func(t *testing.T) {
+		if !errors.Is(err, ErrApprovalNotSigned) || cleanup != nil {
+			t.Fatalf("reviewPreflight = %v", err)
+		}
+	})
+	t.Run("the message lists the approver as unsigned and names the way out", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("no error")
+		}
+		for _, want := range []string{reviewpkg.SigNone, "git zf review request", "for a new round"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("message lacks %q:\n%v", want, err)
+			}
+		}
+	})
+	t.Run("the message says how to get an approval that verifies", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("no error")
+		}
+		for _, want := range []string{"require-signed = true", "commit.gpgsign", "gpg.ssh.allowedSignersFile"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("message lacks %q:\n%v", want, err)
+			}
+		}
+	})
+}
+
+// TestClose_SignedGate_RefusalWayOutWorks follows the advice of a refusal: a
+// new round requested on the current tip, then signed, lets the close through.
+func TestClose_SignedGate_RefusalWayOutWorks(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	tip := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+	seedApproval(t, rig, slug, tip, false)
+
+	_, refused := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("the unsigned approval is refused", func(t *testing.T) {
+		if !errors.Is(refused, ErrApprovalNotSigned) {
+			t.Fatalf("reviewPreflight = %v", refused)
+		}
+	})
+
+	// What `git zf review request` writes, then a signed approval of round 2.
+	if err := reviewpkg.Append(t.Context(), rig.client, slug, &reviewpkg.Op{Type: reviewpkg.OpRequest, FeatureSHA: tip}, false); err != nil {
+		t.Fatalf("append request: %v", err)
+	}
+	approveOp := &reviewpkg.Op{Type: reviewpkg.OpApprove, ApprovedSHA: tip, Round: 2}
+	if err := reviewpkg.Append(t.Context(), rig.client, slug, approveOp, true); err != nil {
+		t.Fatalf("append signed approve: %v", err)
+	}
+
+	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("the signed approval of the new round passes", func(t *testing.T) {
+		if err != nil || cleanup == nil {
+			t.Fatalf("reviewPreflight = %v, cleanup nil: %v", err, cleanup == nil)
+		}
+	})
+}
+
+func TestClose_SignedGate_UncoveredVerifiedApprovalHintsFetch(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	rig.addOrigin(t)
+	tip := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+	reviewtest.Seed(t, rig.client, slug, reviewpkg.StatusInReview, 1, tip)
+
+	// The reviewer approved their own commit on <slug>@review, which this
+	// clone has not fetched.
+	reviewerTip := commitOnNewBranch(t, rig.dir, "tmp-review", feature, "reviewer.txt")
+	mustRunGitAt(t, rig.dir, "branch", "-D", "tmp-review")
+	op := &reviewpkg.Op{Type: reviewpkg.OpApprove, ApprovedSHA: reviewerTip, HasCommits: true}
+	if err := reviewpkg.Append(t.Context(), rig.client, slug, op, true); err != nil {
+		t.Fatalf("append signed approve: %v", err)
+	}
+
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("close is refused with ErrApprovalNotSigned", func(t *testing.T) {
+		if !errors.Is(err, ErrApprovalNotSigned) {
+			t.Fatalf("reviewPreflight = %v", err)
+		}
+	})
+	t.Run("the message says to fetch the reviewer's branch first", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("no error")
+		}
+		for _, want := range []string{"does not cover", slug + "@review", "git fetch origin", "for a new round"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("message lacks %q:\n%v", want, err)
+			}
+		}
+	})
+}
+
+func TestClose_SignedGate_SignedApprovalPasses(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	seedApproval(t, rig, slug, revParseInDir(t, rig.dir, "refs/heads/"+feature), true)
+
+	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("close proceeds", func(t *testing.T) {
+		if err != nil || cleanup == nil {
+			t.Fatalf("reviewPreflight = %v, cleanup nil: %v", err, cleanup == nil)
+		}
+	})
+}
+
+func TestClose_SignedGate_FlagOffIgnoresSignatures(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	rig.cfg.Review.RequireSigned = false
+	seedApproval(t, rig, slug, revParseInDir(t, rig.dir, "refs/heads/"+feature), false)
+
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("an unsigned approval closes when the flag is off", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("reviewPreflight: %v", err)
+		}
+	})
+}
+
+func TestClose_SignedGate_CommitAfterApprovalRefused(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	seedApproval(t, rig, slug, revParseInDir(t, rig.dir, "refs/heads/"+feature), true)
+
+	// The developer adds a commit after the approval.
+	mustRunGitAt(t, rig.dir, "checkout", feature)
+	writeFileAt(t, rig.dir, "late.txt", "late\n")
+	mustRunGitAt(t, rig.dir, "add", "late.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "feat: slipped in after approval")
+	mustRunGitAt(t, rig.dir, "checkout", "main")
+
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("close is refused: the approval does not cover the tip", func(t *testing.T) {
+		if !errors.Is(err, ErrApprovalNotSigned) {
+			t.Fatalf("reviewPreflight = %v", err)
+		}
+		if !strings.Contains(err.Error(), "does not cover") {
+			t.Errorf("message:\n%v", err)
+		}
+	})
+	t.Run("the message asks for a new round, without a fetch hint", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("no error")
+		}
+		if !strings.Contains(err.Error(), "git zf review request` for a new round") || strings.Contains(err.Error(), "git fetch") {
+			t.Errorf("message:\n%v", err)
+		}
+	})
+}
+
+func TestClose_SignedGate_SecondApprovalCoversReviewerCommits(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	featureTip := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+
+	// Reviewer B commits on the review branch; reviewer A approved the
+	// feature tip as submitted.
+	mustRunGitAt(t, rig.dir, "checkout", "-b", slug+"@review", feature)
+	writeFileAt(t, rig.dir, "reviewer-only.txt", "r\n")
+	mustRunGitAt(t, rig.dir, "add", "reviewer-only.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "fix: reviewer nit")
+	mustRunGitAt(t, rig.dir, "checkout", "main")
+	reviewTip := revParseInDir(t, rig.dir, "refs/heads/"+slug+"@review")
+
+	seedApproval(t, rig, slug, featureTip, true)
+	seedApproval(t, rig, slug, reviewTip, true)
+
+	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("close proceeds on the approval that covers the review branch", func(t *testing.T) {
+		if err != nil || cleanup == nil {
+			t.Fatalf("reviewPreflight = %v, cleanup nil: %v", err, cleanup == nil)
+		}
+	})
+	t.Run("the feature branch is fast-forwarded to the approved commit", func(t *testing.T) {
+		if got := revParseInDir(t, rig.dir, "refs/heads/"+feature); got != reviewTip {
+			t.Errorf("feature tip = %s, want %s", got, reviewTip)
+		}
+	})
+}
+
+func TestClose_SignedGate_DivergedBranchRefusedUntouched(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+
+	mustRunGitAt(t, rig.dir, "checkout", "-b", slug+"@review", feature)
+	writeFileAt(t, rig.dir, "reviewer-only.txt", "r\n")
+	mustRunGitAt(t, rig.dir, "add", "reviewer-only.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "fix: reviewer nit")
+	reviewTip := revParseInDir(t, rig.dir, "refs/heads/"+slug+"@review")
+	seedApproval(t, rig, slug, reviewTip, true)
+
+	// The developer moves the feature branch after the approval: diverged.
+	mustRunGitAt(t, rig.dir, "checkout", feature)
+	writeFileAt(t, rig.dir, "dev-later.txt", "d\n")
+	mustRunGitAt(t, rig.dir, "add", "dev-later.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-m", "feat: more work")
+	mustRunGitAt(t, rig.dir, "checkout", "main")
+	before := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("close is refused", func(t *testing.T) {
+		if !errors.Is(err, ErrApprovalNotSigned) {
+			t.Fatalf("reviewPreflight = %v", err)
+		}
+	})
+	t.Run("the feature branch is not touched", func(t *testing.T) {
+		if got := revParseInDir(t, rig.dir, "refs/heads/"+feature); got != before {
+			t.Errorf("feature tip moved from %s to %s", before, got)
+		}
+	})
+}
+
+// commitOnNewBranch creates branch from base with one commit adding file, then
+// returns to main. It returns the new tip.
+func commitOnNewBranch(t *testing.T, dir, branch, base, file string) string {
+	t.Helper()
+
+	mustRunGitAt(t, dir, "checkout", "-b", branch, base)
+	writeFileAt(t, dir, file, "x\n")
+	mustRunGitAt(t, dir, "add", file)
+	mustRunGitAt(t, dir, "commit", "-m", "fix: "+file)
+	mustRunGitAt(t, dir, "checkout", "main")
+
+	return revParseInDir(t, dir, "refs/heads/"+branch)
+}
+
+// assertRefusedUntouched checks the gate refused with "does not cover" and left
+// the feature branch where it was.
+func assertRefusedUntouched(t *testing.T, rig *closeTestRig, feature, before string, err error) {
+	t.Helper()
+
+	t.Run("close is refused with ErrApprovalNotSigned", func(t *testing.T) {
+		if !errors.Is(err, ErrApprovalNotSigned) {
+			t.Fatalf("reviewPreflight = %v", err)
+		}
+	})
+	t.Run("the message says the approval does not cover the commit", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("no error")
+		}
+		if !strings.Contains(err.Error(), "does not cover") {
+			t.Errorf("message:\n%v", err)
+		}
+	})
+	t.Run("the feature branch is not touched", func(t *testing.T) {
+		if got := revParseInDir(t, rig.dir, "refs/heads/"+feature); got != before {
+			t.Errorf("feature tip moved from %s to %s", before, got)
+		}
+	})
+}
+
+func TestClose_SignedGate_ReviewerCommitsNeedTheirOwnApproval(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	featureTip := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+	commitOnNewBranch(t, rig.dir, slug+"@review", feature, "reviewer.txt")
+	seedApproval(t, rig, slug, featureTip, true)
+
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	assertRefusedUntouched(t, rig, feature, featureTip, err)
+}
+
+func TestClose_SignedGate_CommitsAfterReviewerApprovalRefused(t *testing.T) {
+	rig, slug, feature := newSignedCloseRig(t)
+	featureTip := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+	t1 := commitOnNewBranch(t, rig.dir, slug+"@review", feature, "reviewer1.txt")
+	seedApproval(t, rig, slug, t1, true)
+	commitOnNewBranch(t, rig.dir, "tmp-t2", slug+"@review", "reviewer2.txt")
+	mustRunGitAt(t, rig.dir, "branch", "-f", slug+"@review", "tmp-t2")
+	mustRunGitAt(t, rig.dir, "branch", "-D", "tmp-t2")
+
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	assertRefusedUntouched(t, rig, feature, featureTip, err)
+}
+
+func TestClose_SignedGate_RemoteTrackingReviewBranch(t *testing.T) {
+	// remoteReviewRig has a review branch known only as refs/remotes/origin/<slug>@review.
+	remoteReviewRig := func(t *testing.T) (*closeTestRig, string, string, string, string) {
+		rig, slug, feature := newSignedCloseRig(t)
+		rig.addOrigin(t)
+		featureTip := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+		tip := commitOnNewBranch(t, rig.dir, "tmp-review", feature, "reviewer.txt")
+		mustRunGitAt(t, rig.dir, "update-ref", "refs/remotes/origin/"+slug+"@review", tip)
+		mustRunGitAt(t, rig.dir, "branch", "-D", "tmp-review")
+
+		return rig, slug, feature, featureTip, tip
+	}
+
+	t.Run("a signed approval of the remote review tip passes and fast-forwards", func(t *testing.T) {
+		rig, slug, feature, _, tip := remoteReviewRig(t)
+		seedApproval(t, rig, slug, tip, true)
+
+		cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+		if err != nil || cleanup == nil {
+			t.Fatalf("reviewPreflight = %v, cleanup nil: %v", err, cleanup == nil)
+		}
+		if got := revParseInDir(t, rig.dir, "refs/heads/"+feature); got != tip {
+			t.Errorf("feature tip = %s, want %s", got, tip)
+		}
+	})
+
+	t.Run("an approval of the feature tip alone is refused", func(t *testing.T) {
+		rig, slug, feature, featureTip, _ := remoteReviewRig(t)
+		seedApproval(t, rig, slug, featureTip, true)
+
+		_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+		assertRefusedUntouched(t, rig, feature, featureTip, err)
+	})
+}
+
+// classicClosePrompter scripts a classic close that keeps the feature branch.
+func classicClosePrompter(rig *closeTestRig) *scriptedPrompter {
+	return &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      commitpkg.MergeStrategyClassic,
+		Confirm:       true,
+		Message:       []byte("Merge ABC-1 into main\n"),
+		TrackerStatus: "Closed",
+	}
+}
+
+func TestClose_SignedGate_ThroughRunClose(t *testing.T) {
+	t.Run("an unsigned approval refuses the close and changes nothing", func(t *testing.T) {
+		rig, slug, feature := newSignedCloseRig(t)
+		seedApproval(t, rig, slug, revParseInDir(t, rig.dir, "refs/heads/"+feature), false)
+		mainBefore := revParseInDir(t, rig.dir, "refs/heads/main")
+
+		err := runClose(t.Context(), rig.deps(), classicClosePrompter(rig))
+
+		t.Run("runClose returns ErrApprovalNotSigned", func(t *testing.T) {
+			if !errors.Is(err, ErrApprovalNotSigned) {
+				t.Fatalf("runClose = %v", err)
+			}
+		})
+		t.Run("main did not move", func(t *testing.T) {
+			if got := revParseInDir(t, rig.dir, "refs/heads/main"); got != mainBefore {
+				t.Errorf("main moved from %s to %s", mainBefore, got)
+			}
+		})
+		t.Run("the feature branch still exists", func(t *testing.T) {
+			if exists, _ := rig.client.BranchExists(feature); !exists {
+				t.Error("feature branch deleted")
+			}
+		})
+	})
+
+	t.Run("a signed approval of the tip merges and closes the review", func(t *testing.T) {
+		rig, slug, feature := newSignedCloseRig(t)
+		seedApproval(t, rig, slug, revParseInDir(t, rig.dir, "refs/heads/"+feature), true)
+		mainBefore := revParseInDir(t, rig.dir, "refs/heads/main")
+
+		err := runClose(t.Context(), rig.deps(), classicClosePrompter(rig))
+
+		t.Run("runClose succeeds", func(t *testing.T) {
+			if err != nil {
+				t.Fatalf("runClose: %v", err)
+			}
+		})
+		t.Run("main advanced", func(t *testing.T) {
+			if got := revParseInDir(t, rig.dir, "refs/heads/main"); got == mainBefore {
+				t.Error("main did not move")
+			}
+		})
+		t.Run("the review is marked closed", func(t *testing.T) {
+			st, lErr := reviewpkg.Load(t.Context(), rig.client, slug)
+			if lErr != nil || st == nil || !st.Closed {
+				t.Errorf("Load = %+v, %v", st, lErr)
+			}
+		})
+	})
+}
+
+func TestClose_Worktree_SignedGateRefusesUnsignedApproval(t *testing.T) {
+	rig, wtDir := newWorktreeCloseRig(t)
+	rig.cfg.Review.RequireSigned = true
+	feature := rig.pickedBranchRow().BranchName
+	before := revParseInDir(t, rig.dir, "refs/heads/"+feature)
+	seedApproval(t, rig, rig.pickedBranchRow().IssueSlug, before, false)
+	mainBefore := revParseInDir(t, rig.dir, "refs/heads/main")
+
+	err := runClose(t.Context(), rig.deps(), worktreePrompter(rig, commitpkg.MergeStrategyClassic, true))
+
+	t.Run("runClose returns ErrApprovalNotSigned", func(t *testing.T) {
+		if !errors.Is(err, ErrApprovalNotSigned) {
+			t.Fatalf("runClose = %v", err)
+		}
+	})
+	t.Run("main did not move", func(t *testing.T) {
+		if got := revParseInDir(t, rig.dir, "refs/heads/main"); got != mainBefore {
+			t.Errorf("main moved from %s to %s", mainBefore, got)
+		}
+	})
+	t.Run("the feature branch is untouched", func(t *testing.T) {
+		if got := revParseInDir(t, rig.dir, "refs/heads/"+feature); got != before {
+			t.Errorf("feature tip moved from %s to %s", before, got)
+		}
+	})
+	t.Run("the worktree is kept", func(t *testing.T) {
+		assertDirPresent(t, wtDir)
+	})
+}
+
+func TestClose_ApprovedClosePushesCloseOp(t *testing.T) {
+	rig := newCloseRig(t)
+	originDir := rig.addOrigin(t)
+	slug, feature := rig.pickedBranchRow().IssueSlug, rig.pickedBranchRow().BranchName
+	seedApproval(t, rig, slug, revParseInDir(t, rig.dir, "refs/heads/"+feature), false)
+
+	err := runClose(t.Context(), rig.deps(), classicClosePrompter(rig))
+
+	t.Run("runClose succeeds", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("the origin's review tip is a close op", func(t *testing.T) {
+		out, cErr := exec.CommandContext(t.Context(), "git", "-C", originDir,
+			"cat-file", "blob", "refs/zf/reviews/"+slug+":op.json").Output()
+		if cErr != nil {
+			t.Fatalf("cat-file on origin: %v", cErr)
+		}
+		if !strings.Contains(string(out), `"type":"close"`) {
+			t.Errorf("origin tip op.json = %s", out)
+		}
+	})
+}
+
+func TestClose_ReviewPreflight_PrintsMalformedOpWarnings(t *testing.T) {
+	rig := newCloseRig(t)
+	slug := rig.pickedBranchRow().IssueSlug
+	reviewtest.Seed(t, rig.client, slug, reviewpkg.StatusApproved, 1, "f1")
+	if _, err := rig.client.AppendChainCommit(t.Context(), git.ReviewRefs, slug, []byte("not json"), "junk", false); err != nil {
+		t.Fatalf("AppendChainCommit: %v", err)
+	}
+
+	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
+
+	t.Run("preflight proceeds", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("reviewPreflight: %v", err)
+		}
+	})
+	t.Run("the malformed op is reported on stderr", func(t *testing.T) {
+		if !strings.Contains(rig.stderr.String(), "malformed op") {
+			t.Errorf("stderr:\n%s", rig.stderr)
+		}
 	})
 }

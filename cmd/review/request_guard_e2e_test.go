@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -31,9 +32,8 @@ func TestReviewRequest_RefusesWithUnincorporatedReviewerCommits(t *testing.T) {
 func TestReviewRequest_InteractiveOfferMergesThenProceeds(t *testing.T) {
 	rig := newReviewE2ERig(t)
 	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
-	// seedPendingReview only writes the review ref (round 1); mirror a real
-	// rejected round-1 by also seeding the store's review row, so the
-	// upcoming request's InsertReview bumps the round counter to 2.
+	// seedPendingReview only seeds the review chain (round 1); mirror a real
+	// rejected round-1 by also seeding the store's review row.
 	if _, err := rig.store.InsertReview(t.Context(), "77", ""); err != nil {
 		t.Fatalf("seed round-1 review row: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestReviewRequest_InteractiveOfferMergesThenProceeds(t *testing.T) {
 		}
 	})
 	t.Run("round 2 ref written", func(t *testing.T) {
-		ref, _, _ := rig.client.ReadReviewRef(t.Context(), "77")
+		ref, _ := reviewpkg.Load(t.Context(), rig.client, "77")
 		if ref == nil || ref.Round != 2 || ref.Status != string(store.ReviewStatusInReview) {
 			t.Fatalf("want round-2 in_review ref, got %+v", ref)
 		}

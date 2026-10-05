@@ -108,8 +108,8 @@ func TestCreateLoadAppend(t *testing.T) {
 	})
 
 	t.Run("a malformed op is skipped and reported in Warnings", func(t *testing.T) {
-		if _, err := c.AppendIssueCommit(ctx, rec.ID, []byte(`{not json`), "junk"); err != nil {
-			t.Fatalf("AppendIssueCommit: %v", err)
+		if _, err := c.AppendChainCommit(ctx, git.IssueRefs, rec.ID, []byte(`{not json`), "junk", false); err != nil {
+			t.Fatalf("AppendChainCommit: %v", err)
 		}
 		if err := Append(ctx, c, rec.ID, &Op{Type: OpSetState, Value: StateClosed}); err != nil {
 			t.Fatalf("Append: %v", err)

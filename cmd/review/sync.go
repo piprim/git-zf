@@ -7,6 +7,7 @@ import (
 
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -30,8 +31,8 @@ func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter Rev
 
 	// Freshen refs so pending-review detection and parent drift see the
 	// current remote state (best-effort; sync must work offline too).
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 	if remote, _ := deps.client.Remote(); remote != "" {
 		_ = deps.client.Fetch(ctx)

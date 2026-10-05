@@ -4,21 +4,22 @@ import (
 	"context"
 	"fmt"
 
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
 
 func (r Review) getFetchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "fetch",
-		Short: "Fetch all review refs from remote and reconcile local store",
+		Short: "Sync review refs with the remote: fetch, merge, and push the ones it lacks",
 		RunE:  withDeps(r.appConfig, runReviewFetch),
 	}
 }
 
 func runReviewFetch(ctx context.Context, deps reviewDeps) error {
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		return fmt.Errorf("fetch review refs: %w", err)
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		return fmt.Errorf("sync review refs: %w", err)
 	}
-	fmt.Fprintln(deps.client.IO().Out, "Review refs fetched.")
+	fmt.Fprintln(deps.client.IO().Out, "Review refs synced.")
 	return nil
 }

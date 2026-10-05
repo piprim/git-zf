@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/piprim/git-zf/branch"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -46,11 +47,11 @@ func runReviewStartInteractive(ctx context.Context, deps reviewDeps, prompter Re
 // runReviewStart creates the review branch for issueSlug. The caller is
 // responsible for fetching review refs before calling this function.
 func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	ref, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
+	ref, err := reviewpkg.Load(ctx, deps.client, issueSlug)
 	if err != nil {
 		return fmt.Errorf("read review ref: %w", err)
 	}
-	if ref == nil {
+	if ref == nil || ref.Closed {
 		return fmt.Errorf("no review found for issue %q — has the developer run `git zf review request %s`?", issueSlug, issueSlug)
 	}
 	if ref.Status != string(store.ReviewStatusInReview) {
@@ -84,13 +85,12 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 	// and in the local store (cache).
 	if reviewer, _ := deps.client.ConfigUser(ctx); reviewer != "" {
 		if ref.Reviewer == "" {
-			updatedRef := *ref
-			updatedRef.Reviewer = reviewer
-			if _, writeErr := deps.client.WriteReviewRef(ctx, issueSlug, updatedRef, currentSHA); writeErr == nil {
-				// Push so the developer can see who started the review.
-				if pushErr := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); pushErr != nil {
-					fmt.Fprintf(deps.client.IO().Err, "warning: push reviewer identity: %v\n", pushErr)
-				}
+			startOp := &reviewpkg.Op{Type: reviewpkg.OpStart, Round: ref.Round}
+			if writeErr := reviewpkg.Append(ctx, deps.client, issueSlug, startOp, false); writeErr != nil {
+				fmt.Fprintf(deps.client.IO().Err, "warning: record reviewer: %v\n", writeErr)
+			} else if pushErr := reviewpkg.Push(ctx, deps.client, issueSlug); pushErr != nil {
+				// Pushed so the developer can see who started the review.
+				fmt.Fprintf(deps.client.IO().Err, "warning: push reviewer identity: %v\n", pushErr)
 			}
 		}
 		if latest, err := deps.store.GetLatestReview(ctx, issueSlug); err == nil && latest != nil && latest.Reviewer == "" {

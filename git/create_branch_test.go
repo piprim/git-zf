@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -100,6 +101,43 @@ func TestRemoteBranchNames(t *testing.T) {
 		}
 		if !got["main"] || !got["feat-x"] {
 			t.Fatalf("got %v, want to include both main and feat-x", names)
+		}
+	})
+
+	t.Run("skips the zf/ chain tracking refs", func(t *testing.T) {
+		t.Parallel()
+		c, cloneDir, originDir := newDiskRepoWithOrigin(t)
+		ctx := t.Context()
+		pushBranchFromFreshClone(t, originDir, "feat-x")
+		mustGit(t, cloneDir, "fetch", "origin")
+
+		issueID, err := c.CreateIssueRef(ctx, []byte(`{"type":"create"}`), "create")
+		if err != nil {
+			t.Fatalf("CreateIssueRef: %v", err)
+		}
+		root, err := c.WriteChainRoot(ctx, []byte(`{"type":"request"}`), "request", false)
+		if err != nil {
+			t.Fatalf("WriteChainRoot: %v", err)
+		}
+		if err := c.PublishChainRoot(ctx, ReviewRefs, "77", root); err != nil {
+			t.Fatalf("PublishChainRoot: %v", err)
+		}
+		for ns, id := range map[ChainRefs]string{IssueRefs: issueID, ReviewRefs: "77"} {
+			if err := c.PushChainRef(ctx, ns, id); err != nil {
+				t.Fatalf("PushChainRef %s: %v", id, err)
+			}
+			if err := c.FetchChainRefs(ctx, ns, true); err != nil {
+				t.Fatalf("FetchChainRefs: %v", err)
+			}
+		}
+
+		names, err := c.RemoteBranchNames()
+		if err != nil {
+			t.Fatalf("RemoteBranchNames: %v", err)
+		}
+		slices.Sort(names)
+		if !slices.Equal(names, []string{"feat-x", "main"}) {
+			t.Errorf("got %v, want [feat-x main]", names)
 		}
 	})
 }

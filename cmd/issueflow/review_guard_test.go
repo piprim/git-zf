@@ -9,6 +9,8 @@ import (
 
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
+	reviewpkg "github.com/piprim/git-zf/review"
+	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -79,11 +81,7 @@ func (r *guardRig) addReviewBranchWithCommit(t *testing.T) {
 
 func (r *guardRig) writeReviewRef(t *testing.T, status string) {
 	t.Helper()
-	if _, err := r.client.WriteReviewRef(t.Context(), "42", git.ReviewRef{
-		Status: status, Round: 1, FeatureSHA: "unused", CreatedAt: "2026-07-08T00:00:00Z",
-	}, ""); err != nil {
-		t.Fatalf("write review ref: %v", err)
-	}
+	reviewtest.Seed(t, r.client, "42", status, 1, "unused")
 }
 
 func TestPendingReviewCommits(t *testing.T) {
@@ -129,6 +127,19 @@ func TestPendingReviewCommits(t *testing.T) {
 		}
 	})
 
+	t.Run("silent on a closed review", func(t *testing.T) {
+		rig := newGuardRig(t)
+		rig.addReviewBranchWithCommit(t)
+		rig.writeReviewRef(t, string(store.ReviewStatusApproved))
+		if err := reviewpkg.Append(t.Context(), rig.client, "42", &reviewpkg.Op{Type: reviewpkg.OpClose}, false); err != nil {
+			t.Fatalf("append close: %v", err)
+		}
+		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")
+		if err != nil || p != nil {
+			t.Fatalf("want nil pending, got %+v err %v", p, err)
+		}
+	})
+
 	t.Run("silent when commits are contained", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
@@ -152,11 +163,12 @@ func TestPendingReviewCommits(t *testing.T) {
 	t.Run("prefers remote-tracking ref when local review branch is stale", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
 		// Simulate: reviewer pushed a second commit that only origin has.
 		// The remote is never contacted — the remote-tracking ref is set by
 		// hand with update-ref, exactly the state a past `git fetch` leaves.
+		// The remote is added before the seed: the client caches Remote().
 		rig.run("remote", "add", "origin", rig.dir)
+		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
 		rig.run("checkout", "42@review")
 		if err := os.WriteFile(filepath.Join(rig.dir, "review-fix-2.txt"), []byte("fix2\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -179,10 +191,10 @@ func TestPendingReviewCommits(t *testing.T) {
 	t.Run("local wins when it is ahead of the remote-tracking ref", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
 		// Remote-tracking ref exists but points one commit behind the local
 		// branch — the reviewer's own machine before pushing.
 		rig.run("remote", "add", "origin", rig.dir)
+		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
 		rig.run("update-ref", "refs/remotes/origin/42@review", "42@review~1")
 
 		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")

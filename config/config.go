@@ -70,6 +70,13 @@ type PushConfig struct {
 	Propose bool `json:"propose" toml:"propose"`
 }
 
+// ReviewConfig holds review settings. RequireSigned makes `review approve`
+// sign its op, and `issue close` refuse an approval whose signature git does
+// not trust or that does not cover the branch tip.
+type ReviewConfig struct {
+	RequireSigned bool `json:"require-signed" toml:"require-signed"`
+}
+
 // IssueTrackerConfig holds connection parameters for one tracker instance.
 // Never log values of this type — Token is a secret.
 type IssueTrackerConfig struct {
@@ -87,6 +94,7 @@ type AppConfig struct {
 	CommitMessage CommitMessageConfig `json:"commit-message" toml:"commit-message"`
 	Branch        BranchConfig        `json:"branch"         toml:"branch"`
 	Push          PushConfig          `json:"push"           toml:"push"`
+	Review        ReviewConfig        `json:"review"         toml:"review"`
 	IssueTracker  IssueTrackerConfig  `json:"issue-tracker"  toml:"issue-tracker"`
 }
 

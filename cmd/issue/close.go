@@ -15,6 +15,7 @@ import (
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
@@ -129,6 +130,11 @@ var ErrReviewChangesRequested = errors.New("reviewer requested changes")
 // and the developer must run `git zf review sync` before closing.
 var ErrReviewSyncNeeded = errors.New("review sync needed")
 
+// ErrApprovalNotSigned is returned by reviewPreflight when review.require-signed
+// is set and no approval of the current round both carries a signature git
+// trusts and covers the commit about to be merged.
+var ErrApprovalNotSigned = errors.New("no verified approval covers the branch")
+
 func (i Issue) getCloseCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "close",
@@ -234,7 +240,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return err
 	}
 
-	// The destructive review cleanup (local/remote review branch + review ref)
+	// The destructive review cleanup (local/remote review branch, review closed)
 	// runs only once the merge commit has landed. Until then those refs are the
 	// only durable home of the reviewer commits reviewPreflight just merged into
 	// the feature branch — an abort must leave them intact so the rollback above
@@ -458,7 +464,7 @@ func baseBranchResolves(c *git.Client, name string) (bool, error) {
 // branch has reviewer commits, it fast-forwards the feature branch to
 // incorporate them.
 //
-// The destructive cleanup (local/remote review branch + review ref) is NOT
+// The destructive cleanup (local/remote review branch, review marked closed) is NOT
 // performed here: it is returned as a closure (nil when there is nothing to
 // clean up) that runClose invokes only after the merge commit lands. Running
 // it earlier would destroy the only remaining source of the just-incorporated
@@ -467,7 +473,7 @@ func baseBranchResolves(c *git.Client, name string) (bool, error) {
 //
 // The git ref (refs/zf/reviews/<IssueID>) is the source of truth. The local
 // store is a cache that may lag behind the reviewer's machine. reviewPreflight
-// always fetches and reads the ref first so the developer never has to run a
+// always syncs and reads the chain first so the developer never has to run a
 // manual git fetch before closing.
 func reviewPreflight(
 	ctx context.Context, deps closeDeps, picked *store.BranchRow, src *git.Client,
@@ -479,19 +485,39 @@ func reviewPreflight(
 		tree = src
 	}
 
-	// Fetch review refs (best-effort) so we see the reviewer's latest decision
-	// even if the developer has not fetched since submitting for review.
-	_ = deps.client.FetchReviewRefs(ctx)
+	// Sync reviews (best-effort) so we see the reviewer's latest decision even
+	// if the developer has not fetched since submitting for review.
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
+	}
 
-	// Read the ref — authoritative source of truth.
-	ref, _, refErr := deps.client.ReadReviewRef(ctx, picked.IssueSlug)
+	// Read the chain — authoritative source of truth.
+	ref, refErr := reviewpkg.Load(ctx, deps.client, picked.IssueSlug)
+	if errors.Is(refErr, reviewpkg.ErrLegacyReview) {
+		// Not treated as "no review": the blob may be a lock.
+		drop := "git update-ref -d refs/zf/reviews/" + picked.IssueSlug
+		if remote, _ := deps.client.Remote(); remote != "" {
+			drop += " && git push " + remote + " --delete refs/zf/reviews/" + picked.IssueSlug
+		}
+
+		return nil, fmt.Errorf(
+			"issue %q has a review written by an older git-zf.\n"+
+				"Run `git zf review request` to restart it, or drop it with:\n  %s\n%w",
+			picked.IssueSlug, drop, refErr)
+	}
 	if refErr != nil {
 		return nil, fmt.Errorf("read review ref: %w", refErr)
 	}
 
-	if ref == nil {
-		// No active review ref — either no review was submitted, or it was
-		// already cleaned up after a previous close. Proceed.
+	if ref != nil {
+		for _, w := range ref.Warnings {
+			fmt.Fprintln(deps.client.IO().Err, w)
+		}
+	}
+
+	if ref == nil || ref.Closed {
+		// No open review — either none was submitted, or the issue was
+		// already closed once. Proceed.
 		return nil, nil
 	}
 
@@ -531,6 +557,13 @@ func reviewPreflight(
 		if remote, _ := deps.client.Remote(); remote != "" {
 			if _, err := deps.client.ResolveRef("refs/remotes/" + remote + "/" + reviewBranch); err == nil {
 				remoteTrackingExists = true
+			}
+		}
+
+		if deps.cfg.Review.RequireSigned {
+			// Before the branch is touched: a refused close changes nothing.
+			if err := checkSignedApproval(ctx, deps.client, ref, picked.BranchName, pending); err != nil {
+				return nil, err
 			}
 		}
 
@@ -577,7 +610,7 @@ func reviewPreflight(
 
 		// Cleanup mirrors the pre-deferral behavior: delete the local review
 		// branch when it exists, push a remote delete when any review branch was
-		// known, and always drop the review ref. Deferred to the caller (post
+		// known, and always mark the review closed. Deferred to the caller (post
 		// merge-commit) so an aborted close keeps the reviewer commits' source.
 		return func(ctx context.Context) {
 			if localExists {
@@ -588,9 +621,14 @@ func reviewPreflight(
 			if localExists || remoteTrackingExists {
 				_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
 			}
-			// Always clean up the review ref (local + remote) on close, regardless
-			// of whether a review branch existed.
-			_ = deps.client.DeleteReviewRef(ctx, picked.IssueSlug)
+			// The review is kept as an audit trail and marked closed, whether
+			// or not a review branch existed.
+			closeOp := &reviewpkg.Op{Type: reviewpkg.OpClose}
+			if err := reviewpkg.Append(ctx, deps.client, picked.IssueSlug, closeOp, false); err != nil {
+				fmt.Fprintf(deps.client.IO().Err, "warning: mark review closed: %v\n", err)
+			} else if err := reviewpkg.Push(ctx, deps.client, picked.IssueSlug); err != nil {
+				fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
+			}
 		}, nil
 	}
 
@@ -748,4 +786,72 @@ func proposeClosePush(ctx context.Context, deps closeDeps, base string) error {
 		Skip:        skip,
 		AutoConfirm: auto,
 	}, deps.pushConfirm)
+}
+
+// checkSignedApproval enforces review.require-signed. Some approval of the
+// current round must carry a signature git trusts and name, as approved_sha,
+// exactly the commit the feature branch will point at once reviewer commits
+// are incorporated. A branch that moved after the approval has no such commit.
+func checkSignedApproval(
+	ctx context.Context, client *git.Client, st *reviewpkg.State, featureBranch string, pending *issueflow.PendingReview,
+) error {
+	target := featureBranch
+	if pending != nil {
+		ahead, err := client.CommitsAhead(ctx, featureBranch, pending.EffectiveRef)
+		if err != nil {
+			return fmt.Errorf("check review divergence: %w", err)
+		}
+		if ahead > 0 {
+			return fmt.Errorf(
+				"branch %q has %d commit(s) made after the approval; the approval does not cover them "+
+					"(review.require-signed is set).\nRun `git zf review request` for a new round: %w",
+				featureBranch, ahead, ErrApprovalNotSigned)
+		}
+		target = pending.EffectiveRef
+	}
+
+	// target is a local branch, or "<remote>/<branch>" for a review branch
+	// known only through its remote-tracking ref.
+	tip, err := client.ResolveRef("refs/heads/" + target)
+	if err != nil {
+		if tip, err = client.ResolveRef("refs/remotes/" + target); err != nil {
+			return fmt.Errorf("resolve %s: %w", target, err)
+		}
+	}
+
+	verified, verifiedHasCommits := false, false
+	lines := make([]string, 0, len(st.Approvals))
+	for _, a := range st.Approvals {
+		state := reviewpkg.SignatureState(ctx, client, a.Commit)
+		if state == reviewpkg.SigVerified {
+			if a.ApprovedSHA == tip.String() {
+				return nil
+			}
+			verified = true
+			verifiedHasCommits = verifiedHasCommits || a.HasCommits
+		}
+		lines = append(lines, fmt.Sprintf("  %s: %s, approved %.7s", a.Author, state, a.ApprovedSHA))
+	}
+
+	if !verified {
+		return fmt.Errorf(
+			"issue %q, round %d: no approval carries a signature git trusts (review.require-signed is set).\n%s\n"+
+				"The reviewer must sign the approval (`[review] require-signed = true` on the reviewer's clone, "+
+				"or commit.gpgsign); verifying an SSH signature needs gpg.ssh.allowedSignersFile on this clone.\n"+
+				"Run `git zf review request` for a new round: %w",
+			st.Slug, st.Round, strings.Join(lines, "\n"), ErrApprovalNotSigned)
+	}
+
+	// The reviewer approved commits of their own that this clone does not
+	// see: the approved commit is probably the tip of their review branch.
+	fetch := ""
+	if remote, _ := client.Remote(); verifiedHasCommits && pending == nil && remote != "" {
+		fetch = fmt.Sprintf("If the reviewer pushed commits, fetch their branch %s first (`git fetch %s`) and retry.\n",
+			branch.ReviewBranchName(st.Slug), remote)
+	}
+
+	return fmt.Errorf(
+		"issue %q, round %d: the branch has commits the approval does not cover (%.7s is the commit to merge; "+
+			"review.require-signed is set).\n%s\n%sRun `git zf review request` for a new round: %w",
+		st.Slug, st.Round, tip.String(), strings.Join(lines, "\n"), fetch, ErrApprovalNotSigned)
 }

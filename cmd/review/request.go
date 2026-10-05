@@ -2,13 +2,13 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"time"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
-	"github.com/piprim/git-zf/git"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -37,21 +37,28 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 		return fmt.Errorf("list branches: %w", err)
 	}
 
-	// Filter out branches whose review ref is already in_review (locked) or
-	// approved (developer should close, not re-request). Fetch first so the
-	// local ref namespace reflects the current remote state.
-	_ = deps.client.FetchReviewRefs(ctx)
-	allRefs, _ := deps.client.ListReviewRefs(ctx)
+	// Filter out branches whose open review is in_review (locked) or approved
+	// (developer should close, not re-request). With review.require-signed an
+	// approved review stays offered: the close gate may refuse it (unsigned
+	// approval, commits after it) and a new round is the way out. Sync first so
+	// the local ref namespace reflects the current remote state.
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
+	}
+	states, _, _ := reviewpkg.List(ctx, deps.client)
+	locked := make(map[string]bool, len(states))
+	for _, st := range states {
+		approvedLocks := st.Status == reviewpkg.StatusApproved && !deps.cfg.Review.RequireSigned
+		if !st.Closed && (st.Status == reviewpkg.StatusInReview || approvedLocks) {
+			locked[st.Slug] = true
+		}
+	}
+
 	var submittable []store.BranchRow
 	for _, b := range branches {
-		ref := allRefs[b.IssueSlug]
-		if ref != nil {
-			switch store.ReviewStatus(ref.Status) {
-			case store.ReviewStatusInReview, store.ReviewStatusApproved:
-				continue
-			}
+		if !locked[b.IssueSlug] {
+			submittable = append(submittable, b)
 		}
-		submittable = append(submittable, b)
 	}
 
 	if len(submittable) == 0 {
@@ -98,23 +105,22 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 }
 
 func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	// Fetch first so ReadReviewRef reflects the current remote state.
-	// This is required for the CAS lease on subsequent review rounds.
-	_ = deps.client.FetchReviewRefs(ctx)
+	// Sync first so Load reflects what the remote has, and so the request op
+	// lands on the existing chain rather than beside it.
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
+	}
 
-	// Read the existing ref to get the current SHA (used as CAS lease) and to
-	// guard against resubmitting when the reviewer has not yet decided.
-	// Reading the ref (not the store) avoids stale-cache false positives.
-	existingRef, currentSHA, err := deps.client.ReadReviewRef(ctx, issueSlug)
-	if err != nil {
+	// A blob ref written by an older git-zf is not migrated: this request
+	// replaces it, once every check below has passed.
+	existing, err := reviewpkg.Load(ctx, deps.client, issueSlug)
+	legacy := errors.Is(err, reviewpkg.ErrLegacyReview)
+	if err != nil && !legacy {
 		return fmt.Errorf("read review ref: %w", err)
 	}
-	if existingRef != nil && existingRef.Status == string(store.ReviewStatusInReview) {
-		round := 1
-		if latest, _ := deps.store.GetLatestReview(ctx, issueSlug); latest != nil {
-			round = latest.Round
-		}
-		return fmt.Errorf("issue %q is already in review (round %d) — awaiting reviewer decision", issueSlug, round)
+	if existing != nil && existing.Status == reviewpkg.StatusInReview {
+		return fmt.Errorf("issue %q is already in review (round %d) — awaiting reviewer decision",
+			issueSlug, existing.Round)
 	}
 
 	// Find the feature branch for this issue.
@@ -142,10 +148,30 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 	// Refuse to delete reviewer work that was never incorporated. This is the
 	// safety net; the interactive wrapper offers an inline merge first.
 	// A detection error must also refuse (fail closed) since we're about to
-	// irreversibly delete the local and remote review branch below.
-	pending, pErr := issueflow.PendingReviewCommits(ctx, deps.client, issueSlug, featureBranch)
-	if pErr != nil {
-		return fmt.Errorf("detect pending review commits: %w", pErr)
+	// irreversibly delete the local and remote review branch below. The state
+	// of a legacy review is unknown, so any reviewer commit counts.
+	var pending *issueflow.PendingReview
+	if legacy {
+		effective, n, aErr := issueflow.ReviewBranchAhead(ctx, deps.client, issueSlug, featureBranch)
+		if aErr != nil {
+			return fmt.Errorf("detect pending review commits: %w", aErr)
+		}
+		if n > 0 {
+			pending = &issueflow.PendingReview{EffectiveRef: effective, Commits: n}
+		}
+	} else {
+		var pErr error
+		pending, pErr = issueflow.PendingReviewCommits(ctx, deps.client, issueSlug, featureBranch)
+		if pErr != nil {
+			return fmt.Errorf("detect pending review commits: %w", pErr)
+		}
+	}
+	if pending != nil && legacy {
+		// review sync cannot read a review written by an older git-zf.
+		return fmt.Errorf(
+			"%s has %d unincorporated reviewer commit(s) from the previous round.\n"+
+				"Merge %s into %q by hand, or delete the review branch to discard those commits, then re-request",
+			pending.EffectiveRef, pending.Commits, pending.EffectiveRef, featureBranch)
 	}
 	if pending != nil {
 		return fmt.Errorf(
@@ -164,36 +190,50 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 		_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
 	}
 
-	// Create review record in store.
+	// Write and push the request op (the chain is the source of truth), then
+	// mirror the round in the store. A legacy blob is replaced only once the
+	// op is written.
+	op := &reviewpkg.Op{Type: reviewpkg.OpRequest, FeatureSHA: featureSHA.String()}
+	write := reviewpkg.Append
+	if legacy {
+		write = reviewpkg.ReplaceLegacyWith
+	}
+	if err := write(ctx, deps.client, issueSlug, op, false); err != nil {
+		return fmt.Errorf("write review ref: %w", err)
+	}
+
+	if err := reviewpkg.Push(ctx, deps.client, issueSlug); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
+		if remote, _ := deps.client.Remote(); legacy && remote != "" {
+			fmt.Fprintf(deps.client.IO().Err,
+				"if the remote still holds the old review ref, delete it with: git push %s --delete refs/zf/reviews/%s\n",
+				remote, issueSlug)
+		}
+	}
+
+	st, err := reviewpkg.Load(ctx, deps.client, issueSlug)
+	if err != nil {
+		return fmt.Errorf("read review ref after request: %w", err)
+	}
+	if st == nil {
+		return fmt.Errorf("read review ref after request: review %s not found", issueSlug)
+	}
+
 	reviewRow, err := deps.store.InsertReview(ctx, issueSlug, "")
 	if err != nil {
 		return fmt.Errorf("insert review: %w", err)
 	}
-
-	// Write and push review ref (ref is the source of truth).
-	// currentSHA is "" on the first-ever request (no prior ref), or the SHA of
-	// the previous rejected/approved ref on subsequent rounds. Passing it to
-	// both WriteReviewRef and PushReviewRef ensures CAS correctness: the local
-	// write and the remote push both fail if something changed concurrently.
-	newRef := git.ReviewRef{
-		Status:     string(store.ReviewStatusInReview),
-		Round:      reviewRow.Round,
-		FeatureSHA: featureSHA.String(),
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-
-	if _, err := deps.client.WriteReviewRef(ctx, issueSlug, newRef, currentSHA); err != nil {
-		return fmt.Errorf("write review ref: %w", err)
-	}
-
-	if err := deps.client.PushReviewRef(ctx, issueSlug, currentSHA); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
+	// InsertReview counts the rows of this clone; the chain knows the round.
+	if reviewRow.Round != st.Round {
+		if err := deps.store.SetReviewRound(ctx, reviewRow.ID, st.Round); err == nil {
+			reviewRow.Round = st.Round
+		}
 	}
 
 	fmt.Fprintf(deps.client.IO().Out,
 		"Issue %q is now in review (round %d). Branch %q is locked.\n"+
 			"Share with your reviewer: git fetch && git zf review start\n",
-		issueSlug, reviewRow.Round, featureBranch)
+		issueSlug, st.Round, featureBranch)
 
 	if err := proposeReviewPush(ctx, deps, featureBranch); err != nil {
 		return err

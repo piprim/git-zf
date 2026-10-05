@@ -7,6 +7,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/config"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -82,7 +83,7 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 	}
 
 	// Warn if a review ref already exists for this issue (branch is locked).
-	if ref, _, _ := deps.client.ReadReviewRef(ctx, b.IssueID()); ref != nil &&
+	if ref, _ := reviewpkg.Load(ctx, deps.client, b.IssueID()); ref != nil && !ref.Closed &&
 		ref.Status == string(store.ReviewStatusInReview) {
 		fmt.Fprintf(deps.client.IO().Err,
 			"Note: branch %q is currently locked for review (round %d).\n"+
@@ -103,19 +104,24 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 func runTrackReviewer(ctx context.Context, deps reviewDeps, branchName string) error {
 	issueSlug, _ := branch.CutReviewSuffix(branchName)
 
-	// Fetch review refs best-effort so we see the developer's lock signal.
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
+	// Sync review refs best-effort so we see the developer's lock signal.
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 
 	// Verify the review ref exists and is in_review.
-	ref, _, err := deps.client.ReadReviewRef(ctx, issueSlug)
+	ref, err := reviewpkg.Load(ctx, deps.client, issueSlug)
 	if err != nil {
 		return fmt.Errorf("read review ref: %w", err)
 	}
 	if ref == nil {
 		return fmt.Errorf(
 			"no review found for issue %q — has the developer run `git zf review request`?",
+			issueSlug)
+	}
+	if ref.Closed {
+		return fmt.Errorf(
+			"no open review for issue %q — has the developer run `git zf review request`?",
 			issueSlug)
 	}
 	if ref.Status != string(store.ReviewStatusInReview) {

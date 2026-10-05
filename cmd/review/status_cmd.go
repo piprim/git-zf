@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
@@ -20,8 +21,8 @@ func (r Review) getStatusCmd() *cobra.Command {
 }
 
 func runReviewStatusInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 
 	// Show branches that have any review history.
@@ -55,8 +56,8 @@ func runReviewStatusInteractive(ctx context.Context, deps reviewDeps, prompter R
 }
 
 func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	if err := deps.client.FetchReviewRefs(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: fetch review refs: %v\n", err)
+	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 
 	rows, err := deps.store.ListReviews(ctx, issueSlug)
@@ -71,8 +72,11 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 
 	// Reconcile the latest row from the ref (authoritative source).
 	// This catches status changes (e.g. rejection) made on another machine.
-	ref, _, _ := deps.client.ReadReviewRef(ctx, issueSlug)
+	ref, _ := reviewpkg.Load(ctx, deps.client, issueSlug)
 	if ref != nil {
+		for _, w := range ref.Warnings {
+			fmt.Fprintln(deps.client.IO().Err, w)
+		}
 		latest := &rows[len(rows)-1]
 		if store.ReviewStatus(ref.Status) != latest.Status {
 			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
@@ -103,9 +107,25 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 			row.CreatedAt.Format("2006-01-02 15:04"), resolved, commits)
 	}
 
-	// The ref only carries the latest round's reason; older ones are not kept.
+	// The state only carries the current round's reason; older ones stay in
+	// the chain's reject ops.
 	if ref != nil && ref.Comment != "" && store.ReviewStatus(ref.Status) == store.ReviewStatusChangesRequested {
 		fmt.Fprintf(deps.client.IO().Out, "\nRound %d reason:\n%s\n", ref.Round, indentLines(ref.Comment))
+	}
+
+	if ref != nil && len(ref.Approvals) > 0 {
+		fmt.Fprintf(deps.client.IO().Out, "\nRound %d approvals:\n", ref.Round)
+		for _, a := range ref.Approvals {
+			// author is what the op declares; for a verified approval, also
+			// show who git says signed it.
+			state := reviewpkg.SignatureState(ctx, deps.client, a.Commit)
+			if state == reviewpkg.SigVerified {
+				if signer, _ := deps.client.CommitSigner(ctx, a.Commit); signer != "" {
+					state += ", signed by " + signer
+				}
+			}
+			fmt.Fprintf(deps.client.IO().Out, "  %s  %s\n", a.Author, state)
+		}
 	}
 
 	return nil

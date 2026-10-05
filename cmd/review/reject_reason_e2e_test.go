@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 )
 
@@ -43,9 +44,9 @@ func TestReviewReject_Reason(t *testing.T) {
 	}
 
 	t.Run("prompted reason is stored in the review ref", func(t *testing.T) {
-		ref, _, err := rig.client.ReadReviewRef(ctx, "77")
+		ref, err := reviewpkg.Load(ctx, rig.client, "77")
 		if err != nil || ref == nil {
-			t.Fatalf("ReadReviewRef: ref=%v err=%v", ref, err)
+			t.Fatalf("Load: ref=%v err=%v", ref, err)
 		}
 		if ref.Comment != reason {
 			t.Errorf("Comment: got %q, want %q", ref.Comment, reason)
@@ -83,7 +84,7 @@ func TestReviewReject_ReasonFromFlagSkipsPrompt(t *testing.T) {
 	}
 
 	t.Run("flag reason wins and prompt is not consulted", func(t *testing.T) {
-		ref, _, _ := rig.client.ReadReviewRef(ctx, "77")
+		ref, _ := reviewpkg.Load(ctx, rig.client, "77")
 		if ref == nil || ref.Comment != "from flag" {
 			t.Errorf("Comment: got %+v, want %q", ref, "from flag")
 		}
@@ -105,7 +106,7 @@ func TestReviewReject_NoReasonLeavesRefClean(t *testing.T) {
 	}
 
 	t.Run("empty prompt answer stores no comment", func(t *testing.T) {
-		ref, _, _ := rig.client.ReadReviewRef(ctx, "77")
+		ref, _ := reviewpkg.Load(ctx, rig.client, "77")
 		if ref == nil || ref.Comment != "" {
 			t.Errorf("Comment: got %+v, want empty", ref)
 		}
@@ -190,13 +191,13 @@ func TestReviewReject_ReasonPrintsOnlyAfterStatusRecorded(t *testing.T) {
 
 	// Not in review any more (the ref is authoritative): reject must fail
 	// before touching the ref and must not echo the reason.
-	ref, sha, err := rig.client.ReadReviewRef(ctx, "77")
+	ref, err := reviewpkg.Load(ctx, rig.client, "77")
 	if err != nil || ref == nil {
-		t.Fatalf("ReadReviewRef: ref=%v err=%v", ref, err)
+		t.Fatalf("Load: ref=%v err=%v", ref, err)
 	}
-	ref.Status = string(store.ReviewStatusApproved)
-	if _, err := rig.client.WriteReviewRef(ctx, "77", *ref, sha); err != nil {
-		t.Fatalf("WriteReviewRef: %v", err)
+	approve := &reviewpkg.Op{Type: reviewpkg.OpApprove, ApprovedSHA: ref.FeatureSHA}
+	if err := reviewpkg.Append(ctx, rig.client, "77", approve, false); err != nil {
+		t.Fatalf("append approve: %v", err)
 	}
 	rig.stdout.Reset()
 	_, err = runReviewReject(ctx, rig.deps(), "77", "should not appear")

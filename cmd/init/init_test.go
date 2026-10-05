@@ -99,3 +99,103 @@ func TestInit_PreservesForeignPreCommit(t *testing.T) {
 		}
 	})
 }
+
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
+func TestInit_ConfiguresChainFetch(t *testing.T) {
+	dir := newInitRepo(t)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	gitOut(t, dir, "init", "-q", "--bare", origin)
+	gitOut(t, dir, "remote", "add", "origin", origin)
+	// A tracking ref of the layout used before refs/remotes/<remote>/zf/.
+	gitOut(t, dir, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init")
+	gitOut(t, dir, "update-ref", "refs/zf/remote/issues/abc", "HEAD")
+
+	out := runInit(t, dir)
+	runInit(t, dir)
+
+	specs := gitOut(t, dir, "config", "--get-all", "remote.origin.fetch")
+
+	for _, want := range []string{
+		"+refs/zf/reviews/*:refs/remotes/origin/zf/reviews/*",
+		"+refs/zf/issues/*:refs/remotes/origin/zf/issues/*",
+	} {
+		t.Run("refspec added exactly once: "+want, func(t *testing.T) {
+			if n := strings.Count(specs, want); n != 1 {
+				t.Fatalf("refspec appears %d times in:\n%s", n, specs)
+			}
+		})
+	}
+
+	t.Run("the default branch refspec is kept", func(t *testing.T) {
+		if !strings.Contains(specs, "+refs/heads/*:refs/remotes/origin/*") {
+			t.Fatalf("default refspec lost:\n%s", specs)
+		}
+	})
+
+	t.Run("stale refs/zf/remote/ tracking refs are deleted", func(t *testing.T) {
+		if refs := gitOut(t, dir, "for-each-ref", "refs/zf/remote/"); refs != "" {
+			t.Fatalf("stale refs survive:\n%s", refs)
+		}
+	})
+
+	t.Run("init reports the remote it configured", func(t *testing.T) {
+		if !strings.Contains(out, `"origin"`) {
+			t.Fatalf("output does not name the remote:\n%s", out)
+		}
+	})
+}
+
+func TestInit_NoRemote_SkipsChainFetch(t *testing.T) {
+	dir := newInitRepo(t)
+	out := runInit(t, dir)
+
+	t.Run("init succeeds and configures no refspec", func(t *testing.T) {
+		if strings.Contains(out, "refs/zf/") {
+			t.Fatalf("unexpected refspec message:\n%s", out)
+		}
+	})
+}
+
+func TestInit_ConfiguresEveryRemote(t *testing.T) {
+	dir := newInitRepo(t)
+	for _, name := range []string{"upstream", "fork"} {
+		bare := filepath.Join(t.TempDir(), name+".git")
+		gitOut(t, dir, "init", "-q", "--bare", bare)
+		gitOut(t, dir, "remote", "add", name, bare)
+	}
+
+	out := runInit(t, dir)
+
+	for _, name := range []string{"upstream", "fork"} {
+		specs := gitOut(t, dir, "config", "--get-all", "remote."+name+".fetch")
+
+		for _, want := range []string{
+			"+refs/zf/reviews/*:refs/remotes/" + name + "/zf/reviews/*",
+			"+refs/zf/issues/*:refs/remotes/" + name + "/zf/issues/*",
+		} {
+			t.Run("remote "+name+" gets "+want, func(t *testing.T) {
+				if n := strings.Count(specs, want); n != 1 {
+					t.Fatalf("refspec appears %d times in:\n%s", n, specs)
+				}
+			})
+		}
+
+		t.Run("init reports remote "+name, func(t *testing.T) {
+			if !strings.Contains(out, `"`+name+`"`) {
+				t.Fatalf("output does not name %s:\n%s", name, out)
+			}
+		})
+	}
+}
