@@ -5,25 +5,34 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
-	"github.com/piprim/git-zf/store"
 )
 
-// pruneTestRig bundles a real on-disk git repo + seeded store so prune E2E
+// pruneTestRig bundles a real on-disk git repo + seeded branch chains so prune E2E
 // tests share setup. The repo starts with one commit on master; tests seed
 // additional branches (deleted / merged / active) via the rig's helpers.
 type pruneTestRig struct {
 	dir    string
 	client *git.Client
-	store  *store.Store
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
 }
 
 func newPruneRig(t *testing.T) *pruneTestRig {
+	t.Helper()
+
+	return newPruneRigWithOrigin(t, "")
+}
+
+// newPruneRigWithOrigin is newPruneRig with origin as the "origin" remote,
+// added before the client is created: a client caches its remote name.
+func newPruneRigWithOrigin(t *testing.T, origin string) *pruneTestRig {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -49,6 +58,9 @@ func newPruneRig(t *testing.T) *pruneTestRig {
 
 	runGit("add", "base.txt")
 	runGit("commit", "-m", "chore: init")
+	if origin != "" {
+		runGit("remote", "add", "origin", origin)
+	}
 
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
@@ -59,30 +71,45 @@ func newPruneRig(t *testing.T) *pruneTestRig {
 		t.Fatalf("git.NewClientAt: %v", err)
 	}
 
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-
-	t.Cleanup(func() { _ = s.Close() })
-
 	return &pruneTestRig{
-		dir: dir, client: client, store: s,
+		dir: dir, client: client,
 		stdout: stdout, stderr: stderr,
 	}
 }
 
-// seedIssueAndBranch inserts an Issue + Branch row into the store with the
-// in-progress status.
+// seedIssueAndBranch tracks branchName as an in-progress branch of its issue.
 func (r *pruneTestRig) seedIssueAndBranch(t *testing.T, issueSlug, branchName, branchType string) {
 	t.Helper()
 
-	if err := r.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: issueSlug, Title: issueSlug},
-		&store.Branch{Name: branchName, Type: branchType, StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed %q: %v", branchName, err)
+	branchtest.Seed(t, r.client,
+		branch.Op{Branch: branchName, BranchType: branchType, Title: issueSlug}, branch.StatusInProgress)
+}
+
+// statusOf returns the recorded status of branchName, "" when untracked.
+func (r *pruneTestRig) statusOf(t *testing.T, branchName string) string {
+	t.Helper()
+
+	_, e, err := branch.Find(t.Context(), r.client, branchName)
+	if err != nil {
+		t.Fatalf("Find(%s): %v", branchName, err)
 	}
+	if e == nil {
+		return ""
+	}
+
+	return e.Status
+}
+
+// inProgress returns how many tracked branches are in progress.
+func (r *pruneTestRig) inProgress(t *testing.T) int {
+	t.Helper()
+
+	rows, err := branch.ListRows(t.Context(), r.client, branch.StatusInProgress)
+	if err != nil {
+		t.Fatalf("ListRows: %v", err)
+	}
+
+	return len(rows)
 }
 
 // createGitBranch creates a real local git branch that is NOT merged into
@@ -148,9 +175,9 @@ func TestRunPrune_HappyPath_DeleteAndMerge(t *testing.T) {
 	rig := newPruneRig(t)
 
 	// Seed three branches:
-	//   DEL-1 — store row only, no git branch → "to delete"
-	//   MRG-1 — store row + git branch + merged into master → "to merge"
-	//   ACT-1 — store row + git branch + NOT merged → no action
+	//   DEL-1 — tracked, no git branch anywhere → "to close"
+	//   MRG-1 — tracked + git branch + merged into master → "to merge"
+	//   ACT-1 — tracked + git branch + NOT merged → no action
 	rig.seedIssueAndBranch(t, "DEL-1", "DEL-1@feat@gone", "feat")
 	rig.seedIssueAndBranch(t, "MRG-1", "MRG-1@fix@done", "fix")
 	rig.seedIssueAndBranch(t, "ACT-1", "ACT-1@feat@active", "feat")
@@ -159,58 +186,25 @@ func TestRunPrune_HappyPath_DeleteAndMerge(t *testing.T) {
 
 	prompter := &scriptedPrunePrompter{Confirm: true}
 
-	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{}); err != nil {
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{}); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 
-	t.Run("DEL-1 row removed from store", func(t *testing.T) {
-		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
-		}
-
-		for _, r := range rows {
-			if r.BranchName == "DEL-1@feat@gone" {
-				t.Errorf("DEL-1@feat@gone still present after prune")
-			}
+	t.Run("DEL-1 is recorded as closed", func(t *testing.T) {
+		if got := rig.statusOf(t, "DEL-1@feat@gone"); got != branch.StatusClosed {
+			t.Errorf("DEL-1@feat@gone status = %q, want closed", got)
 		}
 	})
 
 	t.Run("MRG-1 status flipped to merged", func(t *testing.T) {
-		merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
-		}
-
-		found := false
-		for _, r := range merged {
-			if r.BranchName == "MRG-1@fix@done" {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			t.Errorf("MRG-1@fix@done not flagged as merged")
+		if got := rig.statusOf(t, "MRG-1@fix@done"); got != branch.StatusMerged {
+			t.Errorf("MRG-1@fix@done status = %q, want merged", got)
 		}
 	})
 
 	t.Run("ACT-1 left in-progress", func(t *testing.T) {
-		inProgress, err := rig.store.ListBranches(t.Context(), store.BranchStatusInProgress)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
-		}
-
-		found := false
-		for _, r := range inProgress {
-			if r.BranchName == "ACT-1@feat@active" {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			t.Errorf("ACT-1@feat@active should still be in-progress")
+		if got := rig.statusOf(t, "ACT-1@feat@active"); got != branch.StatusInProgress {
+			t.Errorf("ACT-1@feat@active status = %q, want in_progress", got)
 		}
 	})
 
@@ -219,8 +213,8 @@ func TestRunPrune_HappyPath_DeleteAndMerge(t *testing.T) {
 			t.Errorf("ConfirmCalls = %d, want 1", prompter.ConfirmCalls)
 		}
 
-		if prompter.LastToDelete != 1 {
-			t.Errorf("LastToDelete = %d, want 1", prompter.LastToDelete)
+		if prompter.LastToClose != 1 {
+			t.Errorf("LastToClose = %d, want 1", prompter.LastToClose)
 		}
 
 		if prompter.LastToMerge != 1 {
@@ -230,8 +224,8 @@ func TestRunPrune_HappyPath_DeleteAndMerge(t *testing.T) {
 
 	t.Run("stdout shows the summary", func(t *testing.T) {
 		got := rig.stdout.String()
-		if !bytes.Contains([]byte(got), []byte("Pruned: 1 deleted, 1 marked merged")) {
-			t.Errorf("stdout = %q, want it to contain 'Pruned: 1 deleted, 1 marked merged'", got)
+		if !bytes.Contains([]byte(got), []byte("Pruned: 1 closed, 1 marked merged")) {
+			t.Errorf("stdout = %q, want it to contain 'Pruned: 1 closed, 1 marked merged'", got)
 		}
 	})
 }
@@ -244,7 +238,7 @@ func TestRunPrune_DryRun_ReportsDeletedBranch(t *testing.T) {
 
 	prompter := &scriptedPrunePrompter{}
 
-	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 
@@ -254,14 +248,9 @@ func TestRunPrune_DryRun_ReportsDeletedBranch(t *testing.T) {
 		}
 	})
 
-	t.Run("store is unchanged after dry-run", func(t *testing.T) {
-		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
-		}
-
-		if len(rows) != 1 {
-			t.Errorf("store rows = %d, want 1 (unchanged)", len(rows))
+	t.Run("nothing is recorded after dry-run", func(t *testing.T) {
+		if n := rig.inProgress(t); n != 1 {
+			t.Errorf("in-progress branches = %d, want 1 (unchanged)", n)
 		}
 	})
 
@@ -281,7 +270,7 @@ func TestRunPrune_DryRun_ReportsMergedBranch(t *testing.T) {
 
 	prompter := &scriptedPrunePrompter{}
 
-	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 
@@ -307,7 +296,7 @@ func TestRunPrune_DryRun_NothingToPrune(t *testing.T) {
 
 	prompter := &scriptedPrunePrompter{}
 
-	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 
@@ -336,7 +325,7 @@ func TestRunPrune_DryRun_MixedCategories(t *testing.T) {
 
 	prompter := &scriptedPrunePrompter{}
 
-	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{dryRun: true}); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 
@@ -360,14 +349,9 @@ func TestRunPrune_DryRun_MixedCategories(t *testing.T) {
 		}
 	})
 
-	t.Run("store is unchanged", func(t *testing.T) {
-		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
-		}
-
-		if len(rows) != 3 {
-			t.Errorf("store rows = %d, want 3 (unchanged)", len(rows))
+	t.Run("nothing is recorded", func(t *testing.T) {
+		if n := rig.inProgress(t); n != 3 {
+			t.Errorf("in-progress branches = %d, want 3 (unchanged)", n)
 		}
 	})
 }
@@ -380,18 +364,13 @@ func TestRunPrune_UserAbortsAtConfirm(t *testing.T) {
 
 	prompter := &scriptedPrunePrompter{Confirm: false}
 
-	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{}); err != nil {
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{}); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 
-	t.Run("DEL-1 row still present in store", func(t *testing.T) {
-		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
-		}
-
-		if len(rows) != 1 {
-			t.Errorf("store rows = %d, want 1 (unchanged on abort)", len(rows))
+	t.Run("DEL-1 is still in progress", func(t *testing.T) {
+		if got := rig.statusOf(t, "DEL-1@feat@gone"); got != branch.StatusInProgress {
+			t.Errorf("status = %q, want in_progress (unchanged on abort)", got)
 		}
 	})
 
@@ -417,26 +396,177 @@ func TestRunPrune_YesFlagSkipsConfirm(t *testing.T) {
 	// Mirror what pruneRunE does when --yes is set: use autoConfirmPrunePrompter directly.
 	prompter := &autoConfirmPrunePrompter{}
 
-	if err := runPrune(t.Context(), rig.stdout, rig.store, rig.client, prompter, pruneFlags{yes: true}); err != nil {
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{yes: true}); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 
-	t.Run("DEL-1 row removed (auto-confirm executed)", func(t *testing.T) {
-		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
-		}
-
-		for _, r := range rows {
-			if r.BranchName == "DEL-1@feat@gone" {
-				t.Errorf("DEL-1@feat@gone still present despite --yes")
-			}
+	t.Run("DEL-1 closed (auto-confirm executed)", func(t *testing.T) {
+		if got := rig.statusOf(t, "DEL-1@feat@gone"); got != branch.StatusClosed {
+			t.Errorf("status = %q, want closed despite --yes", got)
 		}
 	})
 
 	t.Run("stdout shows the success line", func(t *testing.T) {
-		if !bytes.Contains(rig.stdout.Bytes(), []byte("Pruned: 1 deleted")) {
-			t.Errorf("stdout = %q, want 'Pruned: 1 deleted'", rig.stdout.String())
+		if !bytes.Contains(rig.stdout.Bytes(), []byte("Pruned: 1 closed")) {
+			t.Errorf("stdout = %q, want 'Pruned: 1 closed'", rig.stdout.String())
+		}
+	})
+}
+
+// runPruneGit runs git in the rig's repository.
+func (r *pruneTestRig) runPruneGit(t *testing.T, args ...string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = r.dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func newPruneOrigin(t *testing.T) string {
+	t.Helper()
+
+	dir := filepath.Join(t.TempDir(), "origin.git")
+	if out, err := exec.CommandContext(t.Context(), "git", "init", "-q", "--bare", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, out)
+	}
+
+	return dir
+}
+
+func TestRunPrune_LeavesABranchStartedBySomeoneElse(t *testing.T) {
+	t.Parallel()
+
+	// A teammate started TM-1: the record reached this clone, the branch never
+	// did (issue start pushes the record, not the branch).
+	rig := newPruneRig(t)
+	rig.seedIssueAndBranch(t, "TM-1", "TM-1@feat@theirs", "feat")
+	rig.runPruneGit(t, "config", "user.name", "Someone Else")
+
+	prompter := &scriptedPrunePrompter{Confirm: true}
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{}); err != nil {
+		t.Fatalf("runPrune: %v", err)
+	}
+
+	t.Run("the branch stays in progress", func(t *testing.T) {
+		if got := rig.statusOf(t, "TM-1@feat@theirs"); got != branch.StatusInProgress {
+			t.Errorf("status = %q, want in_progress", got)
+		}
+	})
+
+	t.Run("the output lists it as skipped, with who started it", func(t *testing.T) {
+		out := rig.stdout.String()
+		for _, want := range []string{"Skipped", "TM-1@feat@theirs", "Test User", "prune --others", "Nothing to prune."} {
+			if !strings.Contains(out, want) {
+				t.Errorf("stdout lacks %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("no confirmation was asked", func(t *testing.T) {
+		if prompter.ConfirmCalls != 0 {
+			t.Errorf("ConfirmCalls = %d, want 0", prompter.ConfirmCalls)
+		}
+	})
+}
+
+func TestRunPrune_OthersClosesABranchStartedBySomeoneElse(t *testing.T) {
+	t.Parallel()
+
+	// TM-1 was started by someone who is gone: no branch anywhere, and its
+	// author will never run prune.
+	rig := newPruneRig(t)
+	rig.seedIssueAndBranch(t, "TM-1", "TM-1@feat@theirs", "feat")
+	rig.runPruneGit(t, "config", "user.name", "Someone Else")
+
+	prompter := &scriptedPrunePrompter{Confirm: true}
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{others: true}); err != nil {
+		t.Fatalf("runPrune: %v", err)
+	}
+
+	t.Run("the branch is recorded as closed", func(t *testing.T) {
+		if got := rig.statusOf(t, "TM-1@feat@theirs"); got != branch.StatusClosed {
+			t.Errorf("status = %q, want closed", got)
+		}
+	})
+
+	t.Run("the summary names who started it", func(t *testing.T) {
+		out := rig.stdout.String()
+		for _, want := range []string{"Will close", "TM-1@feat@theirs (started by Test User", "Pruned: 1 closed"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("stdout lacks %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("the confirmation counted the close", func(t *testing.T) {
+		if prompter.ConfirmCalls != 1 || prompter.LastToClose != 1 {
+			t.Errorf("confirm calls = %d, to close = %d", prompter.ConfirmCalls, prompter.LastToClose)
+		}
+	})
+}
+
+func TestRunPrune_LeavesABranchStillOnTheRemote(t *testing.T) {
+	t.Parallel()
+
+	rig := newPruneRigWithOrigin(t, newPruneOrigin(t))
+	rig.seedIssueAndBranch(t, "RM-1", "RM-1@feat@pushed", "feat")
+	rig.createGitBranch(t, "RM-1@feat@pushed")
+	rig.runPruneGit(t, "push", "-q", "origin", "RM-1@feat@pushed")
+	rig.runPruneGit(t, "branch", "-D", "RM-1@feat@pushed")
+
+	if err := runPrune(t.Context(), rig.stdout, rig.client, &scriptedPrunePrompter{Confirm: true}, pruneFlags{}); err != nil {
+		t.Fatalf("runPrune: %v", err)
+	}
+
+	t.Run("gone locally but on the remote: still in progress", func(t *testing.T) {
+		if got := rig.statusOf(t, "RM-1@feat@pushed"); got != branch.StatusInProgress {
+			t.Errorf("status = %q, want in_progress", got)
+		}
+	})
+
+	t.Run("output says 'Nothing to prune.'", func(t *testing.T) {
+		if !strings.Contains(rig.stdout.String(), "Nothing to prune.") {
+			t.Errorf("stdout = %q", rig.stdout.String())
+		}
+	})
+}
+
+func TestRunPrune_ClosesNothingWhenTheRemoteIsUnreachable(t *testing.T) {
+	t.Parallel()
+
+	rig := newPruneRigWithOrigin(t, filepath.Join(t.TempDir(), "unreachable.git"))
+	rig.seedIssueAndBranch(t, "DEL-1", "DEL-1@feat@gone", "feat")
+	rig.seedIssueAndBranch(t, "MRG-1", "MRG-1@fix@done", "fix")
+	rig.mergeBranchIntoMaster(t, "MRG-1@fix@done", "merged\n")
+
+	prompter := &scriptedPrunePrompter{Confirm: true}
+	if err := runPrune(t.Context(), rig.stdout, rig.client, prompter, pruneFlags{}); err != nil {
+		t.Fatalf("runPrune: %v", err)
+	}
+
+	t.Run("the branch gone locally is not closed", func(t *testing.T) {
+		if got := rig.statusOf(t, "DEL-1@feat@gone"); got != branch.StatusInProgress {
+			t.Errorf("status = %q, want in_progress", got)
+		}
+	})
+
+	t.Run("the merge is still recorded", func(t *testing.T) {
+		if got := rig.statusOf(t, "MRG-1@fix@done"); got != branch.StatusMerged {
+			t.Errorf("status = %q, want merged", got)
+		}
+	})
+
+	t.Run("stderr says why nothing is closed", func(t *testing.T) {
+		if !strings.Contains(rig.stderr.String(), "no branch will be closed") {
+			t.Errorf("stderr = %q", rig.stderr.String())
+		}
+	})
+
+	t.Run("the confirmation counted no close", func(t *testing.T) {
+		if prompter.LastToClose != 0 || prompter.LastToMerge != 1 {
+			t.Errorf("confirm(%d, %d), want (0, 1)", prompter.LastToClose, prompter.LastToMerge)
 		}
 	})
 }

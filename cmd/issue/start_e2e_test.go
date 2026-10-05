@@ -9,12 +9,12 @@ import (
 	"testing"
 
 	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	issuepkg "github.com/piprim/git-zf/issue"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
 )
@@ -230,12 +230,12 @@ func TestRunIssueStart_BranchHappyPath_WithTracker(t *testing.T) {
 	})
 
 	t.Run("branch ref records the originating tracker type", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(t.Context(), "ABC-3")
+		ref, err := branch.Load(t.Context(), rig.client, "ABC-3")
 		if err != nil {
-			t.Fatalf("ReadBranchRef: %v", err)
+			t.Fatalf("Load: %v", err)
 		}
 		if ref == nil {
-			t.Fatal("expected BranchRef, got nil")
+			t.Fatal("expected a branch chain, got none")
 		}
 		if ref.TrackerType != "fake" {
 			t.Errorf("TrackerType: got %q, want %q", ref.TrackerType, "fake")
@@ -626,13 +626,13 @@ func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
 // TestRunIssueStart_PickerSelectsParent verifies that when the user picks a
 // real git branch via PickBaseBranch (instead of passing --parent explicitly),
 // the new branch is created from that branch and the parent relation is recorded
-// in the store when the chosen branch is git-zf-tracked.
+// on the new branch's chain.
 func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
 
-	// Create the parent integration branch in git and seed it in the store.
+	// Create the parent integration branch in git and track it.
 	parentBranch := "X@feat@big-feature"
 	rig.runGit(t, "checkout", "-b", parentBranch)
 	if err := os.WriteFile(filepath.Join(rig.dir, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
@@ -642,19 +642,8 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 	rig.runGit(t, "commit", "-m", "feat(X): parent integration branch")
 	rig.runGit(t, "checkout", "main")
 
-	// Seed the store so the parent branch appears as tracked.
-	s, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X", Title: "big feature"},
-		&store.Branch{Name: parentBranch, Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		_ = s.Close()
-		t.Fatalf("InsertIssueWithBranch: %v", err)
-	}
-	_ = s.Close()
+	// Track the parent branch.
+	branchtest.Seed(t, rig.client, branch.Op{Branch: parentBranch, Title: "big feature"}, branch.StatusInProgress)
 
 	// The scripted prompter returns the parent branch name as the base.
 	pickedIssue := &issuepkg.Issue{
@@ -696,19 +685,13 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 		}
 	})
 
-	t.Run("parent relation recorded in store", func(t *testing.T) {
-		s2, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
-		if err != nil {
-			t.Fatalf("store.Open: %v", err)
+	t.Run("parent relation recorded on the sub-task's chain", func(t *testing.T) {
+		st, err := branch.Load(t.Context(), rig.client, "X.1")
+		if err != nil || st == nil {
+			t.Fatalf("Load(X.1) = %+v, %v", st, err)
 		}
-		defer func() { _ = s2.Close() }()
-
-		parent, err := s2.GetParentIssue(t.Context(), "X.1")
-		if err != nil {
-			t.Fatalf("GetParentIssue: %v", err)
-		}
-		if parent != "X" {
-			t.Errorf("GetParentIssue(X.1) = %q, want %q", parent, "X")
+		if st.Parent != "X" {
+			t.Errorf("parent of X.1 = %q, want %q", st.Parent, "X")
 		}
 	})
 }
@@ -721,8 +704,7 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 // The picker must OFFER the remote-only parent, and the new branch must be cut
 // from it rather than silently falling back to main.
 //
-// Not parallel: it t.Chdir's into the clone so persist()'s store.OpenRepo
-// resolves to the clone, keeping the project store untouched.
+// Not parallel: it t.Chdir's into the clone.
 func TestRunIssueStart_PickerOffersRemoteOnlyParent(t *testing.T) {
 	parentBranch := "1149829@feat@big"
 
@@ -820,15 +802,15 @@ func TestRunIssueStart_PickerOffersRemoteOnlyParent(t *testing.T) {
 		// parent slug must be derived from the picked base branch name and
 		// stamped on refs/zf/branches/1149831 — otherwise a later close cannot
 		// resolve the parent integration branch as the merge target.
-		ref, err := client.ReadBranchRef(t.Context(), "1149831")
+		ref, err := branch.Load(t.Context(), client, "1149831")
 		if err != nil {
-			t.Fatalf("ReadBranchRef: %v", err)
+			t.Fatalf("Load: %v", err)
 		}
 		if ref == nil {
 			t.Fatal("branch ref for 1149831 was not written")
 		}
-		if ref.ParentSlug != "1149829" {
-			t.Fatalf("ParentSlug = %q, want %q", ref.ParentSlug, "1149829")
+		if ref.Parent != "1149829" {
+			t.Fatalf("ParentSlug = %q, want %q", ref.Parent, "1149829")
 		}
 	})
 }
@@ -861,18 +843,18 @@ func TestRunIssueStart_WritesBranchRef(t *testing.T) {
 	}
 
 	t.Run("BranchRef written for root branch", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(t.Context(), "X")
+		ref, err := branch.Load(t.Context(), rig.client, "X")
 		if err != nil {
-			t.Fatalf("ReadBranchRef: %v", err)
+			t.Fatalf("Load: %v", err)
 		}
 		if ref == nil {
-			t.Fatal("expected BranchRef to be written, got nil")
+			t.Fatal("expected a branch chain, got none")
 		}
-		if ref.BranchName != "X@feat@big-feature" {
-			t.Errorf("BranchName: got %q, want %q", ref.BranchName, "X@feat@big-feature")
+		if ref.Entry("X@feat@big-feature") == nil {
+			t.Errorf("entries = %+v, want %q", ref.Entries, "X@feat@big-feature")
 		}
-		if ref.ParentSlug != "" {
-			t.Errorf("ParentSlug: got %q, want empty", ref.ParentSlug)
+		if ref.Parent != "" {
+			t.Errorf("ParentSlug: got %q, want empty", ref.Parent)
 		}
 		if ref.TrackerType != "" {
 			t.Errorf("TrackerType: got %q, want empty for a manual issue", ref.TrackerType)
@@ -885,19 +867,8 @@ func TestRunIssueStart_WritesBranchRef_WithParent(t *testing.T) {
 
 	rig := newStartRig(t)
 
-	// Seed parent branch in store so --parent X can resolve.
-	s, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X", Title: "big-feature"},
-		&store.Branch{Name: "X@feat@big-feature", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		_ = s.Close()
-		t.Fatalf("InsertIssueWithBranch: %v", err)
-	}
-	_ = s.Close()
+	// Track the parent branch so --parent X can resolve.
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "X@feat@big-feature", Title: "big-feature"}, branch.StatusInProgress)
 	// Create parent branch in git.
 	runGitInRig(t, rig, "checkout", "-b", "X@feat@big-feature")
 	runGitInRig(t, rig, "checkout", "main")
@@ -925,18 +896,18 @@ func TestRunIssueStart_WritesBranchRef_WithParent(t *testing.T) {
 	}
 
 	t.Run("BranchRef written with parent slug", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(t.Context(), "X.1")
+		ref, err := branch.Load(t.Context(), rig.client, "X.1")
 		if err != nil {
-			t.Fatalf("ReadBranchRef: %v", err)
+			t.Fatalf("Load: %v", err)
 		}
 		if ref == nil {
-			t.Fatal("expected BranchRef, got nil")
+			t.Fatal("expected a branch chain, got none")
 		}
-		if ref.BranchName != "X.1@feat@part-one" {
-			t.Errorf("BranchName: got %q, want %q", ref.BranchName, "X.1@feat@part-one")
+		if ref.Entry("X.1@feat@part-one") == nil {
+			t.Errorf("entries = %+v, want %q", ref.Entries, "X.1@feat@part-one")
 		}
-		if ref.ParentSlug != "X" {
-			t.Errorf("ParentSlug: got %q, want %q", ref.ParentSlug, "X")
+		if ref.Parent != "X" {
+			t.Errorf("ParentSlug: got %q, want %q", ref.Parent, "X")
 		}
 	})
 }

@@ -21,8 +21,8 @@ func (r Review) getStartCmd() *cobra.Command {
 }
 
 func runReviewStartInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
-	// inReviewBranches reads the review refs, not the local store, so the
-	// reviewer does not need the branch registered in their own store.
+	// inReviewBranches reads the review chains: the reviewer does not need
+	// the branch tracked or checked out.
 	branches, err := inReviewBranches(ctx, deps)
 	if err != nil {
 		return err

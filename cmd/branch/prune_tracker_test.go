@@ -6,8 +6,8 @@ import (
 	"io"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -72,7 +72,7 @@ func (f *fakeIssueResolver) IsIssueClosed(_ context.Context, id string) (bool, e
 }
 
 func TestRunDiscoverTracker(t *testing.T) {
-	storeByName := map[string]*store.BranchRow{
+	trackedByName := map[string]*branch.Row{
 		"ABC-42@feat@x": {IssueSlug: "ABC-42", BranchName: "ABC-42@feat@x"},
 		"ABC-51@feat@y": {IssueSlug: "ABC-51", BranchName: "ABC-51@feat@y"},
 	}
@@ -87,7 +87,7 @@ func TestRunDiscoverTracker(t *testing.T) {
 		}}
 		tr := &fakeIssueResolver{closed: map[string]bool{"ABC-42": true, "ABC-77": true}}
 
-		result, err := runDiscoverTracker(context.Background(), io.Discard, pr, tr, storeByName, "master")
+		result, err := runDiscoverTracker(context.Background(), io.Discard, pr, tr, trackedByName, "master")
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -96,10 +96,10 @@ func TestRunDiscoverTracker(t *testing.T) {
 			t.Fatalf("got %d candidates, want 2: %#v", len(result.Candidates), result.Candidates)
 		}
 		// Sorted by branch name → ABC-42 first, ABC-77 second.
-		if result.Candidates[0].BranchName != "ABC-42@feat@x" || result.Candidates[0].StoreRow == nil {
+		if result.Candidates[0].BranchName != "ABC-42@feat@x" || result.Candidates[0].Tracked == nil {
 			t.Fatalf("c[0] = %+v", result.Candidates[0])
 		}
-		if result.Candidates[1].BranchName != "ABC-77@spike@z" || result.Candidates[1].StoreRow != nil {
+		if result.Candidates[1].BranchName != "ABC-77@spike@z" || result.Candidates[1].Tracked != nil {
 			t.Fatalf("c[1] = %+v", result.Candidates[1])
 		}
 		if len(result.Warnings) != 0 {
@@ -174,14 +174,14 @@ func (t *trackingFakePruner) ForceDeleteBranch(n string) error {
 
 // statusFlipRecorder counts UpdateBranchStatus invocations per branch.
 type statusFlipRecorder struct {
-	flipped map[string]int64 // branchName → statusID
+	flipped map[string]string // branchName → status
 }
 
-func (s *statusFlipRecorder) updateBranchStatus(_ context.Context, name string, statusID int64) error {
+func (s *statusFlipRecorder) updateBranchStatus(_ context.Context, name, status string) error {
 	if s.flipped == nil {
-		s.flipped = map[string]int64{}
+		s.flipped = map[string]string{}
 	}
-	s.flipped[name] = statusID
+	s.flipped[name] = status
 
 	return nil
 }
@@ -191,8 +191,8 @@ func TestRunExecuteTracker(t *testing.T) {
 		pr := &trackingFakePruner{}
 		flip := &statusFlipRecorder{}
 		cands := []trackerCandidate{
-			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", StoreRow: &store.BranchRow{BranchName: "ABC-42@feat@x"}},
-			{BranchName: "ABC-43@feat@y", IssueID: "ABC-43", StoreRow: &store.BranchRow{BranchName: "ABC-43@feat@y"}},
+			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", Tracked: &branch.Row{BranchName: "ABC-42@feat@x"}},
+			{BranchName: "ABC-43@feat@y", IssueID: "ABC-43", Tracked: &branch.Row{BranchName: "ABC-43@feat@y"}},
 		}
 		decisions := map[string]string{"ABC-42@feat@x": "safe", "ABC-43@feat@y": "safe"}
 
@@ -203,8 +203,8 @@ func TestRunExecuteTracker(t *testing.T) {
 		if len(pr.safeCalls) != 2 {
 			t.Fatalf("safeCalls = %v, want 2", pr.safeCalls)
 		}
-		if flip.flipped["ABC-42@feat@x"] != store.StatusIDClosed {
-			t.Fatalf("flipped[ABC-42] = %d, want %d", flip.flipped["ABC-42@feat@x"], store.StatusIDClosed)
+		if flip.flipped["ABC-42@feat@x"] != branch.StatusClosed {
+			t.Fatalf("flipped[ABC-42] = %q, want %q", flip.flipped["ABC-42@feat@x"], branch.StatusClosed)
 		}
 		if len(warnings) != 0 {
 			t.Fatalf("warnings = %v, want none", warnings)
@@ -215,7 +215,7 @@ func TestRunExecuteTracker(t *testing.T) {
 		pr := &trackingFakePruner{safeRefuse: map[string]bool{"ABC-42@feat@x": true}}
 		flip := &statusFlipRecorder{}
 		cands := []trackerCandidate{
-			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", StoreRow: &store.BranchRow{BranchName: "ABC-42@feat@x"}},
+			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", Tracked: &branch.Row{BranchName: "ABC-42@feat@x"}},
 		}
 		decisions := map[string]string{"ABC-42@feat@x": "safe"}
 
@@ -235,7 +235,7 @@ func TestRunExecuteTracker(t *testing.T) {
 		pr := &trackingFakePruner{}
 		flip := &statusFlipRecorder{}
 		cands := []trackerCandidate{
-			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", StoreRow: &store.BranchRow{BranchName: "ABC-42@feat@x"}},
+			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", Tracked: &branch.Row{BranchName: "ABC-42@feat@x"}},
 		}
 		decisions := map[string]string{"ABC-42@feat@x": "force"}
 
@@ -245,8 +245,8 @@ func TestRunExecuteTracker(t *testing.T) {
 		if len(pr.forceCalls) != 1 || pr.forceCalls[0] != "ABC-42@feat@x" {
 			t.Fatalf("forceCalls = %v", pr.forceCalls)
 		}
-		if flip.flipped["ABC-42@feat@x"] != store.StatusIDClosed {
-			t.Fatalf("flipped[ABC-42] = %d, want %d", flip.flipped["ABC-42@feat@x"], store.StatusIDClosed)
+		if flip.flipped["ABC-42@feat@x"] != branch.StatusClosed {
+			t.Fatalf("flipped[ABC-42] = %q, want %q", flip.flipped["ABC-42@feat@x"], branch.StatusClosed)
 		}
 	})
 
@@ -254,7 +254,7 @@ func TestRunExecuteTracker(t *testing.T) {
 		pr := &trackingFakePruner{}
 		flip := &statusFlipRecorder{}
 		cands := []trackerCandidate{
-			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", StoreRow: &store.BranchRow{BranchName: "ABC-42@feat@x"}},
+			{BranchName: "ABC-42@feat@x", IssueID: "ABC-42", Tracked: &branch.Row{BranchName: "ABC-42@feat@x"}},
 		}
 		decisions := map[string]string{"ABC-42@feat@x": "skip"}
 
@@ -264,16 +264,16 @@ func TestRunExecuteTracker(t *testing.T) {
 		if len(pr.safeCalls)+len(pr.forceCalls) != 0 {
 			t.Fatalf("expected no delete calls; safe=%v force=%v", pr.safeCalls, pr.forceCalls)
 		}
-		if flip.flipped["ABC-42@feat@x"] != store.StatusIDClosed {
-			t.Fatalf("flipped[ABC-42] = %d, want %d", flip.flipped["ABC-42@feat@x"], store.StatusIDClosed)
+		if flip.flipped["ABC-42@feat@x"] != branch.StatusClosed {
+			t.Fatalf("flipped[ABC-42] = %q, want %q", flip.flipped["ABC-42@feat@x"], branch.StatusClosed)
 		}
 	})
 
-	t.Run("candidate with nil StoreRow: ref action only, no store call", func(t *testing.T) {
+	t.Run("candidate with nil Tracked: ref action only, no store call", func(t *testing.T) {
 		pr := &trackingFakePruner{}
 		flip := &statusFlipRecorder{}
 		cands := []trackerCandidate{
-			{BranchName: "rogue@feat@x", IssueID: "rogue", StoreRow: nil},
+			{BranchName: "rogue@feat@x", IssueID: "rogue", Tracked: nil},
 		}
 		decisions := map[string]string{"rogue@feat@x": "force"}
 

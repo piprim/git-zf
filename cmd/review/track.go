@@ -3,12 +3,10 @@ package review
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/config"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
@@ -18,9 +16,9 @@ import (
 func TrackCmd(appConfig *config.AppConfig) *cobra.Command {
 	return &cobra.Command{
 		Use:   "track",
-		Short: "Register the current branch in the git-zf store (for branches created with plain git checkout)",
+		Short: "Track the current branch with git-zf (for branches created with plain git checkout)",
 		Long: `Register the current branch without creating a new branch: a feature branch
-goes into the git-zf store, a review branch records you as the reviewer.
+is recorded as in progress, a review branch records you as the reviewer.
 
 Use this when you checked out a branch with plain 'git checkout' instead of
 'git zf issue start' or 'git zf review start'.
@@ -57,30 +55,31 @@ func runTrack(ctx context.Context, deps reviewDeps) error {
 		currentBranch)
 }
 
-// runTrackDeveloper registers a feature branch that was checked out with plain
-// git into the git-zf store as an in_progress issue branch.
+// runTrackDeveloper records a feature branch that was checked out with plain
+// git as an in-progress branch of its issue.
 func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, b *branch.Branch) error {
-	// Idempotency: check if already tracked.
-	rows, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
-	if err != nil {
+	// Idempotency: check if already tracked. The chains are fetched first:
+	// another clone may have tracked or closed the branch. A closed branch is
+	// tracked again below: checking it out and running track is how its owner
+	// reopens a branch that a prune closed.
+	fetchBranchRefs(ctx, deps)
+	if _, e, err := branch.Find(ctx, deps.client, branchName); err != nil {
 		return fmt.Errorf("list branches: %w", err)
-	}
-	for _, r := range rows {
-		if r.BranchName == branchName {
-			fmt.Fprintf(deps.client.IO().Out,
-				"Branch %q is already tracked (status: %s).\n", branchName, r.Status)
-			return nil
-		}
+	} else if e != nil && e.Status != branch.StatusClosed {
+		fmt.Fprintf(deps.client.IO().Out,
+			"Branch %q is already tracked (status: %s).\n", branchName, e.Status)
+
+		return nil
 	}
 
-	// Derive a human-readable title from the slug (replace hyphens with spaces).
-	title := strings.ReplaceAll(b.Title(), "-", " ")
-
-	if err := deps.store.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: b.IssueID(), Title: title},
-		&store.Branch{Name: branchName, Type: b.Type(), StatusID: store.StatusIDInProgress},
-	); err != nil {
-		return fmt.Errorf("register branch in store: %w", err)
+	// The title is derived from the branch name. A ref in the old blob format
+	// is replaced, keeping its parent and tracker type.
+	op := &branch.Op{Branch: branchName, BranchType: b.Type(), Title: branch.TitleFromName(branchName)}
+	if err := branch.Start(ctx, deps.client, b.IssueID(), op); err != nil {
+		return fmt.Errorf("track branch: %w", err)
+	}
+	if err := branch.Push(ctx, deps.client, b.IssueID()); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: push branch ref: %v\n", err)
 	}
 
 	// Warn if a review ref already exists for this issue (branch is locked).

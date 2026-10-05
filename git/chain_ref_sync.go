@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -276,7 +277,7 @@ func (c *Client) ConfigureChainFetch(ctx context.Context) ([]string, error) {
 		existing, _ := c.output(ctx, "config", "--get-all", key)
 		configured := strings.Split(existing, "\n")
 
-		for _, ns := range []ChainRefs{ReviewRefs, IssueRefs} {
+		for _, ns := range []ChainRefs{ReviewRefs, IssueRefs, BranchRefs} {
 			spec := ns.FetchRefspec(remote)
 			if slices.Contains(configured, spec) {
 				continue
@@ -288,4 +289,67 @@ func (c *Client) ConfigureChainFetch(ctx context.Context) ([]string, error) {
 	}
 
 	return remotes, nil
+}
+
+// FetchChains fetches the remote's chains of the family and reconciles the
+// local ones with them, merging diverged chains with a commit that carries
+// mergePayload. silent prints nothing, for use in hooks. No-op without a
+// remote.
+//
+// A failed fetch still reconciles: the tracking refs may hold a chain that a
+// plain `git fetch` brought and no git-zf command has loaded yet. The fetch
+// error is returned after.
+func (c *Client) FetchChains(ctx context.Context, ns ChainRefs, mergePayload []byte, silent bool) error {
+	fetchErr := c.FetchChainRefs(ctx, ns, silent)
+	if fetchErr != nil {
+		fetchErr = fmt.Errorf("fetch %s: %w", ns.name, fetchErr)
+	}
+
+	if _, err := c.ReconcileChainRefs(ctx, ns, mergePayload); err != nil {
+		return errors.Join(fetchErr, fmt.Errorf("reconcile %s: %w", ns.name, err))
+	}
+
+	return fetchErr
+}
+
+// PushChain pushes chain id. A rejected push (someone pushed first) triggers
+// one fetch, merge and retry. No-op without a remote.
+func (c *Client) PushChain(ctx context.Context, ns ChainRefs, id string, mergePayload []byte) error {
+	firstErr := c.PushChainRef(ctx, ns, id)
+	if firstErr == nil {
+		return nil
+	}
+
+	if err := c.FetchChains(ctx, ns, mergePayload, false); err != nil {
+		return errors.Join(firstErr, err)
+	}
+
+	if err := c.PushChainRef(ctx, ns, id); err != nil {
+		return fmt.Errorf("push %s %s after merge: %w", ns.name, id, err)
+	}
+
+	return nil
+}
+
+// SyncChains fetches and reconciles every chain of the family, then pushes the
+// ones the remote does not have yet: an op whose push failed earlier goes out
+// here. No-op without a remote.
+func (c *Client) SyncChains(ctx context.Context, ns ChainRefs, mergePayload []byte) error {
+	if err := c.FetchChains(ctx, ns, mergePayload, false); err != nil {
+		return err
+	}
+
+	ids, err := c.UnpushedChainIDs(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("list unpushed %s: %w", ns.name, err)
+	}
+
+	var failed []error
+	for _, id := range ids {
+		if err := c.PushChain(ctx, ns, id, mergePayload); err != nil {
+			failed = append(failed, err)
+		}
+	}
+
+	return errors.Join(failed...)
 }

@@ -24,7 +24,7 @@ mise exec -- go build -o ./bin/git-zf .      # manual build
 #### Testing the close flow
 
 The close flow is end-to-end tested in `cmd/issue/close_e2e_test.go`. Tests
-construct a real on-disk repo, a seeded SQLite store, and the in-process
+construct a real on-disk repo, a seeded branch chain, and the in-process
 tracker fake at `tracker/fake/`, then drive the flow with a `scriptedPrompter`
 that returns canned answers instead of opening huh forms.
 
@@ -32,7 +32,7 @@ To exercise just the close-flow tests:
 
     mise exec -- go test ./cmd/issue/... -run "^TestClose_" -v
 
-When adding a new merge strategy or changing the merge/store/tracker
+When adding a new merge strategy or changing the merge/record/tracker
 sequencing, add a corresponding E2E test alongside the existing happy-path
 and failure-mode tests.
 
@@ -61,9 +61,11 @@ tests.
 ### Testing the prune flow
 
 The branch-prune flow is end-to-end tested in `cmd/branch/prune_e2e_test.go`.
-Tests construct a real on-disk repo + seeded store, then drive the flow with
-a `scriptedPrunePrompter` (canned confirm responses) or
-`autoConfirmPrunePrompter` (mirrors `--yes`).
+Tests construct a real on-disk repo + seeded branch chains, then drive the flow
+with a `scriptedPrunePrompter` (canned confirm responses) or
+`autoConfirmPrunePrompter` (mirrors `--yes`). `newPruneRigWithOrigin` adds a
+remote, for the rules that depend on it (a branch still on the remote, an
+unreachable remote).
 
 To exercise just the prune-flow tests:
 
@@ -73,6 +75,11 @@ For non-interactive use (CI, cron), pass `--yes` to skip the confirmation
 prompt:
 
     git zf branch prune --yes
+
+`branch close <branch-name>` (one branch, no confirmation) is tested in
+`cmd/branch/close_e2e_test.go` on the same rig:
+
+    mise exec -- go test ./cmd/branch/... -run "^TestRunCloseBranch|^TestCloseCmd" -v
 
 
 ### Testing the repo issues
@@ -99,6 +106,33 @@ The start, close and list integrations live next to their flows:
 When adding an op type, add its constant and its `Fold` case in
 `issue/record.go` with a table case in `TestFold`. Unknown types must keep
 being skipped: an older binary reads refs written by a newer one.
+
+### Testing the branch chains
+
+Tracked branches live in the repository (`refs/zf/branches/<slug>`, one chain
+per issue): there is no local database. They share the chain plumbing of the
+issues and reviews (`git.BranchRefs`) and are tested at the same levels:
+
+- `branch/record_test.go` — the fold (pure, no git): `TestFold`, `TestRows`.
+- `git/chain_ref_test.go` — `ReadAllChains` (every chain in three git
+  processes), the leased delete of a legacy blob.
+- `branch/repo_test.go` — `Start`, `SetStatus`, `Load`, `List`, `Find`, `Sync`,
+  two clones starting variants offline, legacy blobs.
+- the start, close, prune and review E2E suites — the commands.
+
+    mise exec -- go test ./branch/... -v
+    mise exec -- go test ./git/... -run "TestChainRef_ReadAllChains|TestChainRef_DeleteLease" -v
+
+Seed a tracked branch in a test with `branchtest.Seed` (never by writing refs by
+hand); `branchtest.Amend` fills the parent, tracker type or issue ID of a branch
+a rig already seeded. A git client caches its remote name: add the remote
+before the first seed.
+
+When adding a branch op type, add its constant and its case in `apply`
+(`branch/record.go`) with a table case in `TestFold`. Unknown types must keep
+being skipped. A command that offers a choice of in-progress branches calls
+`branch.Fetch` first; a hook or `commit` never does, and finds its branch with
+`branch.Find`.
 
 ### Testing the review chains
 
@@ -168,11 +202,12 @@ suite green — it is the regression net for the extraction.
 
 ## Architecture
 
-Three packages under `github.com/piprim/git-zf`:
+Main packages under `github.com/piprim/git-zf`:
 
 - **`cmd/`** — Cobra CLI entry point. `root.go` wires config loading (Viper) and the other commands.
 - **`tui/`** — TUI form logic using `github.com/charmbracelet/huh`.
-- **`git/`** — Thin wrappers around `go-git`.
+- **`git/`** — Thin wrappers around `go-git` and the git CLI, including the commit-chain plumbing (`chain_ref.go`).
+- **`branch/`**, **`issue/`**, **`review/`** — what git-zf records in the repository, one chain family each under `refs/zf/`: a pure fold (`record.go`) and the git glue (`repo.go`). There is no database.
 
 ## Configuration
 

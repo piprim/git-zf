@@ -1,12 +1,12 @@
 package issueflow
 
 import (
-	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 )
 
 func TestWorktreePath(t *testing.T) {
@@ -49,50 +49,46 @@ func TestWorktreePath(t *testing.T) {
 	})
 }
 
-// TestResolveParentSlug_fromLinkedWorktree guards the store location used by
-// the parent lookup: a client opened inside a linked worktree must read the
-// repo's shared store, not an empty per-worktree one. The base branch name is
-// deliberately not a git-zf name so the branch.Parse fallback cannot mask a
-// wrong store path.
-func TestResolveParentSlug_fromLinkedWorktree(t *testing.T) {
-	mainDir := t.TempDir()
-	runGit := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	runGit(mainDir, "init", "-q", "-b", "main")
-	runGit(mainDir, "config", "user.name", "Test")
-	runGit(mainDir, "config", "user.email", "test@example.com")
-	runGit(mainDir, "commit", "-q", "--allow-empty", "-m", "init")
-	runGit(mainDir, "branch", "integration", "main")
+func TestResolveParentSlug(t *testing.T) {
+	t.Parallel()
 
-	mainStore, err := store.Open(t.Context(), filepath.Join(mainDir, ".git"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+	for base, want := range map[string]string{
+		"7@feat@big-thing":    "7",
+		"7@feat@big-thing@v2": "7",
+		"main":                "",
+		"7@review":            "",
+	} {
+		t.Run("base "+base, func(t *testing.T) {
+			t.Parallel()
+
+			if got := resolveParentSlug(base); got != want {
+				t.Errorf("resolveParentSlug(%q) = %q, want %q", base, got, want)
+			}
+		})
 	}
-	if err := mainStore.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "PARENT-1", Title: "Parent"},
-		&store.Branch{Name: "integration", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	_ = mainStore.Close()
+}
+
+// TestBranchChain_fromLinkedWorktree guards what replaced the shared store: a
+// client opened inside a linked worktree reads the chains of the repository.
+func TestBranchChain_fromLinkedWorktree(t *testing.T) {
+	t.Parallel()
+
+	main, run := newChainRepo(t, "")
+	run("branch", "7@feat@big", "main")
+	branchtest.Seed(t, main, branch.Op{Branch: "7@feat@big", Title: "Big"}, branch.StatusInProgress)
 
 	wtDir := filepath.Join(t.TempDir(), "repo--wt")
-	runGit(mainDir, "worktree", "add", "-q", "-b", "wt-branch", wtDir, "main")
+	run("worktree", "add", "-q", "-b", "wt-branch", wtDir, "main")
 
 	wtClient, err := git.NewClientAt(nil, wtDir)
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}
 
-	t.Run("parent slug resolved through the shared store", func(t *testing.T) {
-		if got := resolveParentSlug(t.Context(), wtClient, "integration"); got != "PARENT-1" {
-			t.Fatalf("resolveParentSlug = %q, want PARENT-1", got)
+	t.Run("the worktree sees the branch tracked from the main tree", func(t *testing.T) {
+		st, e, err := branch.Find(t.Context(), wtClient, "7@feat@big")
+		if err != nil || st == nil || e == nil || st.Title != "Big" {
+			t.Fatalf("Find = %+v, %+v, %v", st, e, err)
 		}
 	})
 }

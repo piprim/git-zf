@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
-	"time"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
@@ -16,7 +16,6 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
 )
@@ -25,7 +24,6 @@ import (
 // Production code builds it via buildCloseDeps; tests inject directly.
 type closeDeps struct {
 	client  *git.Client
-	store   *store.Store
 	cfg     *config.AppConfig
 	tracker tracker.Tracker // nil ⇒ no tracker update will be attempted
 
@@ -53,25 +51,16 @@ type closeDeps struct {
 }
 
 // buildCloseDeps constructs the production closeDeps from a cobra command.
-// Returns an error if the repo cannot be opened or the store cannot be
-// initialised. When cfg.IssueTracker.Type == "" the returned deps.tracker is
+// Returns an error if the repo cannot be opened. When cfg.IssueTracker.Type == "" the returned deps.tracker is
 // nil (runClose treats that as "skip tracker update").
 func buildCloseDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConfig) (closeDeps, error) {
-	s, err := store.OpenRepo(ctx)
-	if err != nil {
-		return closeDeps{}, fmt.Errorf("failed to get store: %w", err)
-	}
-
 	client, invokedFrom, err := cmdutil.NewMainClientForCmd(cmd, cfg)
 	if err != nil {
-		_ = s.Close()
-
 		return closeDeps{}, err
 	}
 
 	deps := closeDeps{
 		client:        client,
-		store:         s,
 		cfg:           cfg,
 		invokedFrom:   invokedFrom,
 		invokedBranch: invokedBranchFor(ctx, client, invokedFrom),
@@ -138,9 +127,9 @@ var ErrApprovalNotSigned = errors.New("no verified approval covers the branch")
 func (i Issue) getCloseCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "close",
-		Short: "Close an issue (merge branch, update store and tracker)",
+		Short: "Close an issue (merge branch, record it, update the tracker)",
 		Long: `Pick an in-progress branch, merge it into the base branch (rebase, squash, or classic),
-update the local store, update the remote tracker, then optionally delete the local branch.`,
+record the branch as merged, update the remote tracker, then optionally delete the local branch.`,
 		RunE: i.closeRunE,
 	}
 
@@ -159,18 +148,16 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = deps.store.Close() }()
-
 	// Tolerant read: the `git zf issue` menu dispatches here with the parent
 	// command, which has no --base flag.
 	deps.baseOverride = cmdutil.StringFlag(cmd, "base")
 	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
 	deps.pushConfirm = pushflow.NewHuhConfirm()
 
-	return runClose(ctx, deps, newHuhPrompter(deps.client, deps.store, i.appConfig))
+	return runClose(ctx, deps, newHuhPrompter(deps.client, i.appConfig))
 }
 
-// runClose runs the full merge → store → tracker → delete-branch pipeline
+// runClose runs the full merge → record → tracker → delete-branch pipeline
 // without opening any huh forms directly. All user-facing decisions are
 // resolved by prompter. Used by both closeRunE (production) and the E2E
 // tests (with a scripted prompter).
@@ -181,7 +168,7 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 //
 // Unexported because closeDeps is unexported (no cross-package caller).
 func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
-	picked, err := getPickedBranch(ctx, deps.store, deps.client, deps.invokedBranch, prompter)
+	picked, err := getPickedBranch(ctx, deps.client, deps.invokedBranch, prompter)
 	if err != nil {
 		return err
 	}
@@ -190,19 +177,13 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return nil
 	}
 
-	// A ref-derived pick (reviewer/teammate closing a branch they never started)
-	// has IssueID == 0: materialize the feature branch from origin so the rest
-	// of the flow — reviewPreflight and the merge both need a local feature
-	// branch — behaves exactly as for a locally-started branch. Store tracking
-	// is deferred until the merge commit lands (see TrackCandidate below) so an
-	// aborted close inserts no spurious in-progress rows.
-	createdBranch := false
-	if picked.IssueID == 0 {
-		created, err := issueflow.MaterializeBranch(ctx, deps.client, *picked)
-		if err != nil {
-			return err
-		}
-		createdBranch = created
+	// A branch started in another clone (reviewer or teammate closing a branch
+	// they never checked out) may exist only on the remote: materialize it so
+	// the rest of the flow, reviewPreflight and the merge, behaves exactly as
+	// for a locally-started branch.
+	createdBranch, err := issueflow.MaterializeBranch(ctx, deps.client, picked.BranchName)
+	if err != nil {
+		return err //nolint:wrapcheck // already names the branch
 	}
 
 	// Roll back the just-materialized branch when the close ends before the
@@ -255,7 +236,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	// Smart-default merge target, pre-selected in the picker: the configured
 	// base (or DefaultBaseBranch), redirected to the parent integration branch
 	// when the picked issue has a parent.
-	base, err := issueflow.ResolveParentBranch(ctx, deps.store, deps.client, picked.IssueSlug, deps.cfg.Branch.Base)
+	base, err := issueflow.ResolveParentBranch(ctx, deps.client, picked.IssueSlug, deps.cfg.Branch.Base)
 	if err != nil {
 		return err
 	}
@@ -266,19 +247,12 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	// Parent issue: block close until all children are merged. A child closed
-	// in a sibling clone (e.g. Bob closed X.2 in his repo) was already marked
-	// merged from its branch ref by getPickedBranch (ReconcileMergedFromRefs).
-	if allDone, err := deps.store.ChildrenAllMerged(ctx, picked.IssueSlug); err != nil {
+	// in a sibling clone was fetched with the chains by getPickedBranch.
+	if open, err := openSubTasks(ctx, deps.client, picked.IssueSlug); err != nil {
 		return fmt.Errorf("check children: %w", err)
-	} else if !allDone {
-		children, listErr := deps.store.ListChildIssues(ctx, picked.IssueSlug)
-		if listErr != nil {
-			format := "issue %q has open sub-tasks (list unavailable: %w) — close all sub-tasks before closing the parent"
-			return fmt.Errorf(format, picked.IssueSlug, listErr)
-		}
-
+	} else if len(open) > 0 {
 		return fmt.Errorf("issue %q has open sub-tasks: %v — close all sub-tasks before closing the parent",
-			picked.IssueSlug, children)
+			picked.IssueSlug, open)
 	}
 
 	// The issue-flavored commit-message prefill is the one thing the shared
@@ -303,11 +277,9 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	if res.FastForwardDeferred {
-		// The commit landed on the feature branch — keep it, and track the
-		// ref-derived candidate so the store mirrors a locally-started
-		// branch awaiting its manual fast-forward.
+		// The commit landed on the feature branch: keep it, awaiting its
+		// manual fast-forward.
 		mergeCommitted = true
-		picked = trackPickedCandidate(ctx, deps, picked)
 
 		return nil
 	}
@@ -318,12 +290,9 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return nil
 	}
 
-	// The merge commit landed — track the ref-derived candidate now (deferred
-	// from the pick) so updateClosedStatus below has a real IssueID to mark
-	// merged. Failures past this point are non-fatal: the merge is committed,
-	// so warn and continue like the rest of the post-merge bookkeeping.
+	// The merge commit landed. Failures past this point are non-fatal: warn
+	// and continue.
 	mergeCommitted = true
-	picked = trackPickedCandidate(ctx, deps, picked)
 
 	updateClosedStatus(ctx, deps, picked, prompter)
 
@@ -345,22 +314,26 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	return proposeClosePush(ctx, deps, base)
 }
 
-// trackPickedCandidate promotes a ref-derived pick (IssueID == 0) into tracked
-// store rows and returns the row carrying the real IssueID. Called only once
-// the merge commit has landed, so a tracking failure is a warning, not an
-// abort — picked is returned unchanged, the operator can re-track manually,
-// and updateClosedStatus degrades to per-step warnings on the untracked row.
-// No-op for picks that were already tracked (TrackCandidate returns them
-// unchanged).
-func trackPickedCandidate(ctx context.Context, deps closeDeps, picked *store.BranchRow) *store.BranchRow {
-	promoted, err := issueflow.TrackCandidate(ctx, deps.store, deps.client, *picked)
+// openSubTasks returns the slugs of the sub-tasks of slug that are not done: a
+// child issue is done when every one of its branches is merged.
+func openSubTasks(ctx context.Context, client *git.Client, slug string) ([]string, error) {
+	states, _, err := branch.List(ctx, client)
 	if err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: track branch %q: %v\n", picked.BranchName, err)
-
-		return picked
+		return nil, fmt.Errorf("list branch refs: %w", err)
 	}
 
-	return &promoted
+	var (
+		open     []string
+		children = branch.Children(states, slug)
+	)
+	for i := range children {
+		notMerged := func(e branch.Entry) bool { return e.Status != branch.StatusMerged }
+		if slices.ContainsFunc(children[i].Entries, notMerged) {
+			open = append(open, children[i].Slug)
+		}
+	}
+
+	return open, nil
 }
 
 // chooseMergeTarget refines the smart-default base into the final merge target.
@@ -371,7 +344,7 @@ func trackPickedCandidate(ctx context.Context, deps closeDeps, picked *store.Bra
 func chooseMergeTarget(
 	ctx context.Context,
 	deps closeDeps,
-	picked *store.BranchRow,
+	picked *branch.Row,
 	defaultBase string,
 	prompter ClosePrompter) (string, error) {
 	if deps.baseOverride != "" {
@@ -471,12 +444,11 @@ func baseBranchResolves(c *git.Client, name string) (bool, error) {
 // reviewer commits if the close subsequently aborts and rolls back the
 // feature branch.
 //
-// The git ref (refs/zf/reviews/<IssueID>) is the source of truth. The local
-// store is a cache that may lag behind the reviewer's machine. reviewPreflight
-// always syncs and reads the chain first so the developer never has to run a
-// manual git fetch before closing.
+// The review chain (refs/zf/reviews/<IssueID>) is the only record of a
+// review. reviewPreflight always syncs and reads it first so the developer
+// never has to run a manual git fetch before closing.
 func reviewPreflight(
-	ctx context.Context, deps closeDeps, picked *store.BranchRow, src *git.Client,
+	ctx context.Context, deps closeDeps, picked *branch.Row, src *git.Client,
 ) (func(context.Context), error) {
 	// The feature branch is checked out in src when it lives in a linked
 	// worktree; the fast-forward / merge below must run there.
@@ -629,7 +601,7 @@ func reviewPreflight(
 }
 
 // getPickedBranch returns (nil, nil) when there are no closable branches
-// (neither store-tracked in-progress rows nor ref-derived candidates).
+// (no tracked in-progress branch resolves locally or on the remote).
 //
 // invokedBranch is the branch checked out in the tree the command was typed in
 // (closeDeps.invokedBranch). It drives the picker's pre-selection and the
@@ -637,15 +609,14 @@ func reviewPreflight(
 // would name the wrong branch when the user is inside a linked worktree.
 func getPickedBranch(
 	ctx context.Context,
-	s *store.Store,
-	client *git.Client, invokedBranch string, prompter ClosePrompter) (*store.BranchRow, error) {
-	// A branch closed in a sibling clone carries Merged=true on its
-	// refs/zf/branches/<slug> ref (pushed by updateClosedStatus) but may still
-	// show in_progress in this clone's store. Reconcile from the refs first so
-	// the picker never offers a branch that was already closed elsewhere.
-	issueflow.ReconcileMergedFromRefs(ctx, s, client)
+	client *git.Client, invokedBranch string, prompter ClosePrompter) (*branch.Row, error) {
+	// A branch closed or started in a sibling clone is only on the remote's
+	// chains until they are fetched (best-effort).
+	if err := branch.Fetch(ctx, client); err != nil {
+		fmt.Fprintf(client.IO().Err, "warning: fetch branch refs: %v\n", err)
+	}
 
-	branches, err := issueflow.CloseCandidates(ctx, s, client)
+	branches, err := issueflow.CloseCandidates(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("list close candidates: %w", err)
 	}
@@ -656,8 +627,8 @@ func getPickedBranch(
 		// `issue close`. Any probe error degrades to the plain message.
 		if cur := invokedBranch; cur != "" {
 			// Only nudge when cur is genuinely NOT an issue branch. An issue
-			// branch with no store row and no ref (fresh local branch, or a
-			// reviewer clone pre-reconciliation) also lands here with zero
+			// branch git-zf does not track (a fresh local branch made with
+			// plain git) also lands here with zero
 			// candidates — but the nudge's claim would be false, and `branch
 			// merge` refuses issue branches on the same branch.Parse gate,
 			// bouncing the user straight back to `issue close`. Match that gate.
@@ -688,35 +659,27 @@ func getPickedBranch(
 	return picked, nil
 }
 
-// updateClosedStatus marks the branch as merged in the store and,
-// when a tracker is configured, drives the status-picker form. Every error
-// here is non-fatal — the merge already committed, so the operator must be
-// able to clean up store/tracker drift manually.
-func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.BranchRow, prompter ClosePrompter) {
-	now := time.Now()
-	if err := deps.store.UpdateBranchStatus(ctx, picked.BranchName, store.StatusIDMerged, &now); err != nil {
+// updateClosedStatus records the branch as merged on its chain and, when a
+// tracker is configured, drives the status-picker form. Every error here is
+// non-fatal: the merge already committed, so the operator must be able to
+// clean up drift manually.
+func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row, prompter ClosePrompter) {
+	// Pushed so sibling developers on other clones see this close. The same
+	// chain also carries the repo issue and the tracker origin used below.
+	if err := branch.SetStatus(ctx, deps.client, picked.IssueSlug, picked.BranchName, branch.StatusMerged); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: update branch status: %v\n", err)
+	} else if err := branch.Push(ctx, deps.client, picked.IssueSlug); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: push branch ref: %v\n", err)
 	}
 
-	// Stamp the branch ref as merged and push so sibling developers on other
-	// clones can detect this close without querying each other's stores. The
-	// same ref also carries the tracker-origin signal used to gate the prompt
-	// below, so read it once here.
-	existing, _ := deps.client.ReadBranchRef(ctx, picked.IssueSlug)
-	if existing != nil {
-		merged := *existing
-		merged.Merged = true
-		if _, err := deps.client.WriteBranchRef(ctx, picked.IssueSlug, merged); err == nil {
-			_ = deps.client.PushBranchRef(ctx, picked.IssueSlug)
-		}
-	}
+	existing, _ := branch.Load(ctx, deps.client, picked.IssueSlug)
 
 	closeRepoIssue(ctx, deps.client, existing)
 
 	// Only offer a tracker status update for tracker-born issues. The origin
-	// lives in the git object (BranchRef.TrackerType), not the local store, so
-	// this is correct on a reviewer's clone too. A manual issue (ref absent or
-	// TrackerType == "") must not prompt even when a tracker is configured.
+	// lives on the branch chain, so this is correct on a reviewer's clone too.
+	// A manual issue (TrackerType == "") must not prompt even when a tracker is
+	// configured.
 	if existing == nil || existing.TrackerType == "" {
 		return
 	}
@@ -732,7 +695,7 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *store.Branc
 func doDeleteBranch(
 	ctx context.Context,
 	c *git.Client,
-	picked *store.BranchRow,
+	picked *branch.Row,
 	strategy commit.MergeStrategy, prompter ClosePrompter, heldByWorktree bool) error {
 	shouldDelete, err := prompter.ConfirmDeleteBranch(ctx, picked.BranchName)
 	if err != nil {

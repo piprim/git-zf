@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
@@ -24,10 +24,9 @@ func (r Review) getSyncCmd() *cobra.Command {
 }
 
 func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
-	// A sub-task closed in a sibling clone carries Merged=true on its branch ref
-	// but may still show in_progress in this clone's store. Reconcile first so
-	// the picker never offers an already-closed sub-task.
-	issueflow.ReconcileMergedFromRefs(ctx, deps.store, deps.client)
+	// A sub-task closed in a sibling clone is still in progress here until the
+	// chains are fetched: do it first so the picker never offers it.
+	fetchBranchRefs(ctx, deps)
 
 	// Freshen refs so pending-review detection and parent drift see the
 	// current remote state (best-effort; sync must work offline too).
@@ -38,17 +37,17 @@ func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter Rev
 		_ = deps.client.Fetch(ctx)
 	}
 
-	all, err := deps.store.ListBranches(ctx, store.BranchStatusInProgress)
+	all, err := issueflow.LocalInProgress(ctx, deps.client)
 	if err != nil {
-		return fmt.Errorf("list branches: %w", err)
+		return err //nolint:wrapcheck // already says what was listed
 	}
 
 	// Candidates are branches with something to sync: a parent to drift
 	// against, or reviewer commits pending incorporation.
-	var candidates []store.BranchRow
+	var candidates []branch.Row
 	for _, b := range all {
-		parent, pErr := deps.store.GetParentIssue(ctx, b.IssueSlug)
-		hasParent := pErr == nil && parent != ""
+		st, pErr := branch.Load(ctx, deps.client, b.IssueSlug)
+		hasParent := pErr == nil && st != nil && st.Parent != ""
 		pending, _ := issueflow.PendingReviewCommits(ctx, deps.client, b.IssueSlug, b.BranchName)
 		if hasParent || pending != nil {
 			candidates = append(candidates, b)
@@ -72,7 +71,7 @@ func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter Rev
 }
 
 func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	childBranch, err := branchNameForIssue(ctx, deps.store, issueSlug)
+	childBranch, err := branchNameForIssue(ctx, deps.client, issueSlug)
 	if err != nil {
 		return err
 	}
@@ -93,9 +92,11 @@ func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error
 	}
 
 	// Step 2 — parent integration drift (sub-tasks only; unchanged semantics).
-	parentSlug, err := deps.store.GetParentIssue(ctx, issueSlug)
-	if err != nil {
+	parentSlug := ""
+	if st, err := branch.Load(ctx, deps.client, issueSlug); err != nil {
 		return fmt.Errorf("get parent issue: %w", err)
+	} else if st != nil {
+		parentSlug = st.Parent
 	}
 	if parentSlug == "" {
 		if pending == nil {
@@ -104,7 +105,15 @@ func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error
 		return nil
 	}
 
-	parentBranch, err := branchNameForIssue(ctx, deps.store, parentSlug)
+	// A parent still in the old blob format is not "no parent": the drift
+	// check would silently be skipped.
+	if _, err := branch.Load(ctx, deps.client, parentSlug); errors.Is(err, branch.ErrLegacyBranch) {
+		return fmt.Errorf(
+			"parent issue %q of %q is tracked in the old format.\n"+
+				"Check out its branch and run `git zf issue track`: %w", parentSlug, issueSlug, err)
+	}
+
+	parentBranch, err := branchNameForIssue(ctx, deps.client, parentSlug)
 	if err != nil {
 		return err
 	}

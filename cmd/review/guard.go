@@ -6,7 +6,6 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
@@ -23,11 +22,9 @@ func (r Review) getGuardCmd() *cobra.Command {
 			ctx := cmd.Context()
 			deps, err := buildReviewDeps(ctx, cmd, r.appConfig)
 			if err != nil {
-				// Fail-open: if store can't be opened, allow the push.
+				// Fail-open: if the repository can't be opened, allow the push.
 				return nil
 			}
-			defer func() { _ = deps.store.Close() }()
-
 			return runReviewGuard(ctx, deps, args[0])
 		},
 	}
@@ -39,22 +36,12 @@ func runReviewGuard(ctx context.Context, deps reviewDeps, branchName string) err
 		return nil
 	}
 
-	// Look up the branch in the store to get the issue slug.
-	branches, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
-	if err != nil {
-		return nil // fail-open on store error
+	// A branch git-zf does not track is not locked.
+	st, _, err := branch.Find(ctx, deps.client, branchName)
+	if err != nil || st == nil {
+		return nil // fail-open
 	}
-
-	var issueSlug string
-	for _, b := range branches {
-		if b.BranchName == branchName {
-			issueSlug = b.IssueSlug
-			break
-		}
-	}
-	if issueSlug == "" {
-		return nil // not a tracked branch — allow
-	}
+	issueSlug := st.Slug
 
 	// Fetch the latest decision for this issue before checking — the reviewer
 	// may have approved or rejected after the developer last fetched. Silent

@@ -8,21 +8,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker/fake"
 )
 
 type reviewE2ERig struct {
 	dir     string
 	client  *git.Client
-	store   *store.Store
 	cfg     *config.AppConfig
 	tracker *fake.Tracker // nil unless a test opts in via withFakeTracker
 	stdout  *bytes.Buffer
@@ -30,7 +29,7 @@ type reviewE2ERig struct {
 }
 
 func (r *reviewE2ERig) deps() reviewDeps {
-	d := reviewDeps{client: r.client, store: r.store, cfg: r.cfg}
+	d := reviewDeps{client: r.client, cfg: r.cfg}
 	// Only populate the tracker interface when a concrete fake is attached;
 	// assigning a nil *fake.Tracker would yield a non-nil interface and defeat
 	// the deps.tracker == nil guard in maybeUpdateTrackerStatus.
@@ -85,25 +84,13 @@ func newReviewE2ERig(t *testing.T) *reviewE2ERig {
 		t.Fatalf("NewClientAt: %v", err)
 	}
 
-	gitDir := filepath.Join(dir, ".git")
-	s, err := store.Open(t.Context(), gitDir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "77", Title: "my feature"},
-		&store.Branch{Name: "77@feat@my-feature", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed issue: %v", err)
-	}
+	branchtest.Seed(t, client, branch.Op{Branch: "77@feat@my-feature", Title: "my feature"}, branch.StatusInProgress)
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 
 	return &reviewE2ERig{
-		dir: dir, client: client, store: s, cfg: cfg,
+		dir: dir, client: client, cfg: cfg,
 		stdout: stdout, stderr: stderr,
 	}
 }
@@ -121,11 +108,11 @@ func TestReviewLifecycle_RequestApprove(t *testing.T) {
 		}
 
 		// The scripted prompter pre-selects the feature branch for issue "77".
-		branches, err := rig.store.ListBranches(ctx, store.BranchStatusInProgress)
+		branches, err := branch.ListRows(ctx, rig.client, branch.StatusInProgress)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
-		var picked store.BranchRow
+		var picked branch.Row
 		for _, b := range branches {
 			if b.IssueSlug == "77" {
 				picked = b
@@ -209,8 +196,8 @@ func TestReviewLifecycle_RequestReject(t *testing.T) {
 		if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "77@feat@my-feature"); err != nil {
 			t.Fatalf("checkout feature branch: %v", err)
 		}
-		branches, _ := rig.store.ListBranches(ctx, store.BranchStatusInProgress)
-		var picked store.BranchRow
+		branches, _ := branch.ListRows(ctx, rig.client, branch.StatusInProgress)
+		var picked branch.Row
 		for _, b := range branches {
 			if b.IssueSlug == "77" {
 				picked = b
@@ -227,8 +214,8 @@ func TestReviewLifecycle_RequestReject(t *testing.T) {
 	})
 
 	t.Run("second request increments round counter", func(t *testing.T) {
-		branches, _ := rig.store.ListBranches(ctx, store.BranchStatusInProgress)
-		var picked store.BranchRow
+		branches, _ := branch.ListRows(ctx, rig.client, branch.StatusInProgress)
+		var picked branch.Row
 		for _, b := range branches {
 			if b.IssueSlug == "77" {
 				picked = b
@@ -335,25 +322,13 @@ func newReviewE2ERigWithOrigin(t *testing.T) *reviewE2ERig {
 		t.Fatalf("NewClientAt: %v", err)
 	}
 
-	gitDir := filepath.Join(cloneDir, ".git")
-	s, err := store.Open(t.Context(), gitDir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "77", Title: "my feature"},
-		&store.Branch{Name: "77@feat@my-feature", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed issue: %v", err)
-	}
+	branchtest.Seed(t, client, branch.Op{Branch: "77@feat@my-feature", Title: "my feature"}, branch.StatusInProgress)
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 
 	return &reviewE2ERig{
-		dir: cloneDir, client: client, store: s, cfg: cfg,
+		dir: cloneDir, client: client, cfg: cfg,
 		stdout: stdout, stderr: stderr,
 	}
 }
@@ -417,8 +392,8 @@ func TestReviewRefPush_ReachesRemote(t *testing.T) {
 			t.Fatalf("checkout feature branch: %v", err)
 		}
 
-		branches, _ := rig.store.ListBranches(ctx, store.BranchStatusInProgress)
-		var picked store.BranchRow
+		branches, _ := branch.ListRows(ctx, rig.client, branch.StatusInProgress)
+		var picked branch.Row
 		for _, b := range branches {
 			if b.IssueSlug == "77" {
 				picked = b
@@ -444,7 +419,7 @@ func TestReviewRefPush_ReachesRemote(t *testing.T) {
 	})
 
 	t.Run("review approve pushes approved ref to remote", func(t *testing.T) {
-		p := &scriptedReviewPrompter{Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@feat@my-feature"}}
+		p := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"}}
 		if err := runReviewApproveInteractive(ctx, rig.deps(), p); err != nil {
 			t.Fatalf("runReviewApproveInteractive: %v", err)
 		}
@@ -492,8 +467,8 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 	if err := devRig.client.RunGitAt(ctx, devRig.dir, "checkout", "77@feat@my-feature"); err != nil {
 		t.Fatalf("dev checkout feature branch: %v", err)
 	}
-	branches, _ := devRig.store.ListBranches(ctx, store.BranchStatusInProgress)
-	var picked store.BranchRow
+	branches, _ := branch.ListRows(ctx, devRig.client, branch.StatusInProgress)
+	var picked branch.Row
 	for _, b := range branches {
 		if b.IssueSlug == "77" {
 			picked = b
@@ -531,16 +506,9 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 	}
 
 	// Reviewer's store is EMPTY — no InsertIssueWithBranch has been called.
-	reviewerGitDir := filepath.Join(reviewerDir, ".git")
-	reviewerStore, err := store.Open(ctx, reviewerGitDir)
-	if err != nil {
-		t.Fatalf("reviewer store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = reviewerStore.Close() })
 
 	reviewerDeps := reviewDeps{
 		client: reviewerClient,
-		store:  reviewerStore,
 		cfg:    &config.AppConfig{},
 	}
 
@@ -565,7 +533,7 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 
 	t.Run("review start succeeds on empty store after fetch", func(t *testing.T) {
 		reviewerStdout.Reset()
-		reviewPrompter := &scriptedReviewPrompter{Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@review"}}
+		reviewPrompter := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@review"}}
 		if err := runReviewStartInteractive(ctx, reviewerDeps, reviewPrompter); err != nil {
 			t.Fatalf("runReviewStartInteractive on empty store: %v", err)
 		}
@@ -611,8 +579,8 @@ func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 	if err := devRig.client.RunGitAt(ctx, devRig.dir, "checkout", "77@feat@my-feature"); err != nil {
 		t.Fatalf("checkout feature branch: %v", err)
 	}
-	branches, _ := devRig.store.ListBranches(ctx, store.BranchStatusInProgress)
-	var picked store.BranchRow
+	branches, _ := branch.ListRows(ctx, devRig.client, branch.StatusInProgress)
+	var picked branch.Row
 	for _, b := range branches {
 		if b.IssueSlug == "77" {
 			picked = b
@@ -671,16 +639,9 @@ func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reviewer NewClientAt: %v", err)
 	}
-	reviewerGitDir := filepath.Join(reviewerDir, ".git")
-	reviewerStore, err := store.Open(ctx, reviewerGitDir)
-	if err != nil {
-		t.Fatalf("reviewer store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = reviewerStore.Close() })
 
 	reviewerDeps := reviewDeps{
 		client: reviewerClient,
-		store:  reviewerStore,
 		cfg:    &config.AppConfig{},
 	}
 
@@ -731,8 +692,8 @@ func TestReviewApproveReject_WorkOnEmptyReviewerStore(t *testing.T) {
 	if err := devRig.client.RunGitAt(ctx, devRig.dir, "checkout", "77@feat@my-feature"); err != nil {
 		t.Fatalf("dev checkout: %v", err)
 	}
-	branches, _ := devRig.store.ListBranches(ctx, store.BranchStatusInProgress)
-	var picked store.BranchRow
+	branches, _ := branch.ListRows(ctx, devRig.client, branch.StatusInProgress)
+	var picked branch.Row
 	for _, b := range branches {
 		if b.IssueSlug == "77" {
 			picked = b
@@ -766,15 +727,8 @@ func TestReviewApproveReject_WorkOnEmptyReviewerStore(t *testing.T) {
 		t.Fatalf("reviewer NewClientAt: %v", err)
 	}
 
-	reviewerStore, err := store.Open(ctx, filepath.Join(reviewerDir, ".git"))
-	if err != nil {
-		t.Fatalf("reviewer store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = reviewerStore.Close() })
-
 	reviewerDeps := reviewDeps{
 		client: reviewerClient,
-		store:  reviewerStore,
 		cfg:    &config.AppConfig{},
 	}
 
@@ -785,7 +739,7 @@ func TestReviewApproveReject_WorkOnEmptyReviewerStore(t *testing.T) {
 
 	t.Run("review reject works on empty store after fetch", func(t *testing.T) {
 		rejectPrompter := &scriptedReviewPrompter{
-			Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
+			Branch: &branch.Row{IssueSlug: "77", BranchName: "77@review"},
 		}
 		if err := runReviewRejectInteractive(ctx, reviewerDeps, rejectPrompter, "", true); err != nil {
 			t.Fatalf("runReviewRejectInteractive on empty store: %v", err)
@@ -881,34 +835,14 @@ func TestReviewSync_UsesRemoteParentBase(t *testing.T) {
 		t.Fatalf("NewClientAt alice: %v", err)
 	}
 
-	aliceStore, err := store.Open(ctx, filepath.Join(aliceDir, ".git"))
-	if err != nil {
-		t.Fatalf("store.Open alice: %v", err)
-	}
-	t.Cleanup(func() { _ = aliceStore.Close() })
-
-	// Seed alice's store: parent X and child X.1 with relation.
-	if err := aliceStore.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X", Title: "big"},
-		&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed X: %v", err)
-	}
-	if err := aliceStore.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X.1", Title: "one"},
-		&store.Branch{Name: "X.1@feat@one", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed X.1: %v", err)
-	}
-	if err := aliceStore.InsertIssueRelation(ctx, "X", "X.1"); err != nil {
-		t.Fatalf("InsertIssueRelation: %v", err)
-	}
+	// Alice tracks parent X and its child X.1.
+	branchtest.Seed(t, aliceClient, branch.Op{Branch: "X@feat@big", Title: "big"}, branch.StatusInProgress)
+	branchtest.Seed(t, aliceClient, branch.Op{Branch: "X.1@feat@one", Title: "one", Parent: "X"}, branch.StatusInProgress)
 
 	aliceCfg := &config.AppConfig{}
 	aliceCfg.Branch.Base = "main"
 	aliceDeps := reviewDeps{
 		client: aliceClient,
-		store:  aliceStore,
 		cfg:    aliceCfg,
 	}
 
@@ -969,7 +903,7 @@ func TestTrack_Developer_RegistersUnknownBranch(t *testing.T) {
 	})
 
 	t.Run("branch appears in store as in_progress", func(t *testing.T) {
-		rows, listErr := rig.store.ListBranches(ctx, store.BranchStatusInProgress)
+		rows, listErr := branch.ListRows(ctx, rig.client, branch.StatusInProgress)
 		if listErr != nil {
 			t.Fatalf("ListBranches: %v", listErr)
 		}
@@ -1161,7 +1095,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 
-	newDeps := func(dir string) (reviewDeps, *store.Store) {
+	newDeps := func(dir string) reviewDeps {
 		t.Helper()
 		c, err := git.NewClientAt(&pkg.IO{
 			In:  bytes.NewReader(nil),
@@ -1173,12 +1107,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		}
 		cfg := &config.AppConfig{}
 		cfg.Branch.Base = "main"
-		s, err := store.Open(ctx, filepath.Join(dir, ".git"))
-		if err != nil {
-			t.Fatalf("store.Open %s: %v", filepath.Base(dir), err)
-		}
-		t.Cleanup(func() { _ = s.Close() })
-		return reviewDeps{client: c, store: s, cfg: cfg}, s
+		return reviewDeps{client: c, cfg: cfg}
 	}
 
 	// ── PHASE 0: infrastructure ───────────────────────────────────────────────
@@ -1215,56 +1144,42 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	run(aliceDir, "push", "origin", "X.2@feat@part-two")
 	run(aliceDir, "checkout", "main")
 
-	aliceDeps, aliceStore := newDeps(aliceDir)
+	aliceDeps := newDeps(aliceDir)
 
-	// Write branch refs with parent relationships and push.
-	ts := time.Now().UTC().Format(time.RFC3339)
-	for slug, ref := range map[string]git.BranchRef{
-		"X":   {IssueSlug: "X", BranchName: "X@feat@big-feature", CreatedAt: ts},
-		"X.1": {IssueSlug: "X.1", BranchName: "X.1@feat@part-one", ParentSlug: "X", CreatedAt: ts},
-		"X.2": {IssueSlug: "X.2", BranchName: "X.2@feat@part-two", ParentSlug: "X", CreatedAt: ts},
+	// Alice tracks the three branches, with the parent relationships, and
+	// pushes the chains.
+	for _, op := range []branch.Op{
+		{Branch: "X@feat@big-feature", Title: "big feature"},
+		{Branch: "X.1@feat@part-one", Title: "part one", Parent: "X"},
+		{Branch: "X.2@feat@part-two", Title: "part two", Parent: "X"},
 	} {
-		if _, err := aliceDeps.client.WriteBranchRef(ctx, slug, ref); err != nil {
-			t.Fatalf("WriteBranchRef %s: %v", slug, err)
-		}
-		if err := aliceDeps.client.PushBranchRef(ctx, slug); err != nil {
-			t.Fatalf("PushBranchRef %s: %v", slug, err)
-		}
+		branchtest.Seed(t, aliceDeps.client, op, branch.StatusInProgress)
+	}
+	if err := branch.Sync(ctx, aliceDeps.client); err != nil {
+		t.Fatalf("alice Sync branch refs: %v", err)
 	}
 
-	// Seed alice's store with all three issues and parent relations.
-	for _, row := range []struct {
-		issue  store.Issue
-		branch store.Branch
-	}{
-		{store.Issue{IDSlug: "X", Title: "big feature"}, store.Branch{Name: "X@feat@big-feature", Type: "feat", StatusID: store.StatusIDInProgress}},
-		{store.Issue{IDSlug: "X.1", Title: "part one"}, store.Branch{Name: "X.1@feat@part-one", Type: "feat", StatusID: store.StatusIDInProgress}},
-		{store.Issue{IDSlug: "X.2", Title: "part two"}, store.Branch{Name: "X.2@feat@part-two", Type: "feat", StatusID: store.StatusIDInProgress}},
-	} {
-		if err := aliceStore.InsertIssueWithBranch(ctx, &row.issue, &row.branch); err != nil {
-			t.Fatalf("alice InsertIssueWithBranch %s: %v", row.issue.IDSlug, err)
-		}
-	}
-	if err := aliceStore.InsertIssueRelation(ctx, "X", "X.1"); err != nil {
-		t.Fatalf("InsertIssueRelation X→X.1: %v", err)
-	}
-	if err := aliceStore.InsertIssueRelation(ctx, "X", "X.2"); err != nil {
-		t.Fatalf("InsertIssueRelation X→X.2: %v", err)
-	}
-
-	// Bob: clone, check out X.2, seed store.
+	// Bob: clone, check out X.2, fetch the branch chains.
 	run(filepath.Dir(bobDir), "clone", "--quiet", originDir, filepath.Base(bobDir))
 	run(bobDir, "config", "user.name", "Bob")
 	run(bobDir, "config", "user.email", "bob@example.com")
 	run(bobDir, "config", "commit.gpgsign", "false")
 	run(bobDir, "checkout", "-b", "X.2@feat@part-two", "origin/X.2@feat@part-two")
 	run(bobDir, "checkout", "main")
-	bobDeps, bobStore := newDeps(bobDir)
-	if err := bobStore.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X.2", Title: "part two"},
-		&store.Branch{Name: "X.2@feat@part-two", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("bob InsertIssueWithBranch: %v", err)
+	bobDeps := newDeps(bobDir)
+	if err := branch.Fetch(ctx, bobDeps.client); err != nil {
+		t.Fatalf("bob Fetch branch refs: %v", err)
+	}
+
+	// markMerged records a branch as merged and pushes it, as issue close does.
+	markMerged := func(deps reviewDeps, slug, name string) {
+		t.Helper()
+		if err := branch.SetStatus(ctx, deps.client, slug, name, branch.StatusMerged); err != nil {
+			t.Fatalf("SetStatus %s: %v", name, err)
+		}
+		if err := branch.Push(ctx, deps.client, slug); err != nil {
+			t.Fatalf("push branch ref %s: %v", slug, err)
+		}
 	}
 
 	// closeReview marks a review closed and pushes it, as issue close does.
@@ -1317,7 +1232,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	run(carolDir, "config", "user.name", "Carol")
 	run(carolDir, "config", "user.email", "carol@example.com")
 	run(carolDir, "config", "commit.gpgsign", "false")
-	carolDeps, _ := newDeps(carolDir)
+	carolDeps := newDeps(carolDir)
 	if err := reviewpkg.Fetch(ctx, carolDeps.client, false); err != nil {
 		t.Fatalf("carol Fetch reviews: %v", err)
 	}
@@ -1330,7 +1245,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	run(danDir, "config", "user.name", "Dan")
 	run(danDir, "config", "user.email", "dan@example.com")
 	run(danDir, "config", "commit.gpgsign", "false")
-	danDeps, _ := newDeps(danDir)
+	danDeps := newDeps(danDir)
 	if err := reviewpkg.Fetch(ctx, danDeps.client, false); err != nil {
 		t.Fatalf("dan Fetch reviews: %v", err)
 	}
@@ -1426,15 +1341,12 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		t.Fatalf("bob commit close X.2: %v", err)
 	}
 
-	mergedAt := time.Now()
-	if err := bobStore.UpdateBranchStatus(ctx, "X.2@feat@part-two", store.StatusIDMerged, &mergedAt); err != nil {
-		t.Fatalf("bob UpdateBranchStatus X.2: %v", err)
-	}
+	markMerged(bobDeps, "X.2", "X.2@feat@part-two")
 	run(bobDir, "push", "origin", "X@feat@big-feature")
 
-	// Sync alice's store for X.2 so ChildrenAllMerged("X") returns true in Phase 10.
-	if err := aliceStore.UpdateBranchStatus(ctx, "X.2@feat@part-two", store.StatusIDMerged, &mergedAt); err != nil {
-		t.Fatalf("alice UpdateBranchStatus X.2: %v", err)
+	// Alice learns that X.2 is merged by fetching the chains.
+	if err := branch.Fetch(ctx, aliceDeps.client); err != nil {
+		t.Fatalf("alice Fetch branch refs: %v", err)
 	}
 
 	// ── PHASE 8: Alice syncs X.1 (X.2 landed in parent) ─────────────────────
@@ -1466,10 +1378,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	}
 	closeReview(aliceDeps, "X.1")
 
-	mergedAt = time.Now()
-	if err := aliceStore.UpdateBranchStatus(ctx, "X.1@feat@part-one", store.StatusIDMerged, &mergedAt); err != nil {
-		t.Fatalf("alice UpdateBranchStatus X.1: %v", err)
-	}
+	markMerged(aliceDeps, "X.1", "X.1@feat@part-one")
 	run(aliceDir, "push", "origin", "X@feat@big-feature")
 
 	// ── PHASE 10: integration review on X, then close X into main ────────────
@@ -1496,12 +1405,16 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	if err := reviewpkg.Fetch(ctx, aliceDeps.client, false); err != nil {
 		t.Fatalf("alice Fetch reviews for X close: %v", err)
 	}
-	allMerged, err := aliceStore.ChildrenAllMerged(ctx, "X")
+	states, _, err := branch.List(ctx, aliceDeps.client)
 	if err != nil {
-		t.Fatalf("ChildrenAllMerged: %v", err)
+		t.Fatalf("List branch refs: %v", err)
 	}
-	if !allMerged {
-		t.Fatal("ChildrenAllMerged returned false before closing parent X")
+	for _, child := range branch.Children(states, "X") {
+		for _, e := range child.Entries {
+			if e.Status != branch.StatusMerged {
+				t.Fatalf("sub-task %s is %s before closing parent X", e.Name, e.Status)
+			}
+		}
 	}
 
 	run(aliceDir, "checkout", "main")
@@ -1513,10 +1426,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	}
 	closeReview(aliceDeps, "X")
 
-	mergedAt = time.Now()
-	if err := aliceStore.UpdateBranchStatus(ctx, "X@feat@big-feature", store.StatusIDMerged, &mergedAt); err != nil {
-		t.Fatalf("alice UpdateBranchStatus X: %v", err)
-	}
+	markMerged(aliceDeps, "X", "X@feat@big-feature")
 	run(aliceDir, "push", "origin", "main")
 
 	// ── ASSERTIONS ────────────────────────────────────────────────────────────
@@ -1541,7 +1451,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	})
 
 	t.Run("X.2 is marked merged in alice store", func(t *testing.T) {
-		merged, _ := aliceStore.ListBranches(ctx, store.BranchStatusMerged)
+		merged, _ := branch.ListRows(ctx, aliceDeps.client, branch.StatusMerged)
 		var found bool
 		for _, b := range merged {
 			if b.BranchName == "X.2@feat@part-two" {
@@ -1554,7 +1464,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	})
 
 	t.Run("X.1 is marked merged in alice store", func(t *testing.T) {
-		merged, _ := aliceStore.ListBranches(ctx, store.BranchStatusMerged)
+		merged, _ := branch.ListRows(ctx, aliceDeps.client, branch.StatusMerged)
 		var found bool
 		for _, b := range merged {
 			if b.BranchName == "X.1@feat@part-one" {
@@ -1567,7 +1477,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	})
 
 	t.Run("X integration branch is marked merged in alice store", func(t *testing.T) {
-		merged, _ := aliceStore.ListBranches(ctx, store.BranchStatusMerged)
+		merged, _ := branch.ListRows(ctx, aliceDeps.client, branch.StatusMerged)
 		var found bool
 		for _, b := range merged {
 			if b.BranchName == "X@feat@big-feature" {
@@ -1601,11 +1511,11 @@ func TestReviewRequest_ProposesFeatureBranchPush(t *testing.T) {
 		t.Fatalf("checkout feature branch: %v", err)
 	}
 
-	branches, err := rig.store.ListBranches(t.Context(), store.BranchStatusInProgress)
+	branches, err := branch.ListRows(t.Context(), rig.client, branch.StatusInProgress)
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
 	}
-	var picked store.BranchRow
+	var picked branch.Row
 	for _, b := range branches {
 		if b.IssueSlug == "77" {
 			picked = b

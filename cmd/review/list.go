@@ -21,8 +21,8 @@ func runReviewList(ctx context.Context, deps reviewDeps) error {
 		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 
-	// Read directly from git refs — works even when the reviewer's store is
-	// empty (fresh clone that never ran git zf issue start).
+	// Read from the review chains: works on a fresh clone that never ran git
+	// zf issue start.
 	states, warnings, err := reviewpkg.List(ctx, deps.client)
 	if err != nil {
 		return fmt.Errorf("list review refs: %w", err)

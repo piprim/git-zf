@@ -12,7 +12,6 @@ import (
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
@@ -79,19 +78,18 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 
 	hint := issueHintFromClient(client)
 
-	s, err := store.OpenRepo(cmd.Context())
+	history, err := commitpkg.OpenHistory(client)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return fmt.Errorf("open commit history: %w", err)
 	}
-	defer func() { _ = s.Close() }()
 
 	if !flags.NoVerify {
-		if err := guardPendingReview(cmd.Context(), client, s, newHuhReviewConfirm()); err != nil {
+		if err := guardPendingReview(cmd.Context(), client, newHuhReviewConfirm()); err != nil {
 			return err
 		}
 	}
 
-	hint.IssueSubject = issueTitleFromStore(cmd.Context(), s, hint.IssueID)
+	hint.IssueSubject = issueTitle(cmd.Context(), client, hint.IssueID)
 
 	prefill := hint.Prefill(c.appConfig.CommitMessage)
 
@@ -102,7 +100,7 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		entries = nil
 	}
 
-	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, s, prefill, entries)
+	msg, opts, err := commitpkg.FillOutForm(cmd.Context(), c.appConfig, defaults, history, prefill, entries)
 	if err != nil {
 		return fmt.Errorf("failed to fill form: %w", err)
 	}
@@ -111,12 +109,12 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 
-	return proposeCommitPush(cmd, client, s, c.appConfig)
+	return proposeCommitPush(cmd, client, c.appConfig)
 }
 
 // proposeCommitPush offers to push the current branch after a successful commit,
 // enriched (on a git-zf issue branch) with a merge-vs-parent preview.
-func proposeCommitPush(cmd *cobra.Command, client *git.Client, s *store.Store, cfg *config.AppConfig) error {
+func proposeCommitPush(cmd *cobra.Command, client *git.Client, cfg *config.AppConfig) error {
 	push, noPush := pushflow.ReadFlags(cmd)
 	skip, auto, err := pushflow.ResolveFlags(push, noPush, cfg.Push.Propose)
 	if err != nil {
@@ -128,7 +126,7 @@ func proposeCommitPush(cmd *cobra.Command, client *git.Client, s *store.Store, c
 		return nil // detached/unknown HEAD → nothing to offer
 	}
 
-	parent, includeMerge := resolveCommitMergeParent(cmd.Context(), client, s, branchName, cfg.Branch.Base)
+	parent, includeMerge := resolveCommitMergeParent(cmd.Context(), client, branchName, cfg.Branch.Base)
 
 	yes, _ := cmd.Flags().GetBool("yes")
 
@@ -150,14 +148,13 @@ func proposeCommitPush(cmd *cobra.Command, client *git.Client, s *store.Store, c
 func resolveCommitMergeParent(
 	ctx context.Context,
 	client *git.Client,
-	s *store.Store, currentBranch,
-	cfgBase string) (string, bool) {
+	currentBranch, cfgBase string) (string, bool) {
 	parsed, err := branch.Parse(currentBranch)
 	if err != nil {
 		return "", false // not a git-zf issue branch
 	}
 
-	parentBranch, err := issueflow.ResolveParentBranch(ctx, s, client, parsed.IssueID(), cfgBase)
+	parentBranch, err := issueflow.ResolveParentBranch(ctx, client, parsed.IssueID(), cfgBase)
 	if err != nil || parentBranch == "" || parentBranch == currentBranch {
 		return "", false
 	}
@@ -192,20 +189,20 @@ func issueHintFromClient(c *git.Client) commitpkg.IssueHint {
 	return commitpkg.IssueHint{IssueID: b.IssueID(), BranchType: b.Type()}
 }
 
-// issueTitleFromStore returns the stored issue title for slug, or "" when
-// slug is empty, no row matches, or the lookup fails — a missing title only
-// skips the body prefill and must never block a commit.
-func issueTitleFromStore(ctx context.Context, s *store.Store, slug string) string {
+// issueTitle returns the issue title recorded on slug's branch chain, or ""
+// when slug is empty, the issue is not tracked, or the lookup fails: a missing
+// title only skips the body prefill and must never block a commit.
+func issueTitle(ctx context.Context, c *git.Client, slug string) string {
 	if slug == "" {
 		return ""
 	}
 
-	rows, err := s.ListBranchesByIssueSlugs(ctx, []string{slug})
-	if err != nil {
+	st, err := branch.Load(ctx, c, slug)
+	if err != nil || st == nil {
 		slog.Debug("could not look up issue title", "slug", slug, "error", err)
 
 		return ""
 	}
 
-	return rows[slug].Title // missing key → zero row → ""
+	return st.Title
 }

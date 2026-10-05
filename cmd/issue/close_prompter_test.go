@@ -3,8 +3,8 @@ package issue
 import (
 	"context"
 
+	"github.com/piprim/git-zf/branch"
 	commitpkg "github.com/piprim/git-zf/commit"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -18,7 +18,7 @@ var _ ClosePrompter = (*scriptedPrompter)(nil)
 // strategy and don't care about the rest of the surface. Fields are public to
 // keep test setup readable (literal struct construction).
 type scriptedPrompter struct {
-	Branch        *store.BranchRow
+	Branch        *branch.Row
 	Strategy      commitpkg.MergeStrategy
 	Confirm       bool
 	Message       []byte
@@ -48,7 +48,7 @@ type scriptedPrompter struct {
 
 	// PickBranchSeen holds the branch list PickBranch was last offered. Tests
 	// assert on it to verify which branches the picker would have shown.
-	PickBranchSeen []store.BranchRow
+	PickBranchSeen []branch.Row
 
 	// PickBranchCurrent holds the pre-selection PickBranch was last given —
 	// the branch checked out in the tree the command was typed in.
@@ -56,8 +56,8 @@ type scriptedPrompter struct {
 }
 
 func (s *scriptedPrompter) PickBranch(
-	_ context.Context, branches []store.BranchRow, current string,
-) (*store.BranchRow, error) {
+	_ context.Context, branches []branch.Row, current string,
+) (*branch.Row, error) {
 	s.PickBranchSeen = branches
 	s.PickBranchCurrent = current
 

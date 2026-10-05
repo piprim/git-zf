@@ -7,16 +7,16 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"time"
+	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/issue"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tty"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
@@ -38,7 +38,7 @@ type listFlags struct {
 
 func (b Branch) GetRootCmd() *cobra.Command {
 	// The registration order is also the menu order.
-	subs := []*cobra.Command{listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd()}
+	subs := []*cobra.Command{b.listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd()}
 
 	cmd := &cobra.Command{
 		Use:   "branch",
@@ -48,11 +48,13 @@ func (b Branch) GetRootCmd() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(subs...)
+	// Not in the menu: it needs a branch name.
+	cmd.AddCommand(b.closeCmd())
 
 	return cmd
 }
 
-func listCmd() *cobra.Command {
+func (b Branch) listCmd() *cobra.Command {
 	var flags listFlags
 
 	cmd := &cobra.Command{
@@ -66,30 +68,28 @@ func listCmd() *cobra.Command {
 	f.BoolVar(&flags.jsonOut, "json", false, "print JSON array to stdout")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return listRunE(cmd, flags)
+		return b.listRunE(cmd, flags)
 	}
 
 	return cmd
 }
 
-func listRunE(cmd *cobra.Command, flags listFlags) error {
-	ctx := cmd.Context()
-	s, err := store.OpenRepo(ctx)
+func (b Branch) listRunE(cmd *cobra.Command, flags listFlags) error {
+	c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
 	if err != nil {
-		return fmt.Errorf("failed to get store: %w", err)
+		return err //nolint:wrapcheck // already names the cause
 	}
-	defer func() { _ = s.Close() }()
 
-	return runList(ctx, os.Stdout, s, flags)
+	return runList(cmd.Context(), os.Stdout, c, flags)
 }
 
 // runList executes the branch list logic. w receives stdout/non-TUI output.
 // When neither --json nor --stdout is set, runList runs the interactive TUI.
-func runList(ctx context.Context, w io.Writer, s *store.Store, flags listFlags) error {
-	queryStatus := toStoreStatus(flags.status)
+func runList(ctx context.Context, w io.Writer, c *git.Client, flags listFlags) error {
+	queryStatus := toBranchStatus(flags.status)
 
 	if flags.jsonOut {
-		rows, err := s.ListBranches(ctx, queryStatus)
+		rows, err := branch.ListRows(ctx, c, queryStatus)
 		if err != nil {
 			return fmt.Errorf("list branches: %w", err)
 		}
@@ -101,7 +101,7 @@ func runList(ctx context.Context, w io.Writer, s *store.Store, flags listFlags) 
 	}
 
 	if flags.stdout {
-		rows, err := s.ListBranches(ctx, queryStatus)
+		rows, err := branch.ListRows(ctx, c, queryStatus)
 		if err != nil {
 			return fmt.Errorf("list branches: %w", err)
 		}
@@ -122,9 +122,9 @@ func runList(ctx context.Context, w io.Writer, s *store.Store, flags listFlags) 
 		return fmt.Errorf("status filter: %w", err)
 	}
 
-	queryStatus = toStoreStatus(statusStr)
+	queryStatus = toBranchStatus(statusStr)
 
-	rows, err := s.ListBranches(ctx, queryStatus)
+	rows, err := branch.ListRows(ctx, c, queryStatus)
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
@@ -146,16 +146,16 @@ func runList(ctx context.Context, w io.Writer, s *store.Store, flags listFlags) 
 	return nil
 }
 
-func toStoreStatus(s string) store.BranchStatus {
+func toBranchStatus(s string) string {
 	switch s {
 	case "in_progress":
-		return store.BranchStatusInProgress
+		return branch.StatusInProgress
 	case "merged":
-		return store.BranchStatusMerged
+		return branch.StatusMerged
 	case "closed":
-		return store.BranchStatusClosed
+		return branch.StatusClosed
 	default:
-		return store.BranchStatusAll
+		return branch.StatusAll
 	}
 }
 
@@ -198,12 +198,17 @@ type pruneFlags struct {
 	dryRun bool
 	base   string
 	yes    bool // when true, skip the confirmation prompt (CI-friendly)
+	others bool // when true, also close vanished branches someone else started
 }
 
 // pruneResult holds branches categorised by prune action.
 type pruneResult struct {
-	toDelete []store.BranchRow // local ref gone — remove DB record
-	toMerge  []store.BranchRow // tip reachable from base — mark merged
+	toClose []branch.Row // gone locally and on the remote; someone else's only with --others
+	toMerge []branch.Row // tip reachable from base — mark merged
+	skipped []branch.Row // gone locally and on the remote, started by someone else
+	// remoteErr is why the remote's branches could not be listed. When set,
+	// nothing is closed: "gone on the remote" cannot be established.
+	remoteErr error
 }
 
 func (b Branch) pruneCmd() *cobra.Command {
@@ -211,15 +216,25 @@ func (b Branch) pruneCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Remove DB records for branches deleted or merged outside " + b.appConfig.ProgName,
-		Long: `Compare each in-progress branch in the store against the local refs and
-remove store rows whose branches are either gone or already merged into the
-base branch. Use --dry-run to preview, --yes to skip the confirm prompt.`,
+		Short: "Record branches merged or deleted outside " + b.appConfig.ProgName,
+		Long: `Compare each in-progress branch against the local and remote branches:
+a local branch already merged into the base is marked merged; a branch gone
+locally and on the remote is closed, when you started it. A branch that still
+exists on the remote, or that someone else started, is left alone.
+
+A branch someone else started and that exists nowhere may be work they have
+not pushed yet. When you know it is abandoned (its author left, or you changed
+your git name or email and it is yours), --others closes those too.
+'git zf issue track' on a closed branch reopens it.
+
+Use --dry-run to preview, --yes to skip the confirm prompt.`,
 	}
 
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "show what would be pruned without executing")
 	cmd.Flags().StringVar(&flags.base, "base", "", "base branch for merge detection (default: auto-detected)")
 	cmd.Flags().BoolVarP(&flags.yes, "yes", "y", false, "skip the confirmation prompt (CI-friendly)")
+	cmd.Flags().BoolVar(&flags.others, "others", false,
+		"also close branches gone everywhere that someone else started")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		return b.pruneRunE(cmd, flags)
@@ -230,12 +245,6 @@ base branch. Use --dry-run to preview, --yes to skip the confirm prompt.`,
 
 func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 	ctx := cmd.Context()
-	s, err := store.OpenRepo(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get store: %w", err)
-	}
-	defer func() { _ = s.Close() }()
-
 	c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
 	if err != nil {
 		return err
@@ -246,15 +255,15 @@ func (b Branch) pruneRunE(cmd *cobra.Command, flags pruneFlags) error {
 		prompter = &autoConfirmPrunePrompter{}
 	}
 
-	return runPrune(ctx, os.Stdout, s, c, prompter, flags)
+	return runPrune(ctx, os.Stdout, c, prompter, flags)
 }
 
 // runPrune executes the prune logic. w receives non-TUI output.
-// When flags.dryRun is true it prints the summary and returns without mutating
-// the store. Otherwise it delegates the destructive confirmation to prompter
-// (huh-driven in production, auto-confirm under --yes, scripted in tests) and
-// then calls executePrune.
-func runPrune(ctx context.Context, w io.Writer, s *store.Store, client *git.Client, prompter PrunePrompter, flags pruneFlags) error {
+// When flags.dryRun is true it prints the summary and returns without writing
+// anything. Otherwise it delegates the confirmation to prompter (huh-driven in
+// production, auto-confirm under --yes, scripted in tests) and then calls
+// executePrune.
+func runPrune(ctx context.Context, w io.Writer, client *git.Client, prompter PrunePrompter, flags pruneFlags) error {
 	base := flags.base
 	if base == "" {
 		var err error
@@ -264,43 +273,28 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, client *git.Clie
 		}
 	}
 
-	localNames, err := client.LocalBranchNames()
-	if err != nil {
-		return fmt.Errorf("list local branches: %w", err)
+	// What other clones started, merged or closed is on the remote's chains.
+	if err := branch.Fetch(ctx, client); err != nil {
+		fmt.Fprintf(client.IO().Err, "warning: fetch branch refs: %v\n", err)
 	}
 
-	localSet := make(map[string]struct{}, len(localNames))
-	for _, n := range localNames {
-		localSet[n] = struct{}{}
-	}
-
-	rows, err := s.ListBranches(ctx, store.BranchStatusInProgress)
+	rows, err := branch.ListRows(ctx, client, branch.StatusInProgress)
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
 
-	var result pruneResult
-
-	for i := range rows {
-		if _, exists := localSet[rows[i].BranchName]; !exists {
-			result.toDelete = append(result.toDelete, rows[i])
-
-			continue
-		}
-
-		merged, mergeErr := client.IsMergedInto(rows[i].BranchName, base)
-		if mergeErr != nil {
-			slog.Warn("merge check failed", "branch", rows[i].BranchName, "error", mergeErr)
-
-			continue
-		}
-
-		if merged {
-			result.toMerge = append(result.toMerge, rows[i])
-		}
+	result, err := classifyPrune(ctx, client, rows, base, flags.others)
+	if err != nil {
+		return err
 	}
 
-	if len(result.toDelete) == 0 && len(result.toMerge) == 0 {
+	if result.remoteErr != nil {
+		fmt.Fprintf(client.IO().Err,
+			"warning: cannot list the remote's branches, no branch will be closed: %v\n", result.remoteErr)
+	}
+
+	if len(result.toClose) == 0 && len(result.toMerge) == 0 {
+		renderPruneSkipped(w, result)
 		fmt.Fprintln(w, "Nothing to prune.")
 
 		return nil
@@ -312,7 +306,7 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, client *git.Clie
 		return nil
 	}
 
-	confirmed, err := prompter.ConfirmPrune(ctx, len(result.toDelete), len(result.toMerge))
+	confirmed, err := prompter.ConfirmPrune(ctx, len(result.toClose), len(result.toMerge))
 	if err != nil {
 		return fmt.Errorf("confirm prune: %w", err)
 	}
@@ -323,47 +317,128 @@ func runPrune(ctx context.Context, w io.Writer, s *store.Store, client *git.Clie
 		return nil
 	}
 
-	return executePrune(ctx, w, s, result)
+	return executePrune(ctx, w, client, result)
 }
 
-func renderPruneSummary(w io.Writer, result pruneResult) {
-	if len(result.toDelete) > 0 {
-		fmt.Fprintln(w, "Will delete (local ref gone):")
-		for i := range result.toDelete {
-			fmt.Fprintf(w, "  - %s\n", result.toDelete[i].BranchName)
+// classifyPrune sorts the in-progress rows by prune action.
+//
+// A branch present locally is marked merged when its tip is reachable from
+// base. A branch gone locally is closed only when it is gone on the remote
+// too and this clone's user started it: a branch someone else started may be
+// work that was never pushed (issue start pushes the record, not the branch),
+// or one its author deleted and will close. others lifts that guard, for
+// branches known to be abandoned.
+//
+// ponytail: merge detection looks at local branches only. A branch that exists
+// only on the remote is left to the clones that have it: a branch just pushed
+// with no commit of its own has the base's tip and would read as merged.
+func classifyPrune(
+	ctx context.Context, client *git.Client, rows []branch.Row, base string, others bool,
+) (pruneResult, error) {
+	var result pruneResult
+
+	localNames, err := client.LocalBranchNames()
+	if err != nil {
+		return result, fmt.Errorf("list local branches: %w", err)
+	}
+
+	var remote map[string]bool
+	remote, result.remoteErr = client.LsRemoteBranches(ctx)
+
+	me, _ := client.ConfigUser(ctx)
+
+	for i := range rows {
+		if slices.Contains(localNames, rows[i].BranchName) {
+			merged, mergeErr := client.IsMergedInto(rows[i].BranchName, base)
+			if mergeErr != nil {
+				slog.Warn("merge check failed", "branch", rows[i].BranchName, "error", mergeErr)
+
+				continue
+			}
+			if merged {
+				result.toMerge = append(result.toMerge, rows[i])
+			}
+
+			continue
+		}
+
+		switch {
+		case result.remoteErr != nil || remote[rows[i].BranchName]:
+			// Unknown, or still someone's work in progress.
+		case rows[i].Author != me && !others:
+			result.skipped = append(result.skipped, rows[i])
+		default:
+			result.toClose = append(result.toClose, rows[i])
 		}
 	}
 
-	if len(result.toMerge) == 0 {
+	return result, nil
+}
+
+// renderPruneSkipped lists the branches prune leaves to whoever started them.
+func renderPruneSkipped(w io.Writer, result pruneResult) {
+	if len(result.skipped) == 0 {
 		return
 	}
 
-	fmt.Fprintln(w, "Will mark merged (tip reachable from base):")
-	for i := range result.toMerge {
-		fmt.Fprintf(w, "  ~ %s\n", result.toMerge[i].BranchName)
+	fmt.Fprintln(w, "Skipped (gone locally and on the remote, started by someone else):")
+	for i := range result.skipped {
+		fmt.Fprintf(w, "  ? %s (%s)\n", result.skipped[i].BranchName, result.skipped[i].Author)
 	}
+	fmt.Fprintln(w, "If they are abandoned, close them with: git zf branch prune --others")
 }
 
-// executePrune performs the destructive store mutations gathered into result:
-// it deletes rows whose local ref is gone and marks the remaining ones merged.
-// The caller is responsible for obtaining confirmation beforehand. w receives
-// the final "Pruned: N deleted, M marked merged." success line.
-func executePrune(ctx context.Context, w io.Writer, s *store.Store, result pruneResult) error {
-	now := time.Now()
-
-	for i := range result.toDelete {
-		if err := s.DeleteBranch(ctx, result.toDelete[i].BranchName); err != nil {
-			return fmt.Errorf("delete %q: %w", result.toDelete[i].BranchName, err)
+func renderPruneSummary(w io.Writer, result pruneResult) {
+	if len(result.toClose) > 0 {
+		fmt.Fprintln(w, "Will close (gone locally and on the remote):")
+		for i := range result.toClose {
+			fmt.Fprintf(w, "  - %s (started by %s)\n", result.toClose[i].BranchName, result.toClose[i].Author)
 		}
 	}
 
-	for i := range result.toMerge {
-		if err := s.UpdateBranchStatus(ctx, result.toMerge[i].BranchName, store.StatusIDMerged, &now); err != nil {
-			return fmt.Errorf("mark merged %q: %w", result.toMerge[i].BranchName, err)
+	if len(result.toMerge) > 0 {
+		fmt.Fprintln(w, "Will mark merged (tip reachable from base):")
+		for i := range result.toMerge {
+			fmt.Fprintf(w, "  ~ %s\n", result.toMerge[i].BranchName)
 		}
 	}
 
-	fmt.Fprintf(w, "Pruned: %d deleted, %d marked merged.\n", len(result.toDelete), len(result.toMerge))
+	renderPruneSkipped(w, result)
+}
+
+// executePrune records the statuses gathered into result on the branch chains
+// and pushes them. The caller is responsible for obtaining confirmation
+// beforehand. w receives the final "Pruned: N closed, M marked merged." line.
+func executePrune(ctx context.Context, w io.Writer, client *git.Client, result pruneResult) error {
+	var slugs []string
+
+	set := func(rows []branch.Row, status string) error {
+		for i := range rows {
+			if err := branch.SetStatus(ctx, client, rows[i].IssueSlug, rows[i].BranchName, status); err != nil {
+				return fmt.Errorf("mark %q %s: %w", rows[i].BranchName, status, err)
+			}
+			if !slices.Contains(slugs, rows[i].IssueSlug) {
+				slugs = append(slugs, rows[i].IssueSlug)
+			}
+		}
+
+		return nil
+	}
+
+	if err := set(result.toClose, branch.StatusClosed); err != nil {
+		return err
+	}
+	if err := set(result.toMerge, branch.StatusMerged); err != nil {
+		return err
+	}
+
+	for _, slug := range slugs {
+		if err := branch.Push(ctx, client, slug); err != nil {
+			fmt.Fprintf(client.IO().Err, "warning: push branch ref: %v\n", err)
+		}
+	}
+
+	fmt.Fprintf(w, "Pruned: %d closed, %d marked merged.\n", len(result.toClose), len(result.toMerge))
 
 	return nil
 }

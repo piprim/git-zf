@@ -9,7 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -161,8 +162,8 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 	)
 }
 
-func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, error) {
-	projects := store.UniqueProjects(rows)
+func IssueTableModel(rows []issue.Row, initialStatus string) (tea.Model, error) {
+	projects := issue.UniqueProjects(rows)
 	includeProj := len(projects) > 1
 	cols := buildIssueTableColumns(rows)
 
@@ -198,12 +199,12 @@ func IssueTableModel(rows []store.IssueRow, initialStatus string) (tea.Model, er
 
 // buildIssueTableColumns returns the bubbletea columns. The Project column
 // appears only when rows span more than one project.
-func buildIssueTableColumns(rows []store.IssueRow) []btable.Column {
+func buildIssueTableColumns(rows []issue.Row) []btable.Column {
 	cols := []btable.Column{
 		{Title: "Issue ID", Width: issueTableColWidthIssueID},
 	}
 
-	if len(store.UniqueProjects(rows)) > 1 {
+	if len(issue.UniqueProjects(rows)) > 1 {
 		cols = append(cols, btable.Column{Title: "Project", Width: issueTableColWidthProject})
 	}
 
@@ -219,7 +220,7 @@ func buildIssueTableColumns(rows []store.IssueRow) []btable.Column {
 // matchesStatus reports whether r belongs under the status tab. A row backed
 // by a repo issue (State set) follows the issue's own state; any other row
 // falls back to its branch status.
-func matchesStatus(r *store.IssueRow, status string) bool {
+func matchesStatus(r *issue.Row, status string) bool {
 	switch status {
 	case statusAll:
 		return true
@@ -228,20 +229,20 @@ func matchesStatus(r *store.IssueRow, status string) bool {
 			return r.State == statusClosed
 		}
 
-		return r.Branch != nil && r.Branch.Status == store.BranchStatusMerged
+		return r.Branch != nil && r.Branch.Status == branch.StatusMerged
 	default: // "open" and anything else
 		if r.State != "" {
 			return r.State == statusOpen
 		}
 
-		return r.Branch == nil || r.Branch.Status == store.BranchStatusInProgress
+		return r.Branch == nil || r.Branch.Status == branch.StatusInProgress
 	}
 }
 
 // applyFilters builds the bubbletea table rows, keeping only those matching
 // status, project, and free-text search. includeProject controls whether the
 // Project cell is emitted (must match the table's column count).
-func applyFilters(rows []store.IssueRow, status, text, project string, includeProject bool) []btable.Row {
+func applyFilters(rows []issue.Row, status, text, project string, includeProject bool) []btable.Row {
 	q := strings.ToLower(text)
 	out := make([]btable.Row, 0, len(rows))
 
@@ -255,7 +256,7 @@ func applyFilters(rows []store.IssueRow, status, text, project string, includePr
 			continue
 		}
 
-		row := store.IssueRowCells(r, includeProject)
+		row := issue.RowCells(r, includeProject)
 
 		if q != "" {
 			matched := false
@@ -300,7 +301,7 @@ func projectPickerOptions(projects []string) []string {
 
 type issueTableModel struct {
 	table         btable.Model
-	allRows       []store.IssueRow
+	allRows       []issue.Row
 	filter        textinput.Model
 	filtering     bool
 	statusFilter  string
@@ -487,9 +488,9 @@ func (m *issueTableModel) View() string {
 // commands). The first row for which preselect reports true is pre-selected;
 // it falls back to the first row.
 func BranchPicker(
-	title string, rows []store.BranchRow, preselect func(*store.BranchRow) bool, selected *store.BranchRow,
+	title string, rows []branch.Row, preselect func(*branch.Row) bool, selected *branch.Row,
 ) *huh.Group {
-	opts := make([]huh.Option[store.BranchRow], len(rows))
+	opts := make([]huh.Option[branch.Row], len(rows))
 	for i := range rows {
 		label := fmt.Sprintf("[%s] %s (%s)", rows[i].IssueSlug, rows[i].Title, rows[i].BranchName)
 		opts[i] = huh.NewOption(label, rows[i])
@@ -505,7 +506,7 @@ func BranchPicker(
 	}
 
 	return huh.NewGroup(
-		huh.NewSelect[store.BranchRow]().
+		huh.NewSelect[branch.Row]().
 			Title(title).
 			Options(opts...).
 			Value(selected),

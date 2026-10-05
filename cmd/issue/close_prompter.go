@@ -5,12 +5,12 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/mergeflow"
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -23,7 +23,7 @@ import (
 type ClosePrompter interface {
 	// PickBranch is called only when at least one in-progress branch exists.
 	// A non-nil error indicates cancellation or an internal failure.
-	PickBranch(ctx context.Context, branches []store.BranchRow, current string) (*store.BranchRow, error)
+	PickBranch(ctx context.Context, branches []branch.Row, current string) (*branch.Row, error)
 
 	// PickStrategy is called only when MergeDryRun reports no conflicts.
 	PickStrategy(ctx context.Context) (commit.MergeStrategy, error)
@@ -72,15 +72,15 @@ type huhPrompter struct {
 	issueflow.HuhPickers // PickTrackerStatus, PickBaseBranch
 }
 
-func newHuhPrompter(client *git.Client, s *store.Store, cfg *config.AppConfig) *huhPrompter {
+func newHuhPrompter(client *git.Client, cfg *config.AppConfig) *huhPrompter {
 	return &huhPrompter{
-		HuhPrompter: mergeflow.HuhPrompter{Client: client, Store: s, Cfg: cfg, TargetLabel: "local base"},
+		HuhPrompter: mergeflow.HuhPrompter{Client: client, Cfg: cfg, TargetLabel: "local base"},
 	}
 }
 
-func (p *huhPrompter) PickBranch(ctx context.Context, branches []store.BranchRow, current string) (*store.BranchRow, error) {
-	var picked store.BranchRow
-	onCurrent := func(b *store.BranchRow) bool { return b.BranchName == current }
+func (p *huhPrompter) PickBranch(ctx context.Context, branches []branch.Row, current string) (*branch.Row, error) {
+	var picked branch.Row
+	onCurrent := func(b *branch.Row) bool { return b.BranchName == current }
 	if err := huh.NewForm(
 		tui.BranchPicker("Select branch to close:", branches, onCurrent, &picked)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("branch picker: %w", err)

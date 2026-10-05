@@ -3,12 +3,12 @@ package review
 import (
 	"context"
 
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/branch"
 )
 
 // scriptedReviewPrompter is the canned-response prompter used by review E2E tests.
 type scriptedReviewPrompter struct {
-	Branch           *store.BranchRow
+	Branch           *branch.Row
 	TrackerStatus    string
 	BranchErr        error
 	TrackerStatusErr error
@@ -21,7 +21,7 @@ type scriptedReviewPrompter struct {
 
 var _ ReviewPrompter = (*scriptedReviewPrompter)(nil)
 
-func (s *scriptedReviewPrompter) PickBranch(_ context.Context, _ string, _ []store.BranchRow, _ string) (*store.BranchRow, error) {
+func (s *scriptedReviewPrompter) PickBranch(_ context.Context, _ string, _ []branch.Row, _ string) (*branch.Row, error) {
 	if s.BranchErr != nil {
 		return nil, s.BranchErr
 	}

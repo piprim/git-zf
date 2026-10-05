@@ -14,7 +14,6 @@ import (
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -187,7 +186,7 @@ func assertFieldValue(t *testing.T, items []config.CommitItem, name, want string
 
 // fakeHistoryStore is a test double for historyStore.
 type fakeHistoryStore struct {
-	rows    []store.CommandHistoryRow
+	rows    []HistoryRow
 	err     error
 	inserts []map[string]any // captured InsertCommandHistory payloads
 }
@@ -200,7 +199,7 @@ func (f *fakeHistoryStore) InsertCommandHistory(_ context.Context, _ string, pay
 	return f.err
 }
 
-func (f *fakeHistoryStore) ListCommandHistory(_ context.Context, _ string, _ int) ([]store.CommandHistoryRow, error) {
+func (f *fakeHistoryStore) ListCommandHistory(_ context.Context, _ string, _ int) ([]HistoryRow, error) {
 	return f.rows, f.err
 }
 
@@ -270,8 +269,7 @@ func TestHistoryLabel(t *testing.T) {
 	t.Run("formats commit message and timestamp", func(t *testing.T) {
 		t.Parallel()
 
-		row := store.CommandHistoryRow{
-			ID:        1,
+		row := HistoryRow{
 			Payload:   []byte(`{"type":"feat","scope":"auth","subject":"add OAuth"}`),
 			CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
 		}
@@ -294,8 +292,7 @@ func TestHistoryLabel(t *testing.T) {
 		t.Parallel()
 
 		longSubject := strings.Repeat("x", 80)
-		row := store.CommandHistoryRow{
-			ID:        2,
+		row := HistoryRow{
 			Payload:   []byte(`{"type":"feat","subject":"` + longSubject + `"}`),
 			CreatedAt: time.Date(2026, 5, 10, 14, 32, 0, 0, time.UTC),
 		}
@@ -412,8 +409,8 @@ func TestFillOutForm(t *testing.T) {
 		})
 
 		hs := &fakeHistoryStore{
-			rows: []store.CommandHistoryRow{
-				{ID: 1, Payload: []byte(`{"type":"feat","subject":"prev"}`), CreatedAt: time.Now()},
+			rows: []HistoryRow{
+				{Payload: []byte(`{"type":"feat","subject":"prev"}`), CreatedAt: time.Now()},
 			},
 		}
 

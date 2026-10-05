@@ -12,7 +12,8 @@ func (i Issue) getStartCmd() *cobra.Command {
 		Use:   "start",
 		Short: "Start work on an issue (create branch)",
 		Long: `Enter issue details, then a properly named branch is created and
-checked out from the default base branch. Branch state is saved to .git/git-zf.db.`,
+checked out from the default base branch. The branch is recorded in the
+repository (refs/zf/branches/<issue>) and pushed, so every clone sees it.`,
 	}
 
 	cmd.Flags().String("variant", "",

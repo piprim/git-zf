@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/piprim/git-zf/branch"
-	"github.com/piprim/git-zf/store"
 )
 
 const (
@@ -23,12 +22,12 @@ const (
 	BranchTableHeaderColor     = lipgloss.Color("63")
 )
 
-// BranchPruneConfirm asks whether to proceed with pruning nDeleted deleted and
-// nMerged merged branch records.
-func BranchPruneConfirm(nDeleted, nMerged int, confirmed *bool) *huh.Group {
+// BranchPruneConfirm asks whether to record nClosed branches as closed and
+// nMerged as merged.
+func BranchPruneConfirm(nClosed, nMerged int, confirmed *bool) *huh.Group {
 	title := fmt.Sprintf(
-		"Prune %d deleted + %d merged branch records. Proceed?",
-		nDeleted, nMerged,
+		"Record %d branch(es) as closed and %d as merged. Proceed?",
+		nClosed, nMerged,
 	)
 
 	return huh.NewGroup(
@@ -59,7 +58,7 @@ func BranchStatusFilter(status *string, selected string) *huh.Group {
 	)
 }
 
-func BranchTableModel(rows []store.BranchRow) (tea.Model, error) {
+func BranchTableModel(rows []branch.Row) (tea.Model, error) {
 	cols := []btable.Column{
 		{Title: "Issue ID", Width: branchTableColWidthIssueID},
 		{Title: "Title", Width: branchTableColWidthTitle},

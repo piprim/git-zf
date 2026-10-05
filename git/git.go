@@ -587,6 +587,36 @@ func (c *Client) RemoteBranchExists(ctx context.Context, branchName string) bool
 	return c.gitCmd(ctx, "ls-remote", "--exit-code", "--heads", remote, branchName).Run() == nil
 }
 
+// LsRemoteBranches asks the configured remote for its branches and returns
+// their short names as a set. Unlike RemoteBranchNames, which reads the
+// tracking refs of the last fetch, this is what the remote has now; no local
+// ref is touched. Without a remote the set is empty; an unreachable remote is
+// an error, which callers must not read as "the remote has no branch".
+func (c *Client) LsRemoteBranches(ctx context.Context) (map[string]bool, error) {
+	names := make(map[string]bool)
+
+	remote, err := c.Remote()
+	if err != nil {
+		return nil, fmt.Errorf("resolve remote: %w", err)
+	}
+	if remote == "" {
+		return names, nil
+	}
+
+	out, err := c.output(ctx, "ls-remote", "--heads", remote)
+	if err != nil {
+		return nil, fmt.Errorf("ls-remote %s: %w", remote, err)
+	}
+
+	for line := range strings.SplitSeq(out, "\n") {
+		if _, ref, ok := strings.Cut(line, "\t"); ok {
+			names[strings.TrimPrefix(ref, "refs/heads/")] = true
+		}
+	}
+
+	return names, nil
+}
+
 // DeleteLocalBranchSafe deletes branchName locally, switching to the
 // configured base branch first when the current branch IS branchName
 // (git refuses to delete the currently checked-out branch).

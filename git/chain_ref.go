@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -27,6 +28,8 @@ var (
 	IssueRefs = ChainRefs{name: "issues", idIsRoot: true}
 	// ReviewRefs are the review chains. A review's ID is its issue slug.
 	ReviewRefs = ChainRefs{name: "reviews"}
+	// BranchRefs are the branch chains. A chain's ID is its issue slug.
+	BranchRefs = ChainRefs{name: "branches"}
 )
 
 func (n ChainRefs) prefix() string { return "refs/zf/" + n.name + "/" }
@@ -231,10 +234,54 @@ func (c *Client) ChainRefKind(ctx context.Context, ns ChainRefs, id string) (str
 	}
 }
 
-// DeleteChainRef removes the ref of chain id locally, its tracking ref, and
-// the ref on the remote. The remote deletion is best-effort: the ref may not
-// exist there. Deleting a ref that does not exist is not an error.
-func (c *Client) DeleteChainRef(ctx context.Context, ns ChainRefs, id string) error {
+// LegacyBlob returns the content of the non-commit object an older git-zf left
+// under the name of chain id: the local ref's, else the tracking ref's. content
+// is nil when neither is a non-commit. remoteSHA is the object the tracking ref
+// holds when that is a non-commit, "" otherwise: what DeleteChainRef may delete
+// on the remote.
+func (c *Client) LegacyBlob(ctx context.Context, ns ChainRefs, id string) (content []byte, remoteSHA string, err error) {
+	local, err := c.chainTips(ctx, ns.prefix()+id)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// chainTips keys by what follows the prefix: "" is the exact ref.
+	sha := ""
+	if tip, ok := local[""]; ok && !tip.commit {
+		sha = tip.sha
+	}
+
+	if remote, _ := c.Remote(); remote != "" {
+		tracked, err := c.chainTips(ctx, ns.trackingPrefix(remote)+id)
+		if err != nil {
+			return nil, "", err
+		}
+		if tip, ok := tracked[""]; ok && !tip.commit {
+			remoteSHA = tip.sha
+		}
+	}
+
+	if sha == "" {
+		sha = remoteSHA
+	}
+	if sha == "" {
+		return nil, "", nil
+	}
+
+	out, err := c.output(ctx, "cat-file", "-p", sha)
+	if err != nil {
+		return nil, remoteSHA, fmt.Errorf("cat-file %s: %w", sha, err)
+	}
+
+	return []byte(out), remoteSHA, nil
+}
+
+// DeleteChainRef removes the ref of chain id locally and its tracking ref.
+// When remoteBlob is not empty it also deletes the ref on the remote, but only
+// if the remote still holds that object (a lease): a chain another clone
+// pushed in the meantime is left alone. The remote deletion is best-effort.
+// Deleting a ref that does not exist is not an error.
+func (c *Client) DeleteChainRef(ctx context.Context, ns ChainRefs, id, remoteBlob string) error {
 	ref := ns.prefix() + id
 	if _, err := c.output(ctx, "update-ref", "-d", ref); err != nil {
 		return fmt.Errorf("delete %s: %w", ref, err)
@@ -246,9 +293,99 @@ func (c *Client) DeleteChainRef(ctx context.Context, ns ChainRefs, id string) er
 	}
 
 	_, _ = c.output(ctx, "update-ref", "-d", ns.trackingPrefix(remote)+id)
-	_ = c.gitCmd(ctx, "push", "--quiet", remote, "--delete", ref).Run()
+	if remoteBlob != "" {
+		_ = c.gitCmd(ctx, "push", "--quiet", "--force-with-lease="+ref+":"+remoteBlob, remote, ":"+ref).Run()
+	}
 
 	return nil
+}
+
+// ReadAllChains returns the commits of every local chain of the family, keyed
+// by chain ID, parents before children, each with the content of its op.json.
+// legacy lists, sorted, the IDs whose ref is not a commit (written by an older
+// git-zf). Three git processes whatever the number of chains. It does not
+// check that an ID names its chain's root: families with idIsRoot read one
+// chain at a time through ReadChainCommits.
+func (c *Client) ReadAllChains(
+	ctx context.Context, ns ChainRefs,
+) (chains map[string][]ChainCommit, legacy []string, err error) {
+	tips, err := c.chainTips(ctx, ns.prefix())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var shas []string
+	for id, tip := range tips {
+		if !tip.commit {
+			legacy = append(legacy, id)
+
+			continue
+		}
+		shas = append(shas, tip.sha)
+	}
+	slices.Sort(legacy)
+
+	chains = make(map[string][]ChainCommit, len(tips))
+	if len(shas) == 0 {
+		return chains, legacy, nil
+	}
+
+	stdin := []byte(strings.Join(shas, "\n") + "\n")
+
+	out, err := c.outputStdin(ctx, stdin, "rev-list", "--topo-order", "--reverse", "--parents", "--stdin")
+	if err != nil {
+		return nil, nil, fmt.Errorf("rev-list %s: %w", ns.prefix(), err)
+	}
+
+	// Every commit of every chain, parents before children.
+	var (
+		all   []ChainCommit
+		specs []string
+	)
+	for line := range strings.SplitSeq(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		all = append(all, ChainCommit{ID: fields[0], Parents: fields[1:]})
+		specs = append(specs, fields[0]+":"+chainOpFile)
+	}
+
+	cmd := c.gitCmd(ctx, "cat-file", "--batch")
+	cmd.Stdin = strings.NewReader(strings.Join(specs, "\n") + "\n")
+
+	raw, err := cmd.Output()
+	if err != nil {
+		return nil, nil, fmt.Errorf("cat-file --batch: %w", gitStderr(err))
+	}
+
+	if err := readBatchPayloads(bufio.NewReader(bytes.NewReader(raw)), all); err != nil {
+		return nil, nil, fmt.Errorf("parse cat-file output for %s: %w", ns.prefix(), err)
+	}
+
+	parents := make(map[string][]string, len(all))
+	for i := range all {
+		parents[all[i].ID] = all[i].Parents
+	}
+
+	for id, tip := range tips {
+		if !tip.commit {
+			continue
+		}
+
+		// The chain is what its tip reaches; all keeps the order.
+		reach := reachable(tip.sha, parents)
+		commits := make([]ChainCommit, 0, len(reach))
+		for i := range all {
+			if reach[all[i].ID] {
+				commits = append(commits, all[i])
+			}
+		}
+		chains[id] = commits
+	}
+
+	return chains, legacy, nil
 }
 
 // ReadChainCommits returns every commit of chain id, parents before children,
@@ -303,6 +440,21 @@ func (c *Client) ReadChainCommits(ctx context.Context, ns ChainRefs, id string) 
 	}
 
 	return commits, nil
+}
+
+// reachable returns tip and every commit it reaches through parents.
+func reachable(tip string, parents map[string][]string) map[string]bool {
+	reach := map[string]bool{tip: true}
+	for queue := []string{tip}; len(queue) > 0; queue = queue[1:] {
+		for _, p := range parents[queue[0]] {
+			if !reach[p] {
+				reach[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+
+	return reach
 }
 
 // readBatchPayloads parses `git cat-file --batch` output, one entry per commit

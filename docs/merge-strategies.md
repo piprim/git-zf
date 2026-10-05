@@ -56,7 +56,7 @@ work happens on the feature branch, then fast-forwards onto local base.
    - `git merge --ff-only feature` to land the new commit.
 
 4. Bookkeeping
-   - Update the local store and (if configured) the tracker; offer to remove
+   - Record the branch as merged and (if configured) update the tracker; offer to remove
      the worktree and delete the feature branch.
 ```
 
@@ -96,7 +96,7 @@ Commit created on "<feature>" but local <base> has diverged from <remote>/<base>
 Run `git pull --ff-only` on <base>, then `git merge --ff-only <feature>` to land it.
 ```
 
-The store and tracker are not updated, the delete-branch prompt is skipped,
+The branch record and the tracker are not updated, the delete-branch prompt is skipped,
 and the close exits cleanly. The operator reconciles local base by hand and
 fast-forwards the feature commit.
 

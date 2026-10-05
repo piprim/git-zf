@@ -9,16 +9,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
-	"github.com/piprim/git-zf/store"
 	fakeTracker "github.com/piprim/git-zf/tracker/fake"
 )
 
 type pruneTrackerTestRig struct {
 	dir    string
 	client *git.Client
-	store  *store.Store
 	fake   *fakeTracker.Tracker
 	stdout *bytes.Buffer
 }
@@ -57,13 +57,6 @@ func newPruneTrackerRig(t *testing.T) *pruneTrackerTestRig {
 		t.Fatalf("git.NewClientAt: %v", err)
 	}
 
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-
-	t.Cleanup(func() { _ = s.Close() })
-
 	fakeT := &fakeTracker.Tracker{
 		Closed:  map[string]bool{},
 		Unknown: map[string]bool{},
@@ -71,12 +64,12 @@ func newPruneTrackerRig(t *testing.T) *pruneTrackerTestRig {
 	}
 
 	return &pruneTrackerTestRig{
-		dir: dir, client: client, store: s, fake: fakeT, stdout: stdout,
+		dir: dir, client: client, fake: fakeT, stdout: stdout,
 	}
 }
 
 // seedMergedBranch creates a branch pointing at HEAD (fully merged into master)
-// and inserts the corresponding store rows.
+// and tracks it as in progress.
 func (r *pruneTrackerTestRig) seedMergedBranch(t *testing.T, issueSlug, branchName string) {
 	t.Helper()
 
@@ -90,12 +83,7 @@ func (r *pruneTrackerTestRig) seedMergedBranch(t *testing.T, issueSlug, branchNa
 
 	runGit("branch", branchName)
 
-	if err := r.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: issueSlug, Title: issueSlug + " title"},
-		&store.Branch{Name: branchName, Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("InsertIssueWithBranch: %v", err)
-	}
+	branchtest.Seed(t, r.client, branch.Op{Branch: branchName, Title: issueSlug + " title"}, branch.StatusInProgress)
 }
 
 // seedDivergentBranch creates a branch with a unique commit (not merged into master).
@@ -121,21 +109,16 @@ func (r *pruneTrackerTestRig) seedDivergentBranch(t *testing.T, issueSlug, branc
 	runGit("commit", "-m", "x")
 	runGit("checkout", "master")
 
-	if err := r.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: issueSlug, Title: issueSlug + " title"},
-		&store.Branch{Name: branchName, Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("InsertIssueWithBranch: %v", err)
-	}
+	branchtest.Seed(t, r.client, branch.Op{Branch: branchName, Title: issueSlug + " title"}, branch.StatusInProgress)
 }
 
 // statusOf reads the current status of a branch row.
-func (r *pruneTrackerTestRig) statusOf(t *testing.T, branchName string) store.BranchStatus {
+func (r *pruneTrackerTestRig) statusOf(t *testing.T, branchName string) string {
 	t.Helper()
 
-	rows, err := r.store.ListBranches(t.Context(), store.BranchStatusAll)
+	rows, err := branch.ListRows(t.Context(), r.client, branch.StatusAll)
 	if err != nil {
-		t.Fatalf("ListBranches: %v", err)
+		t.Fatalf("ListRows: %v", err)
 	}
 
 	for _, b := range rows {
@@ -169,7 +152,7 @@ func Test_PruneTracker_E2E(t *testing.T) {
 	runRun := func(t *testing.T, rig *pruneTrackerTestRig, prompter TrackerPrunePrompter, flags pruneTrackerFlags) error {
 		t.Helper()
 
-		return runPruneTracker(t.Context(), rig.stdout, rig.store, rig.client, rig.fake, prompter, flags)
+		return runPruneTracker(t.Context(), rig.stdout, rig.client, rig.client, rig.fake, prompter, flags)
 	}
 
 	t.Run("nothing to prune", func(t *testing.T) {
@@ -201,7 +184,7 @@ func Test_PruneTracker_E2E(t *testing.T) {
 		})
 
 		t.Run("store row still in_progress after dry-run", func(t *testing.T) {
-			if rig.statusOf(t, "ABC-42@feat@x") != store.BranchStatusInProgress {
+			if rig.statusOf(t, "ABC-42@feat@x") != branch.StatusInProgress {
 				t.Fatal("store row should still be in_progress after dry-run")
 			}
 		})
@@ -223,7 +206,7 @@ func Test_PruneTracker_E2E(t *testing.T) {
 		})
 
 		t.Run("store status is closed", func(t *testing.T) {
-			if rig.statusOf(t, "ABC-42@feat@x") != store.BranchStatusClosed {
+			if rig.statusOf(t, "ABC-42@feat@x") != branch.StatusClosed {
 				t.Fatalf("store status = %q, want closed", rig.statusOf(t, "ABC-42@feat@x"))
 			}
 		})
@@ -245,7 +228,7 @@ func Test_PruneTracker_E2E(t *testing.T) {
 		})
 
 		t.Run("store status remains in_progress", func(t *testing.T) {
-			if rig.statusOf(t, "ABC-42@feat@x") != store.BranchStatusInProgress {
+			if rig.statusOf(t, "ABC-42@feat@x") != branch.StatusInProgress {
 				t.Fatalf("store status should remain in_progress when safe-delete refused, got %q",
 					rig.statusOf(t, "ABC-42@feat@x"))
 			}
@@ -274,7 +257,7 @@ func Test_PruneTracker_E2E(t *testing.T) {
 		})
 
 		t.Run("store status is closed", func(t *testing.T) {
-			if rig.statusOf(t, "ABC-42@feat@x") != store.BranchStatusClosed {
+			if rig.statusOf(t, "ABC-42@feat@x") != branch.StatusClosed {
 				t.Fatalf("store status = %q, want closed", rig.statusOf(t, "ABC-42@feat@x"))
 			}
 		})
@@ -296,7 +279,7 @@ func Test_PruneTracker_E2E(t *testing.T) {
 		})
 
 		t.Run("store status is closed", func(t *testing.T) {
-			if rig.statusOf(t, "ABC-42@feat@x") != store.BranchStatusClosed {
+			if rig.statusOf(t, "ABC-42@feat@x") != branch.StatusClosed {
 				t.Fatalf("store status = %q, want closed", rig.statusOf(t, "ABC-42@feat@x"))
 			}
 		})
@@ -383,7 +366,7 @@ func Test_PruneTracker_E2E(t *testing.T) {
 		})
 
 		t.Run("no store row was created or flipped", func(t *testing.T) {
-			rows, _ := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
+			rows, _ := branch.ListRows(t.Context(), rig.client, branch.StatusAll)
 			for _, r := range rows {
 				if r.BranchName == "ABC-99@feat@rogue" {
 					t.Fatalf("unexpected store row for rogue branch: %+v", r)

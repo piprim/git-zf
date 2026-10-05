@@ -8,7 +8,6 @@ import (
 	"github.com/piprim/git-zf/cmd/mergeflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 )
 
 // SourceBranch is one pickable merge source. RemoteOnly marks a branch that
@@ -40,8 +39,8 @@ type huhMergePrompter struct {
 	mergeflow.HuhPrompter
 }
 
-func newHuhMergePrompter(c *git.Client, s *store.Store, cfg *config.AppConfig) *huhMergePrompter {
-	return &huhMergePrompter{mergeflow.HuhPrompter{Client: c, Store: s, Cfg: cfg, TargetLabel: "current"}}
+func newHuhMergePrompter(c *git.Client, cfg *config.AppConfig) *huhMergePrompter {
+	return &huhMergePrompter{mergeflow.HuhPrompter{Client: c, Cfg: cfg, TargetLabel: "current"}}
 }
 
 func (p *huhMergePrompter) PickSource(ctx context.Context, sources []SourceBranch) (SourceBranch, error) {

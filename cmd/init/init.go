@@ -117,13 +117,24 @@ func (i Init) runE(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Before branch records moved into the repository they lived in a SQLite
+	// file, which no command reads any more.
+	if commonDir, err := client.CommonDir(); err == nil {
+		legacyDB := filepath.Join(commonDir, "git-zf.db")
+		if _, statErr := os.Stat(legacyDB); statErr == nil {
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"%s is no longer used and can be deleted: run `git zf issue track` on each branch still in progress\n",
+				legacyDB)
+		}
+	}
+
 	remotes, err := client.ConfigureChainFetch(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("configure fetch refspecs: %w", err)
 	}
 	for _, remote := range remotes {
 		fmt.Fprintf(cmd.OutOrStdout(),
-			"remote %q: `git fetch` now brings reviews and issues (refs/zf/reviews/*, refs/zf/issues/*)\n", remote)
+			"remote %q: `git fetch` now brings reviews, issues and branch records (refs/zf/*)\n", remote)
 	}
 
 	return nil

@@ -6,10 +6,10 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	lgtable "github.com/charmbracelet/lipgloss/table"
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/branch"
 )
 
-func RenderBranchTable(w io.Writer, rows []store.BranchRow) {
+func RenderBranchTable(w io.Writer, rows []branch.Row) {
 	t := lgtable.New().
 		Headers("ISSUE ID", "TITLE", "BRANCH", "TYPE", "STATUS", "CREATED").
 		StyleFunc(func(row, _ int) lipgloss.Style {

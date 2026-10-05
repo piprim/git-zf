@@ -9,7 +9,6 @@ import (
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -20,7 +19,6 @@ var _ Prompter = (*HuhPrompter)(nil)
 // pickers, so both flows present an identical merge UX.
 type HuhPrompter struct {
 	Client *git.Client       // Authors() for the commit-message form
-	Store  *store.Store      // history backend of the commit-message form
 	Cfg    *config.AppConfig // template of the commit-message form
 
 	// TargetLabel names the merge target in the rebase hint ("local base",
@@ -76,7 +74,12 @@ func (p *HuhPrompter) ComposeMessage(ctx context.Context, prefill map[string]any
 		defaults.Author = authors[0]
 	}
 
-	msg, opts, err := commit.FillOutForm(ctx, p.Cfg, defaults, p.Store, prefill, nil)
+	history, err := commit.OpenHistory(p.Client)
+	if err != nil {
+		return nil, tui.CommitOption{}, fmt.Errorf("open commit history: %w", err)
+	}
+
+	msg, opts, err := commit.FillOutForm(ctx, p.Cfg, defaults, history, prefill, nil)
 	if err != nil {
 		return nil, tui.CommitOption{}, fmt.Errorf("fill commit form: %w", err)
 	}

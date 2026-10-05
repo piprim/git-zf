@@ -9,7 +9,6 @@ import (
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
@@ -27,14 +26,13 @@ func (r Review) getRequestCmd() *cobra.Command {
 }
 
 func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
-	// A branch closed in a sibling clone carries Merged=true on its branch ref
-	// but may still show in_progress in this clone's store. Reconcile first so
-	// the picker never offers an already-closed branch.
-	issueflow.ReconcileMergedFromRefs(ctx, deps.store, deps.client)
+	// A branch closed in a sibling clone is still in progress here until the
+	// chains are fetched: do it first so the picker never offers it.
+	fetchBranchRefs(ctx, deps)
 
-	branches, err := deps.store.ListBranches(ctx, store.BranchStatusInProgress)
+	branches, err := issueflow.LocalInProgress(ctx, deps.client)
 	if err != nil {
-		return fmt.Errorf("list branches: %w", err)
+		return err //nolint:wrapcheck // already says what was listed
 	}
 
 	// Filter out branches whose open review is in_review (locked) or approved
@@ -54,7 +52,7 @@ func runReviewRequestInteractive(ctx context.Context, deps reviewDeps, prompter 
 		}
 	}
 
-	var submittable []store.BranchRow
+	var submittable []branch.Row
 	for _, b := range branches {
 		if !locked[b.IssueSlug] {
 			submittable = append(submittable, b)
@@ -124,14 +122,14 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 	}
 
 	// Find the feature branch for this issue.
-	branches, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
+	branches, err := issueflow.LocalInProgress(ctx, deps.client)
 	if err != nil {
-		return fmt.Errorf("list branches: %w", err)
+		return err //nolint:wrapcheck // already says what was listed
 	}
 
 	var featureBranch string
 	for _, b := range branches {
-		if b.IssueSlug == issueSlug && b.Status == store.BranchStatusInProgress {
+		if b.IssueSlug == issueSlug {
 			featureBranch = b.BranchName
 			break
 		}

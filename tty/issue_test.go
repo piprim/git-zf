@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/issue"
 )
 
 func TestRenderIssueTable(t *testing.T) {
@@ -15,7 +15,7 @@ func TestRenderIssueTable(t *testing.T) {
 		t.Parallel()
 
 		var buf bytes.Buffer
-		rows := []store.IssueRow{
+		rows := []issue.Row{
 			{IssueSlug: "1", Title: "a", Project: "octo/cat"},
 			{IssueSlug: "2", Title: "b", Project: "octo/cat"},
 		}
@@ -31,7 +31,7 @@ func TestRenderIssueTable(t *testing.T) {
 		t.Parallel()
 
 		var buf bytes.Buffer
-		rows := []store.IssueRow{
+		rows := []issue.Row{
 			{IssueSlug: "1", Title: "a", Project: "octo/cat"},
 			{IssueSlug: "2", Title: "b", Project: "octo/dog"},
 		}

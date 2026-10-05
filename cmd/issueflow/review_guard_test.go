@@ -7,17 +7,17 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
-	"github.com/piprim/git-zf/store"
 )
 
 type guardRig struct {
 	dir    string
 	client *git.Client
-	store  *store.Store
 	run    func(args ...string)
 }
 
@@ -52,18 +52,22 @@ func newGuardRig(t *testing.T) *guardRig {
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}
-	s, err := store.Open(t.Context(), filepath.Join(dir, ".git"))
+	branchtest.Seed(t, client, branch.Op{Branch: "42@feat@title", Title: "title"}, branch.StatusInProgress)
+	return &guardRig{dir: dir, client: client, run: run}
+}
+
+// addSelfRemote adds the repository as its own "origin" and reopens the
+// client: a client caches its remote name, and the seed of newGuardRig already
+// asked for it.
+func (r *guardRig) addSelfRemote(t *testing.T) {
+	t.Helper()
+	r.run("remote", "add", "origin", r.dir)
+
+	client, err := git.NewClientAt(r.client.IO(), r.dir)
 	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+		t.Fatalf("NewClientAt: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "42", Title: "title"},
-		&store.Branch{Name: "42@feat@title", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	return &guardRig{dir: dir, client: client, store: s, run: run}
+	r.client = client
 }
 
 // addReviewBranchWithCommit creates 42@review off the feature branch with one
@@ -166,8 +170,7 @@ func TestPendingReviewCommits(t *testing.T) {
 		// Simulate: reviewer pushed a second commit that only origin has.
 		// The remote is never contacted — the remote-tracking ref is set by
 		// hand with update-ref, exactly the state a past `git fetch` leaves.
-		// The remote is added before the seed: the client caches Remote().
-		rig.run("remote", "add", "origin", rig.dir)
+		rig.addSelfRemote(t)
 		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		rig.run("checkout", "42@review")
 		if err := os.WriteFile(filepath.Join(rig.dir, "review-fix-2.txt"), []byte("fix2\n"), 0o644); err != nil {
@@ -193,7 +196,7 @@ func TestPendingReviewCommits(t *testing.T) {
 		rig.addReviewBranchWithCommit(t)
 		// Remote-tracking ref exists but points one commit behind the local
 		// branch — the reviewer's own machine before pushing.
-		rig.run("remote", "add", "origin", rig.dir)
+		rig.addSelfRemote(t)
 		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		rig.run("update-ref", "refs/remotes/origin/42@review", "42@review~1")
 
@@ -212,9 +215,9 @@ func TestPendingReviewForHEAD(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
 		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
-		p, branch, err := PendingReviewForHEAD(t.Context(), rig.client, rig.store)
-		if err != nil || p == nil || branch != "42@feat@title" {
-			t.Fatalf("want pending on 42@feat@title, got %+v %q err %v", p, branch, err)
+		p, name, err := PendingReviewForHEAD(t.Context(), rig.client)
+		if err != nil || p == nil || name != "42@feat@title" {
+			t.Fatalf("want pending on 42@feat@title, got %+v %q err %v", p, name, err)
 		}
 	})
 
@@ -223,7 +226,7 @@ func TestPendingReviewForHEAD(t *testing.T) {
 		rig.addReviewBranchWithCommit(t)
 		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		rig.run("checkout", "42@review")
-		p, _, err := PendingReviewForHEAD(t.Context(), rig.client, rig.store)
+		p, _, err := PendingReviewForHEAD(t.Context(), rig.client)
 		if err != nil || p != nil {
 			t.Fatalf("want exempt on @review branch, got %+v err %v", p, err)
 		}
@@ -240,7 +243,7 @@ func TestPendingReviewForHEAD(t *testing.T) {
 		rig.run("add", "review-fix.txt")
 		rig.run("commit", "-m", "feat: conflicting")
 		_ = rig.client.MergeLeaveConflicts(t.Context(), "42@review", "42@feat@title")
-		p, _, err := PendingReviewForHEAD(t.Context(), rig.client, rig.store)
+		p, _, err := PendingReviewForHEAD(t.Context(), rig.client)
 		if err != nil || p != nil {
 			t.Fatalf("want exempt mid-merge, got %+v err %v", p, err)
 		}
@@ -249,7 +252,7 @@ func TestPendingReviewForHEAD(t *testing.T) {
 	t.Run("exempt on an untracked branch", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.run("checkout", "-b", "random-branch")
-		p, _, err := PendingReviewForHEAD(t.Context(), rig.client, rig.store)
+		p, _, err := PendingReviewForHEAD(t.Context(), rig.client)
 		if err != nil || p != nil {
 			t.Fatalf("want exempt on untracked branch, got %+v err %v", p, err)
 		}

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/piprim/git-zf/git"
@@ -54,6 +56,14 @@ func Load(ctx context.Context, c *git.Client, slug string) (*State, error) {
 		return nil, fmt.Errorf("read review %s: %w", slug, err)
 	}
 
+	st := foldCommits(slug, commits)
+
+	return &st, nil
+}
+
+// foldCommits decodes the commits of slug's chain and folds them. Malformed
+// commits are skipped and named in State.Warnings.
+func foldCommits(slug string, commits []git.ChainCommit) State {
 	ops := make([]Op, 0, len(commits))
 	var warnings []string
 	for _, commit := range commits {
@@ -67,42 +77,28 @@ func Load(ctx context.Context, c *git.Client, slug string) (*State, error) {
 	st := Fold(slug, ops)
 	st.Warnings = warnings
 
-	return &st, nil
+	return st
 }
 
-// List loads every local review, in slug order. An unreadable ref is skipped;
-// warnings names it, along with every malformed op met on the way.
-//
-// ponytail: three git processes per review, closed ones included. Fine to a
-// few hundred reviews; batch all chains through one `git log --stdin` if
-// listing gets slow.
+// List loads every local review, in slug order. A ref in the old blob format
+// is skipped; warnings names it, along with every malformed op met on the way.
 func List(ctx context.Context, c *git.Client) (states []State, warnings []string, err error) {
-	slugs, err := c.ListChainIDs(ctx, git.ReviewRefs)
+	chains, legacy, err := c.ReadAllChains(ctx, git.ReviewRefs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list reviews: %w", err)
 	}
 
-	states = make([]State, 0, len(slugs))
-	for _, slug := range slugs {
-		st, err := Load(ctx, c, slug)
-		if errors.Is(err, ErrLegacyReview) {
-			warnings = append(warnings, fmt.Sprintf(
-				"WARN: skipping review ref %s: %v; run `git zf review request` to restart it, "+
-					"or `git update-ref -d refs/zf/reviews/%s` to drop the local copy", slug, err, slug))
+	for _, slug := range legacy {
+		warnings = append(warnings, fmt.Sprintf(
+			"WARN: skipping review ref %s: %v; run `git zf review request` to restart it, "+
+				"or `git update-ref -d refs/zf/reviews/%s` to drop the local copy", slug, ErrLegacyReview, slug))
+	}
 
-			continue
-		}
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("WARN: skipping review ref %s: %v", slug, err))
-
-			continue
-		}
-		if st == nil {
-			continue
-		}
-
+	states = make([]State, 0, len(chains))
+	for _, slug := range slices.Sorted(maps.Keys(chains)) {
+		st := foldCommits(slug, chains[slug])
 		warnings = append(warnings, st.Warnings...)
-		states = append(states, *st)
+		states = append(states, st)
 	}
 
 	return states, warnings, nil
@@ -148,8 +144,9 @@ func Append(ctx context.Context, c *git.Client, slug string, op *Op, sign bool) 
 // ReplaceLegacyWith replaces the blob review ref of slug by a new chain whose
 // root is op. The root is written first: when that fails (a signing error) the
 // blob is still in place, locally and on the remote. Then the blob ref is
-// deleted, locally and on the remote, and the chain published. Until the remote
-// blob is gone a push of the chain is rejected. Nothing is pushed.
+// deleted locally, and on the remote when the last fetch saw the blob there and
+// the remote still holds it, and the chain is published. Until the remote blob
+// is gone a push of the chain is rejected. Nothing is pushed.
 func ReplaceLegacyWith(ctx context.Context, c *git.Client, slug string, op *Op, sign bool) error {
 	payload, err := marshalOp(ctx, c, op)
 	if err != nil {
@@ -161,7 +158,14 @@ func ReplaceLegacyWith(ctx context.Context, c *git.Client, slug string, op *Op, 
 		return fmt.Errorf("write %s op on review %s: %w", op.Type, slug, err)
 	}
 
-	if err := c.DeleteChainRef(ctx, git.ReviewRefs, slug); err != nil {
+	// Only a blob seen on the remote is deleted there, and only if it is still
+	// the one seen: a chain another clone pushed since is left alone.
+	_, remoteBlob, err := c.LegacyBlob(ctx, git.ReviewRefs, slug)
+	if err != nil {
+		return fmt.Errorf("replace legacy review %s: %w", slug, err)
+	}
+
+	if err := c.DeleteChainRef(ctx, git.ReviewRefs, slug, remoteBlob); err != nil {
 		return fmt.Errorf("replace legacy review %s: %w", slug, err)
 	}
 
@@ -172,72 +176,47 @@ func ReplaceLegacyWith(ctx context.Context, c *git.Client, slug string, op *Op, 
 	return nil
 }
 
+// mergePayload is the op.json of the commit that joins two diverged chains.
+func mergePayload(ctx context.Context, c *git.Client) ([]byte, error) {
+	return marshalOp(ctx, c, &Op{Type: OpMerge})
+}
+
 // Fetch fetches the remote's review chains and reconciles the local ones with
 // them, merging diverged chains. silent prints nothing, for use in hooks.
 // No-op without a remote.
 //
-// A failed fetch still reconciles: the tracking refs may hold a chain that a
-// plain `git fetch` brought and no git-zf command has loaded yet, and a review
-// lock must not go unseen for lack of network. The fetch error is returned
-// after.
+// A failed fetch still reconciles: a review lock must not go unseen for lack
+// of network. The fetch error is returned after.
 func Fetch(ctx context.Context, c *git.Client, silent bool) error {
-	fetchErr := c.FetchChainRefs(ctx, git.ReviewRefs, silent)
-	if fetchErr != nil {
-		fetchErr = fmt.Errorf("fetch reviews: %w", fetchErr)
-	}
-
-	payload, err := marshalOp(ctx, c, &Op{Type: OpMerge})
+	payload, err := mergePayload(ctx, c)
 	if err != nil {
-		return errors.Join(fetchErr, err)
+		return err
 	}
 
-	if _, err := c.ReconcileChainRefs(ctx, git.ReviewRefs, payload); err != nil {
-		return errors.Join(fetchErr, fmt.Errorf("reconcile reviews: %w", err))
-	}
-
-	return fetchErr
+	return c.FetchChains(ctx, git.ReviewRefs, payload, silent) //nolint:wrapcheck // names the family already
 }
 
 // Push pushes the review chain of slug. A rejected push (someone pushed
 // first) triggers one fetch, merge and retry. No-op without a remote.
 func Push(ctx context.Context, c *git.Client, slug string) error {
-	firstErr := c.PushChainRef(ctx, git.ReviewRefs, slug)
-	if firstErr == nil {
-		return nil
+	payload, err := mergePayload(ctx, c)
+	if err != nil {
+		return err
 	}
 
-	if err := Fetch(ctx, c, false); err != nil {
-		return errors.Join(firstErr, err)
-	}
-
-	if err := c.PushChainRef(ctx, git.ReviewRefs, slug); err != nil {
-		return fmt.Errorf("push review %s after merge: %w", slug, err)
-	}
-
-	return nil
+	return c.PushChain(ctx, git.ReviewRefs, slug, payload) //nolint:wrapcheck // names the family already
 }
 
 // Sync fetches and reconciles every review, then pushes the chains the remote
 // does not have yet: an op whose push failed earlier goes out here. No-op
 // without a remote.
 func Sync(ctx context.Context, c *git.Client) error {
-	if err := Fetch(ctx, c, false); err != nil {
+	payload, err := mergePayload(ctx, c)
+	if err != nil {
 		return err
 	}
 
-	slugs, err := c.UnpushedChainIDs(ctx, git.ReviewRefs)
-	if err != nil {
-		return fmt.Errorf("list unpushed reviews: %w", err)
-	}
-
-	var failed []error
-	for _, slug := range slugs {
-		if err := Push(ctx, c, slug); err != nil {
-			failed = append(failed, err)
-		}
-	}
-
-	return errors.Join(failed...)
+	return c.SyncChains(ctx, git.ReviewRefs, payload) //nolint:wrapcheck // names the family already
 }
 
 // What SignatureState reports for an op commit.

@@ -3,10 +3,9 @@ package review
 import (
 	"context"
 	"testing"
-	"time"
 
-	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
 )
@@ -30,26 +29,27 @@ func withFakeTracker(t *testing.T, rig *reviewE2ERig) *fake.Tracker {
 	return fakeT
 }
 
-// seedBranchRef writes a BranchRef for slug carrying the given tracker type.
-// An empty trackerType yields a manual ref (no prompt expected).
-func seedBranchRef(t *testing.T, rig *reviewE2ERig, slug, branchName, trackerType string) {
+// seedBranchRef records the given tracker type on the branch chain of
+// branchName. The rig's own branch is already tracked, without a tracker type;
+// any other branch is tracked here. An empty trackerType leaves a manual issue
+// (no prompt expected).
+func seedBranchRef(t *testing.T, rig *reviewE2ERig, _, branchName, trackerType string) {
 	t.Helper()
 
-	if _, err := rig.client.WriteBranchRef(context.Background(), slug, git.BranchRef{
-		IssueSlug:   slug,
-		BranchName:  branchName,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-		TrackerType: trackerType,
-	}); err != nil {
-		t.Fatalf("WriteBranchRef: %v", err)
+	op := branch.Op{Branch: branchName, TrackerType: trackerType}
+	if _, e, _ := branch.Find(t.Context(), rig.client, branchName); e != nil {
+		branchtest.Amend(t, rig.client, op)
+
+		return
 	}
+	branchtest.Seed(t, rig.client, op, branch.StatusInProgress)
 }
 
 // inProgressBranchRow returns the seeded in-progress BranchRow for slug.
-func inProgressBranchRow(t *testing.T, rig *reviewE2ERig, slug string) *store.BranchRow {
+func inProgressBranchRow(t *testing.T, rig *reviewE2ERig, slug string) *branch.Row {
 	t.Helper()
 
-	branches, err := rig.store.ListBranches(context.Background(), store.BranchStatusInProgress)
+	branches, err := branch.ListRows(context.Background(), rig.client, branch.StatusInProgress)
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestReviewTracker_Approve_TrackerBornIssue(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewApproveInteractive(ctx, rig.deps(), p); err != nil {
@@ -147,7 +147,7 @@ func TestReviewTracker_Reject_TrackerBornIssue(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "", true); err != nil {
@@ -242,7 +242,7 @@ func TestReviewTracker_Reject_PostsReasonComment(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "Missing tests.", false); err != nil {
@@ -277,7 +277,7 @@ func TestReviewTracker_Reject_NoReasonNoComment(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "", false); err != nil {
@@ -300,7 +300,7 @@ func TestReviewTracker_Reject_ManualIssueNoComment(t *testing.T) {
 	seedBranchRef(t, rig, "77", "77@feat@my-feature", "")
 	bringToInReview(t, ctx, rig, fakeT)
 
-	p := &scriptedReviewPrompter{Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@review"}}
+	p := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@review"}}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "Missing tests.", false); err != nil {
 		t.Fatalf("runReviewRejectInteractive: %v", err)
 	}

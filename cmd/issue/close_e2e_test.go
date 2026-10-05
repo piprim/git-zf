@@ -10,8 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -19,7 +20,6 @@ import (
 	"github.com/piprim/git-zf/internal/pkg"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
 )
@@ -29,7 +29,6 @@ import (
 type closeTestRig struct {
 	dir     string
 	client  *git.Client
-	store   *store.Store
 	tracker *fake.Tracker
 	cfg     *config.AppConfig
 	stdout  *bytes.Buffer
@@ -97,31 +96,10 @@ func seedCloseRig(t *testing.T, dir string) *closeTestRig {
 		t.Fatalf("git.NewClientAt: %v", err)
 	}
 
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	trackerType := "fake"
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "ABC-1", Title: "Add thing", TrackerType: &trackerType},
-		&store.Branch{Name: "ABC-1@feat@add-thing", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed branch: %v", err)
-	}
-
-	// Seed a tracker-born BranchRef so the close-flow origin gate treats ABC-1
-	// as created from the tracker (mirrors what `issue start` writes). The git
-	// object is the cross-machine source of truth for the tracker-status prompt.
-	if _, err := client.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
-		IssueSlug:   "ABC-1",
-		BranchName:  "ABC-1@feat@add-thing",
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-		TrackerType: "fake",
-	}); err != nil {
-		t.Fatalf("seed branch ref: %v", err)
-	}
+	// A tracker-born branch chain, so the close-flow origin gate treats ABC-1
+	// as created from the tracker (mirrors what `issue start` writes).
+	branchtest.Seed(t, client,
+		branch.Op{Branch: "ABC-1@feat@add-thing", Title: "Add thing", TrackerType: "fake"}, branch.StatusInProgress)
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
@@ -137,14 +115,14 @@ func seedCloseRig(t *testing.T, dir string) *closeTestRig {
 	}
 
 	return &closeTestRig{
-		dir: dir, client: client, store: s, tracker: fakeT, cfg: cfg,
+		dir: dir, client: client, tracker: fakeT, cfg: cfg,
 		stdout: stdout, stderr: stderr,
 	}
 }
 
 func (r *closeTestRig) deps() closeDeps {
 	return closeDeps{
-		client: r.client, store: r.store, cfg: r.cfg, tracker: r.tracker,
+		client: r.client, cfg: r.cfg, tracker: r.tracker,
 		// Mirrors buildCloseDeps for a command typed in the main tree: no
 		// invokedFrom, so the branch falls back to the main client's HEAD.
 		invokedBranch: invokedBranchFor(context.Background(), r.client, ""),
@@ -166,14 +144,13 @@ func cdHint(t *testing.T, dir string) string {
 
 // pickedBranchRow returns the BranchRow the picker would have returned for
 // the seeded branch. Used by every scriptedPrompter setup.
-func (r *closeTestRig) pickedBranchRow() *store.BranchRow {
-	return &store.BranchRow{
-		IssueID:    1, // first row in the empty store
+func (r *closeTestRig) pickedBranchRow() *branch.Row {
+	return &branch.Row{
 		IssueSlug:  "ABC-1",
 		Title:      "Add thing",
 		BranchName: "ABC-1@feat@add-thing",
 		Type:       "feat",
-		Status:     store.BranchStatusInProgress,
+		Status:     branch.StatusInProgress,
 	}
 }
 
@@ -342,8 +319,8 @@ func TestClose_RebaseHappyPath(t *testing.T) {
 		assertBranchAbsent(t, rig.client, "ABC-1@feat@add-thing")
 	})
 
-	t.Run("store records branch as merged", func(t *testing.T) {
-		branches, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	t.Run("the chain records the branch as merged", func(t *testing.T) {
+		branches, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -390,8 +367,8 @@ func TestClose_SquashHappyPath(t *testing.T) {
 		assertBranchAbsent(t, rig.client, "ABC-1@feat@add-thing")
 	})
 
-	t.Run("store records branch as merged", func(t *testing.T) {
-		branches, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	t.Run("the chain records the branch as merged", func(t *testing.T) {
+		branches, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -440,8 +417,8 @@ func TestClose_ClassicHappyPath(t *testing.T) {
 		}
 	})
 
-	t.Run("store records branch as merged", func(t *testing.T) {
-		branches, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	t.Run("the chain records the branch as merged", func(t *testing.T) {
+		branches, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -466,16 +443,13 @@ func TestClose_ManualIssue_NoTrackerPrompt(t *testing.T) {
 
 	rig := newCloseRig(t)
 
-	// Overwrite ABC-1's ref so it carries no tracker origin (manual issue). A
-	// tracker is still configured (rig.tracker != nil), but close must not prompt.
-	if _, err := rig.client.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
-		IssueSlug:  "ABC-1",
-		BranchName: "ABC-1@feat@add-thing",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		// TrackerType intentionally empty → manual.
-	}); err != nil {
-		t.Fatalf("WriteBranchRef: %v", err)
+	// Track ABC-1 again with no tracker origin (manual issue). A tracker is
+	// still configured (rig.tracker != nil), but close must not prompt. The
+	// tracker type of a chain never changes, so the rig's chain is dropped.
+	if err := rig.client.RunGitAt(t.Context(), rig.dir, "update-ref", "-d", "refs/zf/branches/ABC-1"); err != nil {
+		t.Fatalf("drop the tracker-born chain: %v", err)
 	}
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing", Title: "Add thing"}, branch.StatusInProgress)
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
@@ -516,16 +490,10 @@ func TestClose_NoInProgressBranches(t *testing.T) {
 		t.Fatalf("NewClientAt: %v", err)
 	}
 
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 
-	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps := closeDeps{client: client, cfg: cfg}
 	deps.invokedBranch = invokedBranchFor(t.Context(), client, "")
 
 	// PickBranch should never be called — but if runClose mis-routes, fail loudly.
@@ -585,16 +553,10 @@ func TestClose_EmptyState_RedirectsToBranchMerge(t *testing.T) {
 		t.Fatalf("NewClientAt: %v", err)
 	}
 
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 
-	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps := closeDeps{client: client, cfg: cfg}
 	deps.invokedBranch = invokedBranchFor(t.Context(), client, "")
 
 	// PickBranch must never be called — no candidates exist.
@@ -664,16 +626,10 @@ func TestClose_EmptyState_OnUntrackedIssueBranch_DoesNotRedirect(t *testing.T) {
 		t.Fatalf("NewClientAt: %v", err)
 	}
 
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 
-	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps := closeDeps{client: client, cfg: cfg}
 	deps.invokedBranch = invokedBranchFor(t.Context(), client, "")
 
 	// PickBranch must never be called — no candidates exist.
@@ -968,18 +924,7 @@ func TestClose_ReviewPreflight_IncorporatesRemoteOnlyReviewerCommits(t *testing.
 		t.Fatalf("NewClientAt: %v", err)
 	}
 
-	bobStore, err := store.Open(t.Context(), filepath.Join(bobDir, ".git"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = bobStore.Close() })
-
-	if err := bobStore.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "ABC-1", Title: "thing"},
-		&store.Branch{Name: "ABC-1@feat@thing", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	branchtest.Seed(t, bobClient, branch.Op{Branch: "ABC-1@feat@thing", Title: "thing"}, branch.StatusInProgress)
 
 	// Seed an approved review chain and push it to origin, as review approve
 	// would have.
@@ -991,12 +936,12 @@ func TestClose_ReviewPreflight_IncorporatesRemoteOnlyReviewerCommits(t *testing.
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
-	deps := closeDeps{client: bobClient, store: bobStore, cfg: cfg}
+	deps := closeDeps{client: bobClient, cfg: cfg}
 
-	pickedRow := &store.BranchRow{
-		IssueID: 1, IssueSlug: "ABC-1",
+	pickedRow := &branch.Row{
+		IssueSlug:  "ABC-1",
 		BranchName: "ABC-1@feat@thing", Type: "feat",
-		Status: store.BranchStatusInProgress,
+		Status: branch.StatusInProgress,
 	}
 	prompter := &scriptedPrompter{
 		Branch: pickedRow, Strategy: commitpkg.MergeStrategySquash, Confirm: true,
@@ -1096,49 +1041,20 @@ func TestClose_SubtaskDryRunFallsBackToRemoteBase(t *testing.T) {
 		t.Fatalf("git.NewClientAt: %v", err)
 	}
 
-	// Write branch refs locally so parentSlug resolves without a remote fetch.
-	parentBR := git.BranchRef{
-		IssueSlug:  "X",
-		BranchName: "X@feat@big",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if _, err := client.WriteBranchRef(t.Context(), "X", parentBR); err != nil {
-		t.Fatalf("WriteBranchRef X: %v", err)
-	}
-	childBR := git.BranchRef{
-		IssueSlug:  "X.2",
-		BranchName: "X.2@feat@two",
-		ParentSlug: "X",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if _, err := client.WriteBranchRef(t.Context(), "X.2", childBR); err != nil {
-		t.Fatalf("WriteBranchRef X.2: %v", err)
-	}
-
-	s, err := store.Open(t.Context(), bobDir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.2", Title: "part-two"},
-		&store.Branch{Name: "X.2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed branch: %v", err)
-	}
+	// Track parent and child locally so the parent resolves without a fetch.
+	branchtest.Seed(t, client, branch.Op{Branch: "X@feat@big"}, branch.StatusInProgress)
+	branchtest.Seed(t, client, branch.Op{Branch: "X.2@feat@two", Title: "part-two", Parent: "X"}, branch.StatusInProgress)
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
-	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps := closeDeps{client: client, cfg: cfg}
 
-	pickedRow := &store.BranchRow{
-		IssueID:    1,
+	pickedRow := &branch.Row{
 		IssueSlug:  "X.2",
 		Title:      "part-two",
 		BranchName: "X.2@feat@two",
 		Type:       "feat",
-		Status:     store.BranchStatusInProgress,
+		Status:     branch.StatusInProgress,
 	}
 
 	prompter := &scriptedPrompter{
@@ -1164,9 +1080,9 @@ func TestClose_SubtaskDryRunFallsBackToRemoteBase(t *testing.T) {
 }
 
 // TestClose_CrossMachine_UsesParentBranchRef verifies that close correctly
-// merges a sub-task into its parent integration branch even when the local
-// SQLite store has no parent-child relation record (cross-machine scenario:
-// a developer who fetched and checked out the branch without running issue start).
+// merges a sub-task into its parent integration branch from the branch chains
+// alone (cross-machine scenario: a developer who fetched and checked out the
+// branch without running issue start).
 func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 	t.Parallel()
 
@@ -1174,9 +1090,8 @@ func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 	//   - main branch with one commit
 	//   - X@feat@big-feature (parent integration branch), one commit ahead of main
 	//   - X.1@feat@part-one (sub-task), one commit ahead of X@feat@big-feature
-	//   - refs/zf/branches/X    → {branch_name: "X@feat@big-feature"}
-	//   - refs/zf/branches/X.1  → {branch_name: "X.1@feat@part-one", parent_slug: "X"}
-	//   - SQLite store: only X.1 branch row (no issue_relations record)
+	//   - refs/zf/branches/X    → tracks X@feat@big-feature
+	//   - refs/zf/branches/X.1  → tracks X.1@feat@part-one, parent X
 
 	dir := t.TempDir()
 
@@ -1228,39 +1143,9 @@ func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 		t.Fatalf("git.NewClientAt: %v", err)
 	}
 
-	// Write branch refs (as Alice would have pushed them; Bob fetched them).
-	parentRef := git.BranchRef{
-		IssueSlug:  "X",
-		BranchName: "X@feat@big-feature",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if _, err := client.WriteBranchRef(t.Context(), "X", parentRef); err != nil {
-		t.Fatalf("WriteBranchRef X: %v", err)
-	}
-
-	childRef := git.BranchRef{
-		IssueSlug:  "X.1",
-		BranchName: "X.1@feat@part-one",
-		ParentSlug: "X",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if _, err := client.WriteBranchRef(t.Context(), "X.1", childRef); err != nil {
-		t.Fatalf("WriteBranchRef X.1: %v", err)
-	}
-
-	// Store: only X.1 branch row; no issue_relations.
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.1", Title: "part-one"},
-		&store.Branch{Name: "X.1@feat@part-one", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed branch: %v", err)
-	}
+	// The branch chains, as Alice would have pushed them and Bob fetched them.
+	branchtest.Seed(t, client, branch.Op{Branch: "X@feat@big-feature"}, branch.StatusInProgress)
+	branchtest.Seed(t, client, branch.Op{Branch: "X.1@feat@part-one", Title: "part-one", Parent: "X"}, branch.StatusInProgress)
 
 	// Seed review chain so reviewPreflight passes (approved, no reviewer
 	// commits). FeatureSHA is not checked by reviewPreflight for approved
@@ -1270,15 +1155,14 @@ func TestClose_CrossMachine_UsesParentBranchRef(t *testing.T) {
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 
-	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps := closeDeps{client: client, cfg: cfg}
 
-	pickedRow := &store.BranchRow{
-		IssueID:    1,
+	pickedRow := &branch.Row{
 		IssueSlug:  "X.1",
 		Title:      "part-one",
 		BranchName: "X.1@feat@part-one",
 		Type:       "feat",
-		Status:     store.BranchStatusInProgress,
+		Status:     branch.StatusInProgress,
 	}
 
 	prompter := &scriptedPrompter{
@@ -1352,57 +1236,21 @@ func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
 	runGit("commit", "-m", "feat(X): parent")
 	runGit("checkout", "main")
 
-	// Re-seed store: parent X, and two children X.1 (merged) and X.2 (in_progress).
-	trackerType := "fake"
-	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X", Title: "big", TrackerType: &trackerType},
-		&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed X: %v", err)
-	}
-	now := time.Now()
-	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.1", Title: "one"},
-		&store.Branch{Name: "X.1@feat@one", Type: "feat", StatusID: store.StatusIDMerged, MergedAt: &now},
-	); err != nil {
-		t.Fatalf("seed X.1: %v", err)
-	}
-	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "X.2", Title: "two"},
-		&store.Branch{Name: "X.2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed X.2: %v", err)
-	}
-	// Record parent-child relations.
-	if err := rig.store.InsertIssueRelation(t.Context(), "X", "X.1"); err != nil {
-		t.Fatalf("relation X→X.1: %v", err)
-	}
-	if err := rig.store.InsertIssueRelation(t.Context(), "X", "X.2"); err != nil {
-		t.Fatalf("relation X→X.2: %v", err)
-	}
+	// Track parent X and its two children, both merged: X.1 here, X.2 by Bob in
+	// his clone (the chain fetched from the remote says so).
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "X@feat@big", Title: "big", TrackerType: "fake"}, branch.StatusInProgress)
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "X.1@feat@one", Title: "one", Parent: "X"}, branch.StatusMerged)
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "X.2@feat@two", Title: "two", Parent: "X"}, branch.StatusMerged)
 
-	// Simulate Bob having closed X.2 in his clone: write a branch ref with Merged=true.
-	mergedRef := git.BranchRef{
-		IssueSlug:  "X.2",
-		BranchName: "X.2@feat@two",
-		ParentSlug: "X",
-		CreatedAt:  now.UTC().Format(time.RFC3339),
-		Merged:     true,
-	}
-	if _, err := rig.client.WriteBranchRef(t.Context(), "X.2", mergedRef); err != nil {
-		t.Fatalf("WriteBranchRef X.2: %v", err)
-	}
-
-	// Update the store config: X@feat@big should merge into main.
+	// X@feat@big should merge into main.
 	rig.cfg.Branch.Base = "main"
 
-	xRow := &store.BranchRow{
-		IssueID:    2, // second InsertIssueWithBranch call
+	xRow := &branch.Row{
 		IssueSlug:  "X",
 		Title:      "big",
 		BranchName: "X@feat@big",
 		Type:       "feat",
-		Status:     store.BranchStatusInProgress,
+		Status:     branch.StatusInProgress,
 	}
 
 	prompter := &scriptedPrompter{
@@ -1422,8 +1270,8 @@ func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
 		assertHeadSubject(t, rig.dir, "main", "feat(X): close into main")
 	})
 
-	t.Run("X.2 reconciled as merged in store", func(t *testing.T) {
-		merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	t.Run("X.2 still reads merged", func(t *testing.T) {
+		merged, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -1434,7 +1282,7 @@ func TestClose_ParentClose_ReconcilesMergedChildFromRef(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Error("X.2@feat@two not reconciled as merged in store")
+			t.Error("X.2@feat@two does not read merged")
 		}
 	})
 }
@@ -1630,31 +1478,15 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 
 	rig := newCloseRig(t)
 
-	// Simulate a sibling clone having closed DEF-2: this clone's store still
-	// shows it in_progress, but its branch ref carries Merged=true — the
-	// cross-machine source of truth that updateClosedStatus writes + pushes on
-	// close. The picker must not offer it.
-	trackerType := "fake"
-	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "DEF-2", Title: "two", TrackerType: &trackerType},
-		&store.Branch{Name: "DEF-2@feat@two", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed DEF-2: %v", err)
-	}
-	if _, err := rig.client.WriteBranchRef(t.Context(), "DEF-2", git.BranchRef{
-		IssueSlug:   "DEF-2",
-		BranchName:  "DEF-2@feat@two",
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-		TrackerType: "fake",
-		Merged:      true,
-	}); err != nil {
-		t.Fatalf("seed DEF-2 merged ref: %v", err)
-	}
+	// A sibling clone closed DEF-2: its chain, fetched from the remote, records
+	// the merge that updateClosedStatus writes and pushes on close. The picker
+	// must not offer it.
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "DEF-2@feat@two", Title: "two", TrackerType: "fake"}, branch.StatusMerged)
 
 	prompter := &scriptedPrompter{Branch: rig.pickedBranchRow()}
 
 	invoked := invokedBranchFor(t.Context(), rig.client, "")
-	if _, err := getPickedBranch(t.Context(), rig.store, rig.client, invoked, prompter); err != nil {
+	if _, err := getPickedBranch(t.Context(), rig.client, invoked, prompter); err != nil {
 		t.Fatalf("getPickedBranch: %v", err)
 	}
 
@@ -1678,8 +1510,8 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 		}
 	})
 
-	t.Run("store reconciles the sibling-merged branch to merged", func(t *testing.T) {
-		merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	t.Run("the sibling-merged branch still reads merged", func(t *testing.T) {
+		merged, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches merged: %v", err)
 		}
@@ -1690,7 +1522,7 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("expected DEF-2@feat@two reconciled to merged in store; merged rows: %+v", merged)
+			t.Errorf("expected DEF-2@feat@two to read merged; merged rows: %+v", merged)
 		}
 	})
 }
@@ -1770,34 +1602,15 @@ func newCloseOriginRig(t *testing.T) (closeDeps, string, string, string) {
 		t.Fatalf("git.NewClientAt: %v", err)
 	}
 
-	s, err := store.Open(t.Context(), cloneDir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	// Seed the store and a tracker-born branch ref.
-	trackerType := "fake"
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "ABC-1", Title: "Push test", TrackerType: &trackerType},
-		&store.Branch{Name: "ABC-1@feat@push-test", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed branch: %v", err)
-	}
-	if _, err := client.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
-		IssueSlug:   "ABC-1",
-		BranchName:  "ABC-1@feat@push-test",
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-		TrackerType: "fake",
-	}); err != nil {
-		t.Fatalf("seed branch ref: %v", err)
-	}
+	// A tracker-born branch chain.
+	branchtest.Seed(t, client,
+		branch.Op{Branch: "ABC-1@feat@push-test", Title: "Push test", TrackerType: "fake"}, branch.StatusInProgress)
 
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 	cfg.IssueTracker.Type = "fake"
 
-	deps := closeDeps{client: client, store: s, cfg: cfg}
+	deps := closeDeps{client: client, cfg: cfg}
 
 	return deps, cloneDir, originDir, "main"
 }
@@ -1812,13 +1625,12 @@ func TestClose_ProposesPushOfMergeTarget(t *testing.T) {
 	deps.cfg.Push.Propose = true
 	deps.pushConfirm = func(_ context.Context, _ string) (bool, error) { return true, nil }
 
-	pickedRow := &store.BranchRow{
-		IssueID:    1,
+	pickedRow := &branch.Row{
 		IssueSlug:  "ABC-1",
 		Title:      "Push test",
 		BranchName: "ABC-1@feat@push-test",
 		Type:       "feat",
-		Status:     store.BranchStatusInProgress,
+		Status:     branch.StatusInProgress,
 	}
 	prompter := &scriptedPrompter{
 		Branch:        pickedRow,
@@ -1960,18 +1772,17 @@ func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T)
 type reviewerCloseRig struct {
 	deps   closeDeps
 	client *git.Client
-	store  *store.Store
 	dir    string
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
 }
 
-// refDerivedRow returns the candidate row the close picker synthesizes from
-// refs/zf/branches/ABC-1 — IssueID 0 is the "not yet tracked" marker.
-func (r *reviewerCloseRig) refDerivedRow() *store.BranchRow {
-	return &store.BranchRow{
-		IssueID: 0, IssueSlug: "ABC-1", Title: "thing",
-		BranchName: "ABC-1@feat@thing", Type: "feat", Status: store.BranchStatusInProgress,
+// refDerivedRow returns the row the close picker offers for ABC-1, a branch
+// this clone knows only through the chain fetched from the remote.
+func (r *reviewerCloseRig) refDerivedRow() *branch.Row {
+	return &branch.Row{
+		IssueSlug: "ABC-1", Title: "thing",
+		BranchName: "ABC-1@feat@thing", Type: "feat", Status: branch.StatusInProgress,
 	}
 }
 
@@ -2014,18 +1825,15 @@ func newReviewerCloseRig(t *testing.T) *reviewerCloseRig {
 	runIn(seedDir, "push", "origin", "ABC-1@feat@thing")
 	runIn(seedDir, "checkout", "main")
 
-	// Developer publishes the branch ref (manual issue: no tracker origin).
+	// Developer publishes the branch chain (manual issue: no tracker origin).
 	seedClient, err := git.NewClientAt(nil, seedDir)
 	if err != nil {
 		t.Fatalf("seed NewClientAt: %v", err)
 	}
-	if _, err := seedClient.WriteBranchRef(t.Context(), "ABC-1", git.BranchRef{
-		IssueSlug: "ABC-1", BranchName: "ABC-1@feat@thing",
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		t.Fatalf("seed WriteBranchRef: %v", err)
+	branchtest.Seed(t, seedClient, branch.Op{Branch: "ABC-1@feat@thing", Title: "thing"}, branch.StatusInProgress)
+	if err := branch.Push(t.Context(), seedClient, "ABC-1"); err != nil {
+		t.Fatalf("seed push branch ref: %v", err)
 	}
-	runIn(seedDir, "push", "origin", "refs/zf/branches/ABC-1")
 
 	// ----- Carol's clone: empty store, no local feature branch -----
 	runIn(carolDir, "init", "--initial-branch=main")
@@ -2046,19 +1854,12 @@ func newReviewerCloseRig(t *testing.T) *reviewerCloseRig {
 		t.Fatalf("carol NewClientAt: %v", err)
 	}
 
-	carolStore, err := store.Open(t.Context(), filepath.Join(carolDir, ".git"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = carolStore.Close() })
-
 	cfg := &config.AppConfig{}
 	cfg.Branch.Base = "main"
 
 	return &reviewerCloseRig{
-		deps:   closeDeps{client: carolClient, store: carolStore, cfg: cfg},
+		deps:   closeDeps{client: carolClient, cfg: cfg},
 		client: carolClient,
-		store:  carolStore,
 		dir:    carolDir,
 		stdout: stdout,
 		stderr: stderr,
@@ -2076,9 +1877,8 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 
 	rig := newReviewerCloseRig(t)
 
-	// The picker returns the ref-derived candidate (IssueID 0). runClose must
-	// materialize the feature branch before merging (MaterializeBranch) and
-	// promote it into store rows after the merge commits (TrackCandidate).
+	// The picker returns a branch this clone never checked out. runClose must
+	// materialize the feature branch before merging (MaterializeBranch).
 	prompter := &scriptedPrompter{
 		Branch:       rig.refDerivedRow(),
 		Strategy:     commitpkg.MergeStrategySquash,
@@ -2091,15 +1891,15 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 		t.Fatalf("runClose: %v", err)
 	}
 
-	t.Run("picker was offered the ref-derived candidate", func(t *testing.T) {
+	t.Run("picker was offered the branch started in another clone", func(t *testing.T) {
 		var found bool
 		for _, b := range prompter.PickBranchSeen {
-			if b.IssueSlug == "ABC-1" && b.BranchName == "ABC-1@feat@thing" && b.IssueID == 0 {
+			if b.IssueSlug == "ABC-1" && b.BranchName == "ABC-1@feat@thing" {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("PickBranchSeen = %+v, want an ABC-1 ref-derived (IssueID 0) row", prompter.PickBranchSeen)
+			t.Errorf("PickBranchSeen = %+v, want an ABC-1 row", prompter.PickBranchSeen)
 		}
 	})
 
@@ -2117,8 +1917,8 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 		assertHeadSubject(t, rig.dir, "main", "feat(thing): reviewer closes ABC-1")
 	})
 
-	t.Run("store now tracks ABC-1 as merged", func(t *testing.T) {
-		merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	t.Run("ABC-1 is recorded as merged", func(t *testing.T) {
+		merged, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -2127,13 +1927,10 @@ func TestClose_ReviewerInitiated(t *testing.T) {
 		}
 	})
 
-	t.Run("branch ref stamped merged=true", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(t.Context(), "ABC-1")
-		if err != nil {
-			t.Fatalf("ReadBranchRef: %v", err)
-		}
-		if ref == nil || !ref.Merged {
-			t.Errorf("branch ref = %+v, want Merged=true", ref)
+	t.Run("the merge reached the remote's chain", func(t *testing.T) {
+		pushed, err := rig.client.ChainRefPushed(t.Context(), git.BranchRefs, "ABC-1")
+		if err != nil || !pushed {
+			t.Errorf("ChainRefPushed = %v, %v, want the merged status pushed", pushed, err)
 		}
 	})
 }
@@ -2180,23 +1977,13 @@ func TestClose_ReviewerInitiated_AbortRollsBack(t *testing.T) {
 		}
 	})
 
-	t.Run("no store rows inserted", func(t *testing.T) {
-		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
+	t.Run("ABC-1 is still recorded as in progress", func(t *testing.T) {
+		rows, err := branch.ListRows(t.Context(), rig.client, branch.StatusAll)
 		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
+			t.Fatalf("ListRows: %v", err)
 		}
-		if len(rows) != 0 {
-			t.Errorf("store rows = %+v, want none after an aborted close", rows)
-		}
-	})
-
-	t.Run("branch ref not stamped merged", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(t.Context(), "ABC-1")
-		if err != nil {
-			t.Fatalf("ReadBranchRef: %v", err)
-		}
-		if ref == nil || ref.Merged {
-			t.Errorf("branch ref = %+v, want Merged=false (close aborted)", ref)
+		if len(rows) != 1 || rows[0].Status != branch.StatusInProgress {
+			t.Errorf("rows = %+v, want ABC-1 in progress after an aborted close", rows)
 		}
 	})
 }
@@ -2248,13 +2035,13 @@ func TestClose_ReviewerInitiated_AbortAfterCheckoutRollsBack(t *testing.T) {
 		}
 	})
 
-	t.Run("no store rows inserted", func(t *testing.T) {
-		rows, listErr := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
+	t.Run("ABC-1 is still recorded as in progress", func(t *testing.T) {
+		rows, listErr := branch.ListRows(t.Context(), rig.client, branch.StatusAll)
 		if listErr != nil {
-			t.Fatalf("ListBranches: %v", listErr)
+			t.Fatalf("ListRows: %v", listErr)
 		}
-		if len(rows) != 0 {
-			t.Errorf("store rows = %+v, want none after an aborted close", rows)
+		if len(rows) != 1 || rows[0].Status != branch.StatusInProgress {
+			t.Errorf("rows = %+v, want ABC-1 in progress after an aborted close", rows)
 		}
 	})
 }
@@ -2316,13 +2103,13 @@ func TestClose_ReviewerInitiated_SquashComposeAbortRestoresCleanTree(t *testing.
 		}
 	})
 
-	t.Run("no store rows inserted", func(t *testing.T) {
-		rows, listErr := rig.store.ListBranches(t.Context(), store.BranchStatusAll)
+	t.Run("ABC-1 is still recorded as in progress", func(t *testing.T) {
+		rows, listErr := branch.ListRows(t.Context(), rig.client, branch.StatusAll)
 		if listErr != nil {
-			t.Fatalf("ListBranches: %v", listErr)
+			t.Fatalf("ListRows: %v", listErr)
 		}
-		if len(rows) != 0 {
-			t.Errorf("store rows = %+v, want none after an aborted close", rows)
+		if len(rows) != 1 || rows[0].Status != branch.StatusInProgress {
+			t.Errorf("rows = %+v, want ABC-1 in progress after an aborted close", rows)
 		}
 	})
 }
@@ -2543,8 +2330,8 @@ func TestClose_Worktree_RebaseRemovesWorktreeAndBranch(t *testing.T) {
 			t.Fatalf("origin still has the branch: %q", got)
 		}
 	})
-	t.Run("store records branch as merged", func(t *testing.T) {
-		rows, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	t.Run("the chain records the branch as merged", func(t *testing.T) {
+		rows, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -2772,7 +2559,7 @@ func TestClose_Worktree_PrunableEntryRefusesWithPruneHint(t *testing.T) {
 		}
 	})
 	t.Run("store row still in progress", func(t *testing.T) {
-		rows, lerr := rig.store.ListBranches(t.Context(), store.BranchStatusInProgress)
+		rows, lerr := branch.ListRows(t.Context(), rig.client, branch.StatusInProgress)
 		if lerr != nil {
 			t.Fatalf("ListBranches: %v", lerr)
 		}

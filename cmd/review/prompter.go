@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -16,7 +16,7 @@ type ReviewPrompter interface {
 	// PickBranch presents a branch list with a configurable title and a smart
 	// default (the branch whose IssueSlug matches currentSlug, or the first row).
 	// Used by request, start, approve, reject, sync, and status subcommands.
-	PickBranch(ctx context.Context, title string, branches []store.BranchRow, currentSlug string) (*store.BranchRow, error)
+	PickBranch(ctx context.Context, title string, branches []branch.Row, currentSlug string) (*branch.Row, error)
 
 	// PickTrackerStatus presents the tracker's status list and returns the chosen
 	// status name (or "" to skip). Used by request/approve/reject to update the
@@ -39,9 +39,11 @@ type huhReviewPrompter struct {
 	issueflow.HuhPickers // PickTrackerStatus
 }
 
-func (p *huhReviewPrompter) PickBranch(ctx context.Context, title string, branches []store.BranchRow, currentSlug string) (*store.BranchRow, error) {
-	var picked store.BranchRow
-	onCurrent := func(b *store.BranchRow) bool { return b.IssueSlug == currentSlug }
+func (p *huhReviewPrompter) PickBranch(
+	ctx context.Context, title string, branches []branch.Row, currentSlug string,
+) (*branch.Row, error) {
+	var picked branch.Row
+	onCurrent := func(b *branch.Row) bool { return b.IssueSlug == currentSlug }
 	if err := huh.NewForm(tui.BranchPicker(title, branches, onCurrent, &picked)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}

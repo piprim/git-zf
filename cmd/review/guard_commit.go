@@ -25,15 +25,13 @@ func (r Review) getGuardCommitCmd() *cobra.Command {
 			if err != nil {
 				return nil // fail-open
 			}
-			defer func() { _ = deps.store.Close() }()
-
 			return runReviewGuardCommit(ctx, deps)
 		},
 	}
 }
 
 func runReviewGuardCommit(ctx context.Context, deps reviewDeps) error {
-	pending, branchName, err := issueflow.PendingReviewForHEAD(ctx, deps.client, deps.store)
+	pending, branchName, err := issueflow.PendingReviewForHEAD(ctx, deps.client)
 	if err != nil || pending == nil {
 		return nil // fail-open
 	}

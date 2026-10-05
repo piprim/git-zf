@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/piprim/git-zf/branch"
@@ -10,7 +11,6 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
 )
@@ -23,7 +23,6 @@ import (
 // without decoupling.
 type reviewDeps struct {
 	client *git.Client
-	store  *store.Store
 	cfg    *config.AppConfig
 	// tracker is the originating issue tracker, or nil when none is configured
 	// (or it failed to initialise). A nil tracker disables the status-update
@@ -36,18 +35,12 @@ type reviewDeps struct {
 }
 
 func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppConfig) (reviewDeps, error) {
-	s, err := store.OpenRepo(ctx)
-	if err != nil {
-		return reviewDeps{}, fmt.Errorf("open store: %w", err)
-	}
-
 	client, err := cmdutil.NewClientForCmd(cmd, cfg)
 	if err != nil {
-		_ = s.Close()
 		return reviewDeps{}, err
 	}
 
-	deps := reviewDeps{client: client, store: s, cfg: cfg}
+	deps := reviewDeps{client: client, cfg: cfg}
 	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
 	deps.pushConfirm = pushflow.NewHuhConfirm()
 
@@ -67,7 +60,7 @@ func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppCon
 }
 
 // withDeps returns the RunE of a review subcommand: it builds the shared
-// dependencies, runs fn, and closes the store.
+// dependencies and runs fn.
 func withDeps(
 	cfg *config.AppConfig, fn func(ctx context.Context, deps reviewDeps) error,
 ) func(*cobra.Command, []string) error {
@@ -78,36 +71,50 @@ func withDeps(
 		if err != nil {
 			return err
 		}
-		defer func() { _ = deps.store.Close() }()
-
 		return fn(ctx, deps)
 	}
 }
 
-// branchNameForIssue returns the name of issueSlug's most recent branch in the
-// store, or "" when the store has none.
-func branchNameForIssue(ctx context.Context, s *store.Store, issueSlug string) (string, error) {
-	rows, err := s.ListBranchesByIssueSlugs(ctx, []string{issueSlug})
+// branchNameForIssue returns the name of issueSlug's most recent tracked
+// branch, or "" when the issue has none (a ref in the old blob format counts
+// as none).
+func branchNameForIssue(ctx context.Context, c *git.Client, issueSlug string) (string, error) {
+	st, err := branch.Load(ctx, c, issueSlug)
+	if (err == nil && st == nil) || errors.Is(err, branch.ErrLegacyBranch) {
+		return "", nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("list branches: %w", err)
 	}
 
-	return rows[issueSlug].BranchName, nil
+	if rows := branch.Rows([]branch.State{*st}, branch.StatusAll); len(rows) > 0 {
+		return rows[0].BranchName, nil
+	}
+
+	return "", nil
+}
+
+// fetchBranchRefs brings the remote's branch chains, best-effort: what another
+// clone started or closed is only there until fetched.
+func fetchBranchRefs(ctx context.Context, deps reviewDeps) {
+	if err := branch.Fetch(ctx, deps.client); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: fetch branch refs: %v\n", err)
+	}
 }
 
 // inReviewBranches returns synthetic BranchRows for issues currently in_review.
-func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, error) {
+func inReviewBranches(ctx context.Context, deps reviewDeps) ([]branch.Row, error) {
 	return reviewBranches(ctx, deps, func(st *reviewpkg.State) bool {
 		return !st.Closed && st.Status == reviewpkg.StatusInReview
 	})
 }
 
 // reviewBranches returns a synthetic BranchRow for every review keep accepts,
-// built from git refs rather than the local store. This works on fresh reviewer
-// clones where the store is empty and no git zf issue start has been run.
+// built from the review chains: a reviewer's clone may know the issue through
+// nothing else.
 func reviewBranches(
 	ctx context.Context, deps reviewDeps, keep func(*reviewpkg.State) bool,
-) ([]store.BranchRow, error) {
+) ([]branch.Row, error) {
 	// Fetch latest state and push anything still local (best-effort).
 	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
@@ -121,7 +128,7 @@ func reviewBranches(
 		fmt.Fprintln(deps.client.IO().Err, w)
 	}
 
-	var result []store.BranchRow
+	var result []branch.Row
 	for i := range states {
 		st := &states[i]
 		if !keep(st) {
@@ -129,7 +136,7 @@ func reviewBranches(
 		}
 		// Build a synthetic BranchRow from the review. The reviewer's branch
 		// follows the <IssueID>@review convention.
-		result = append(result, store.BranchRow{
+		result = append(result, branch.Row{
 			IssueSlug:  st.Slug,
 			BranchName: branch.ReviewBranchName(st.Slug),
 			Title:      st.Slug,
@@ -142,7 +149,7 @@ func reviewBranches(
 type reviewDecision struct {
 	round         int
 	reviewBranch  string // <issueSlug>@review
-	featureBranch string // "" when the issue's branch is not in the local store
+	featureBranch string // "" when the issue has no tracked branch
 	branchExists  bool   // reviewBranch exists locally
 	hasCommits    bool   // the reviewer pushed commits to reviewBranch
 }
@@ -173,7 +180,7 @@ func recordReviewDecision(
 	d := reviewDecision{round: st.Round, reviewBranch: branch.ReviewBranchName(issueSlug)}
 
 	var branchErr error
-	if d.featureBranch, branchErr = branchNameForIssue(ctx, deps.store, issueSlug); branchErr != nil {
+	if d.featureBranch, branchErr = branchNameForIssue(ctx, deps.client, issueSlug); branchErr != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: %v (has_commits will be false)\n", branchErr)
 	}
 

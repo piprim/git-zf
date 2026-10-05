@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 )
 
 func TestReviewRequest_RefusesWithUnincorporatedReviewerCommits(t *testing.T) {
@@ -33,7 +33,7 @@ func TestReviewRequest_InteractiveOfferMergesThenProceeds(t *testing.T) {
 	rig := newReviewE2ERig(t)
 	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	prompter := &scriptedReviewPrompter{
-		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@feat@my-feature"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		ConfirmAnswer: true,
 	}
 
@@ -64,7 +64,7 @@ func TestReviewRequest_InteractiveDeclineAborts(t *testing.T) {
 	rig := newReviewE2ERig(t)
 	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	prompter := &scriptedReviewPrompter{
-		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@feat@my-feature"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		ConfirmAnswer: false,
 	}
 

@@ -10,7 +10,8 @@
 - `git zf init` installs hooks under the per-worktree git dir when run inside a linked worktree; git reads hooks from the common dir. Run `init` from the main checkout for now.
 - AI assistant. See https://github.com/rshdhere/vibecheck
 - Implement bug tracking into git repo and by-directionnal syncing with remote trackers like https://github.com/git-bug/git-bug does but without the same feature, git-zf keeps his specific workflow.
-
+- git zf branch close <branch-name>
+  No menu entry or picker. The command takes exactly one name and is not in the git zf branch menu. A picker over in-progress branches is a small addition
 
 ### Deferred minors
 - git zf -d issue new skips the form, because the debug flag counts as a flag.

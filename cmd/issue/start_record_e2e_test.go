@@ -2,13 +2,12 @@ package issue
 
 import (
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	issuepkg "github.com/piprim/git-zf/issue"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -55,11 +54,11 @@ func TestRunIssueStart_ManualEmptyIDCreatesRepoIssue(t *testing.T) {
 		}
 	})
 	t.Run("the branch ref records the full issue ID", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(t.Context(), rec.ShortID())
+		ref, err := branch.Load(t.Context(), rig.client, rec.ShortID())
 		if err != nil || ref == nil {
-			t.Fatalf("ReadBranchRef = %+v, %v", ref, err)
+			t.Fatalf("Load = %+v, %v", ref, err)
 		}
-		if ref.IssueID != rec.ID || ref.BranchName != wantBranch {
+		if ref.IssueID != rec.ID || ref.Entry(wantBranch) == nil {
 			t.Errorf("ref = %+v", ref)
 		}
 	})
@@ -113,7 +112,7 @@ func TestRunIssueStart_PicksRepoIssue(t *testing.T) {
 		}
 	})
 	t.Run("the branch ref records the full issue ID", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(ctx, open.ShortID())
+		ref, err := branch.Load(ctx, rig.client, open.ShortID())
 		if err != nil || ref == nil || ref.IssueID != open.ID {
 			t.Errorf("ref = %+v, %v", ref, err)
 		}
@@ -163,7 +162,7 @@ func TestRunIssueStart_PickerNewThenTypedID(t *testing.T) {
 		}
 	})
 	t.Run("the branch ref has no issue ID", func(t *testing.T) {
-		ref, err := rig.client.ReadBranchRef(ctx, "JIRA-7")
+		ref, err := branch.Load(ctx, rig.client, "JIRA-7")
 		if err != nil || ref == nil || ref.IssueID != "" {
 			t.Errorf("ref = %+v, %v", ref, err)
 		}
@@ -358,11 +357,10 @@ func TestRunIssueStart_RepoIssueWithUnknownTypeIsRefused(t *testing.T) {
 	}
 }
 
-// The branch row must be written to the store of the repository the flow works
-// on. It used to go to the store of the repository the process was started
-// from: under `go test` that is git-zf itself, whose `issue close` picker then
-// listed every test fixture.
-func TestRunIssueStart_RecordsBranchInTheFlowRepoStore(t *testing.T) {
+// The branch must be recorded in the repository the flow works on, not in the
+// one the process was started from: under `go test` that is git-zf itself,
+// whose `issue close` picker would then list every test fixture.
+func TestRunIssueStart_RecordsBranchInTheFlowRepo(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
@@ -378,21 +376,15 @@ func TestRunIssueStart_RecordsBranchInTheFlowRepoStore(t *testing.T) {
 			t.Fatalf("RunIssueStart: %v", err)
 		}
 	})
-	t.Run("no store warning", func(t *testing.T) {
-		if strings.Contains(rig.stderr.String(), "store record failed") {
+	t.Run("no record warning", func(t *testing.T) {
+		if strings.Contains(rig.stderr.String(), "record failed") {
 			t.Errorf("stderr = %q", rig.stderr.String())
 		}
 	})
-	t.Run("the row is in the store of the flow's repository", func(t *testing.T) {
-		s, err := store.Open(t.Context(), filepath.Join(rig.dir, ".git"))
+	t.Run("the branch is tracked in the flow's repository", func(t *testing.T) {
+		rows, err := branch.ListRows(t.Context(), rig.client, branch.StatusAll)
 		if err != nil {
-			t.Fatalf("store.Open: %v", err)
-		}
-		defer func() { _ = s.Close() }()
-
-		rows, err := s.ListBranches(t.Context(), store.BranchStatusAll)
-		if err != nil {
-			t.Fatalf("ListBranches: %v", err)
+			t.Fatalf("ListRows: %v", err)
 		}
 		if len(rows) != 1 || rows[0].BranchName != "STORE-1@feat@store-location" || rows[0].IssueSlug != "STORE-1" {
 			t.Errorf("rows = %+v, want the single STORE-1 branch", rows)

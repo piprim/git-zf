@@ -1,1 +1,0 @@
-ALTER TABLE issues ADD COLUMN tracker_type TEXT DEFAULT NULL;

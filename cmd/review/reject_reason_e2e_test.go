@@ -7,18 +7,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 )
 
-func bringRigToInReview(t *testing.T, rig *reviewE2ERig) store.BranchRow {
+func bringRigToInReview(t *testing.T, rig *reviewE2ERig) branch.Row {
 	t.Helper()
 	ctx := t.Context()
 	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "77@feat@my-feature"); err != nil {
 		t.Fatalf("checkout feature branch: %v", err)
 	}
-	branches, _ := rig.store.ListBranches(ctx, store.BranchStatusInProgress)
-	var picked store.BranchRow
+	branches, _ := branch.ListRows(ctx, rig.client, branch.StatusInProgress)
+	var picked branch.Row
 	for _, b := range branches {
 		if b.IssueSlug == "77" {
 			picked = b

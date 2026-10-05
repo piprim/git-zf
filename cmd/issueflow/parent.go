@@ -2,35 +2,25 @@ package issueflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 )
-
-// ParentStore is the slice of *store.Store that ResolveParentBranch needs.
-type ParentStore interface {
-	GetParentIssue(ctx context.Context, childSlug string) (string, error)
-	ListBranches(ctx context.Context, status store.BranchStatus) ([]store.BranchRow, error)
-}
-
-// ParentClient is the slice of *git.Client that ResolveParentBranch needs.
-type ParentClient interface {
-	DefaultBaseBranch() (string, error)
-	FetchBranchRefs(ctx context.Context) error
-	ReadBranchRef(ctx context.Context, issueSlug string) (*git.BranchRef, error)
-}
 
 // ResolveParentBranch computes the merge target for an issue: the configured
 // base (cfgBase, or DefaultBaseBranch when empty), redirected to the parent
 // integration branch when issueSlug has a parent.
 //
-// The store is checked first for the parent relation; on a cross-machine clone
-// where the store has no record, the refs/zf/branches/<slug> git ref is the
-// fallback (FetchBranchRefs runs best-effort first so a later read sees fresh
-// refs). The parent's branch *name* is resolved from the store, then from the
-// parent's own branch ref. Close and commit share this one implementation.
-func ResolveParentBranch(ctx context.Context, s ParentStore, c ParentClient, issueSlug, cfgBase string) (string, error) {
+// The parent relation is the one recorded on the issue's branch chain; the
+// parent's branch is the newest one its own chain knows. It reads local chains
+// only: callers that want what the remote has run branch.Fetch first. Close and
+// commit share this one implementation.
+//
+// A parent whose ref is still in the old blob format is an error, not "no
+// parent": falling back to the base would silently change the merge target.
+func ResolveParentBranch(ctx context.Context, c *git.Client, issueSlug, cfgBase string) (string, error) {
 	base := cfgBase
 	if base == "" {
 		detected, err := c.DefaultBaseBranch()
@@ -40,41 +30,30 @@ func ResolveParentBranch(ctx context.Context, s ParentStore, c ParentClient, iss
 		base = detected
 	}
 
-	parentSlug, err := s.GetParentIssue(ctx, issueSlug)
-	if err != nil {
+	st, err := branch.Load(ctx, c, issueSlug)
+	if err != nil && !errors.Is(err, branch.ErrLegacyBranch) {
 		return "", fmt.Errorf("check parent issue: %w", err)
 	}
-	if parentSlug == "" {
-		// One fetch retrieves all refs/zf/branches/* atomically.
-		_ = c.FetchBranchRefs(ctx)
-		if br, _ := c.ReadBranchRef(ctx, issueSlug); br != nil {
-			parentSlug = br.ParentSlug
-		}
-	}
-	if parentSlug == "" {
+	if st == nil || st.Parent == "" {
 		return base, nil
 	}
 
-	// Try store first for the parent branch name.
-	parentBranches, listErr := s.ListBranches(ctx, store.BranchStatusAll)
-	if listErr != nil {
-		return "", fmt.Errorf("list branches for parent %q: %w", parentSlug, listErr)
+	parent, err := branch.Load(ctx, c, st.Parent)
+	if errors.Is(err, branch.ErrLegacyBranch) {
+		return "", fmt.Errorf(
+			"parent issue %q of %q is tracked in the old format.\n"+
+				"Check out its branch and run `git zf issue track`: %w", st.Parent, issueSlug, err)
 	}
-	for _, b := range parentBranches {
-		if b.IssueSlug == parentSlug {
-			return b.BranchName, nil
-		}
+	if err != nil {
+		return "", fmt.Errorf("read branches of parent %q: %w", st.Parent, err)
 	}
-	// Store miss — read the parent's branch ref for the branch name.
-	if parentBR, _ := c.ReadBranchRef(ctx, parentSlug); parentBR != nil {
-		return parentBR.BranchName, nil
+	if parent == nil {
+		return base, nil
+	}
+
+	if rows := branch.Rows([]branch.State{*parent}, branch.StatusAll); len(rows) > 0 {
+		return rows[0].BranchName, nil
 	}
 
 	return base, nil
 }
-
-// Compile-time checks that the production types satisfy the roles.
-var (
-	_ ParentStore  = (*store.Store)(nil)
-	_ ParentClient = (*git.Client)(nil)
-)

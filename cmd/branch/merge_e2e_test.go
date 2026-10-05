@@ -14,10 +14,9 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
-	"github.com/piprim/git-zf/store"
 )
 
-// mergeRig bundles a real on-disk repo + seeded store for branch-merge E2E
+// mergeRig bundles a real on-disk repo for branch-merge E2E
 // tests. The repo starts with one commit on master; helpers add local and
 // origin-only branches. The client is rebuilt after remote changes so Remote()
 // sees them.
@@ -27,7 +26,6 @@ type mergeRig struct {
 	stdout    *bytes.Buffer
 	stderr    *bytes.Buffer
 	client    *git.Client
-	store     *store.Store
 	cfg       *config.AppConfig
 }
 
@@ -44,13 +42,6 @@ func newMergeRig(t *testing.T) *mergeRig {
 	mergeWrite(t, dir, "base.txt", "base\n")
 	r.git(t, "add", "base.txt")
 	r.git(t, "commit", "-m", "chore: init")
-
-	s, err := store.Open(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	r.store = s
 
 	r.cfg = &config.AppConfig{}
 	r.cfg.Branch.Base = "master"
@@ -152,7 +143,7 @@ func (r *mergeRig) addOriginOnlyBranch(t *testing.T, name, base string) {
 }
 
 func (r *mergeRig) deps(pushConfirm pushflow.ConfirmFunc) mergeDeps {
-	return mergeDeps{client: r.client, store: r.store, cfg: r.cfg, pushConfirm: pushConfirm}
+	return mergeDeps{client: r.client, cfg: r.cfg, pushConfirm: pushConfirm}
 }
 
 func mergeWrite(t *testing.T, dir, name, body string) {
@@ -671,7 +662,7 @@ func TestRunMerge_SourceHeldByMainTree_FromWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git.NewClientAt(worktree): %v", err)
 	}
-	d := mergeDeps{client: wtClient, store: rig.store, cfg: rig.cfg, pushConfirm: declinePush}
+	d := mergeDeps{client: wtClient, cfg: rig.cfg, pushConfirm: declinePush}
 
 	p := &scriptedMergePrompter{
 		Source:         SourceBranch{Name: "master"},

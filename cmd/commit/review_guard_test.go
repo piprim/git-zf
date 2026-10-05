@@ -9,17 +9,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
-	"github.com/piprim/git-zf/store"
 )
 
 type guardRig struct {
 	dir    string
 	client *git.Client
-	store  *store.Store
 	stdout *bytes.Buffer
 }
 
@@ -63,19 +63,9 @@ func newGuardRig(t *testing.T) *guardRig {
 	if err != nil {
 		t.Fatalf("NewClientAt: %v", err)
 	}
-	s, err := store.Open(t.Context(), filepath.Join(dir, ".git"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "42", Title: "title"},
-		&store.Branch{Name: "42@feat@title", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
+	branchtest.Seed(t, client, branch.Op{Branch: "42@feat@title", Title: "title"}, branch.StatusInProgress)
 	reviewtest.Seed(t, client, "42", reviewpkg.StatusChangesRequested, 1, "unused")
-	return &guardRig{dir: dir, client: client, store: s, stdout: stdout}
+	return &guardRig{dir: dir, client: client, stdout: stdout}
 }
 
 func answer(v bool) reviewConfirmFunc {
@@ -85,7 +75,7 @@ func answer(v bool) reviewConfirmFunc {
 func TestGuardPendingReview(t *testing.T) {
 	t.Run("accept merges and continues", func(t *testing.T) {
 		rig := newGuardRig(t)
-		if err := guardPendingReview(t.Context(), rig.client, rig.store, answer(true)); err != nil {
+		if err := guardPendingReview(t.Context(), rig.client, answer(true)); err != nil {
 			t.Fatalf("want nil after accepted merge, got %v", err)
 		}
 		n, _ := rig.client.CommitsAhead(t.Context(), "42@review", "42@feat@title")
@@ -96,7 +86,7 @@ func TestGuardPendingReview(t *testing.T) {
 
 	t.Run("decline aborts with sync hint", func(t *testing.T) {
 		rig := newGuardRig(t)
-		err := guardPendingReview(t.Context(), rig.client, rig.store, answer(false))
+		err := guardPendingReview(t.Context(), rig.client, answer(false))
 		if err == nil || !strings.Contains(err.Error(), "git zf review sync") {
 			t.Fatalf("want sync-hint error, got %v", err)
 		}
@@ -107,7 +97,7 @@ func TestGuardPendingReview(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(rig.dir, "feat.txt"), []byte("wip\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := guardPendingReview(t.Context(), rig.client, rig.store, answer(true))
+		err := guardPendingReview(t.Context(), rig.client, answer(true))
 		if err == nil || !strings.Contains(err.Error(), "git stash") {
 			t.Fatalf("want stash-hint error, got %v", err)
 		}
@@ -127,7 +117,7 @@ func TestGuardPendingReview(t *testing.T) {
 			}
 		}
 		mustRun("merge", "--no-edit", "42@review") // incorporate manually
-		if err := guardPendingReview(t.Context(), rig.client, rig.store, answer(false)); err != nil {
+		if err := guardPendingReview(t.Context(), rig.client, answer(false)); err != nil {
 			t.Fatalf("want silent pass, got %v", err)
 		}
 	})

@@ -15,18 +15,16 @@ type IssueStartFlags struct {
 
 // Issue is the in-flow domain entity for a work item: a tracker.Issue enriched
 // with the conventional-commit Type that drives branch naming. It is one of
-// three distinct "Issue" shapes in the codebase, each owning a different layer:
+// two distinct "Issue" shapes in the codebase, each owning a different layer:
 //
 //   - tracker.Issue — the tracker-agnostic wire shape (all strings) returned by
 //     a tracker backend. Embedded below as the external/source representation.
 //   - issue.Issue (this type) — the domain entity used while a branch is being
 //     started: a tracker.Issue plus the branch Type (feat/fix/doc…).
-//   - store.Issue — the SQLite persistence row (int64 PK and a *string
-//     TrackerType where nil means a manual entry). The durable record
-//     after the branch exists.
 //
-// The data flows tracker.Issue (fetched) → issue.Issue (typed in the form) →
-// store.Issue (persisted).
+// The data flows tracker.Issue (fetched) → issue.Issue (typed in the form).
+// Once the branch exists, its chain (refs/zf/branches/<slug>, package branch)
+// is the durable record: title, tracker type, parent and repo issue ID.
 type Issue struct {
 	Type string // feat, fix, doc, etc…
 	// RecordID is the full ID of the repo issue (refs/zf/issues/<RecordID>)

@@ -130,6 +130,7 @@ func TestInit_ConfiguresChainFetch(t *testing.T) {
 	for _, want := range []string{
 		"+refs/zf/reviews/*:refs/remotes/origin/zf/reviews/*",
 		"+refs/zf/issues/*:refs/remotes/origin/zf/issues/*",
+		"+refs/zf/branches/*:refs/remotes/origin/zf/branches/*",
 	} {
 		t.Run("refspec added exactly once: "+want, func(t *testing.T) {
 			if n := strings.Count(specs, want); n != 1 {
@@ -184,6 +185,7 @@ func TestInit_ConfiguresEveryRemote(t *testing.T) {
 		for _, want := range []string{
 			"+refs/zf/reviews/*:refs/remotes/" + name + "/zf/reviews/*",
 			"+refs/zf/issues/*:refs/remotes/" + name + "/zf/issues/*",
+			"+refs/zf/branches/*:refs/remotes/" + name + "/zf/branches/*",
 		} {
 			t.Run("remote "+name+" gets "+want, func(t *testing.T) {
 				if n := strings.Count(specs, want); n != 1 {
@@ -198,4 +200,26 @@ func TestInit_ConfiguresEveryRemote(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInit_MentionsTheUnusedDatabase(t *testing.T) {
+	t.Run("a repository with a leftover git-zf.db is told it can go", func(t *testing.T) {
+		dir := newInitRepo(t)
+		if err := os.WriteFile(filepath.Join(dir, ".git", "git-zf.db"), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write git-zf.db: %v", err)
+		}
+
+		out := runInit(t, dir)
+		for _, want := range []string{"git-zf.db", "no longer used", "git zf issue track"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output lacks %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("a repository without it is told nothing", func(t *testing.T) {
+		if out := runInit(t, newInitRepo(t)); strings.Contains(out, "git-zf.db") {
+			t.Errorf("unexpected notice:\n%s", out)
+		}
+	})
 }

@@ -24,8 +24,6 @@ func (r Review) getRejectCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = deps.store.Close() }()
-
 			reason, given, err := rejectReasonFromFlags(cmd)
 			if err != nil {
 				return err
@@ -136,7 +134,7 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 		}
 	}
 
-	// Use issueSlug as fallback when the feature branch is not in the local store.
+	// Use issueSlug as fallback when the issue has no tracked branch here.
 	branchLabel := cmp.Or(featureBranch, issueSlug)
 
 	fmt.Fprintf(deps.client.IO().Out,

@@ -6,11 +6,11 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	lgtable "github.com/charmbracelet/lipgloss/table"
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/issue"
 )
 
-func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
-	includeProject := len(store.UniqueProjects(rows)) > 1
+func RenderIssueTable(w io.Writer, rows []issue.Row) {
+	includeProject := len(issue.UniqueProjects(rows)) > 1
 
 	headers := []string{"ISSUE ID"}
 	if includeProject {
@@ -30,7 +30,7 @@ func RenderIssueTable(w io.Writer, rows []store.IssueRow) {
 		})
 
 	for i := range rows {
-		t.Row(store.IssueRowCells(&rows[i], includeProject)...)
+		t.Row(issue.RowCells(&rows[i], includeProject)...)
 	}
 
 	fmt.Fprintln(w, t.Render())

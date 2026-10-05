@@ -4,17 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 )
 
 // maybeUpdateTrackerStatus offers to update the originating tracker's issue
 // status after a review-lifecycle transition, mirroring issue close. It is a
 // no-op unless (a) a tracker is configured on this clone and (b) the issue's
-// BranchRef records a tracker origin.
+// branch chain records a tracker origin.
 //
-// The origin signal lives in the git object (BranchRef.TrackerType), not the
-// local store, so this works on a reviewer's fresh clone whose store has no row
-// for the issue. For tracker-born issues the issueSlug already is the tracker
+// The origin signal lives on the chain (refs/zf/branches/<slug>), fetched by
+// every clone, so this works on a reviewer's fresh clone too. For tracker-born issues the issueSlug already is the tracker
 // issue ID, so it is passed straight through. All failures are non-fatal.
 func maybeUpdateTrackerStatus(ctx context.Context, deps reviewDeps, prompter ReviewPrompter, issueSlug string) {
 	if trackerBornIssue(ctx, deps, issueSlug) {
@@ -40,7 +40,7 @@ func addTrackerComment(ctx context.Context, deps reviewDeps, issueSlug string, r
 }
 
 // trackerBornIssue reports whether issueSlug originated in a configured
-// tracker: a tracker is wired on this clone and the branch ref records a
+// tracker: a tracker is wired on this clone and the branch chain records a
 // tracker type. Manual issues and pre-origin refs return false.
 func trackerBornIssue(ctx context.Context, deps reviewDeps, issueSlug string) bool {
 	if deps.tracker == nil {
@@ -48,9 +48,9 @@ func trackerBornIssue(ctx context.Context, deps reviewDeps, issueSlug string) bo
 	}
 
 	// Best-effort fetch so the origin signal is current on a fresh clone.
-	_ = deps.client.FetchBranchRefs(ctx)
+	_ = branch.Fetch(ctx, deps.client)
 
-	ref, err := deps.client.ReadBranchRef(ctx, issueSlug)
+	ref, err := branch.Load(ctx, deps.client, issueSlug)
 	if err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: read branch ref: %v\n", err)
 		return false

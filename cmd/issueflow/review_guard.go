@@ -6,7 +6,6 @@ import (
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 )
 
 // PendingReview describes reviewer commits on <slug>@review that a reviewer
@@ -80,27 +79,12 @@ func PendingReviewCommits(ctx context.Context, client *git.Client, slug, feature
 	return &PendingReview{EffectiveRef: effective, Commits: n, Status: st.Status}, nil
 }
 
-// IssueSlugForBranch returns the issue slug owning branchName in the store,
-// or "" when the branch is not tracked.
-func IssueSlugForBranch(ctx context.Context, s *store.Store, branchName string) (string, error) {
-	rows, err := s.ListBranches(ctx, store.BranchStatusAll)
-	if err != nil {
-		return "", err
-	}
-	for _, b := range rows {
-		if b.BranchName == branchName {
-			return b.IssueSlug, nil
-		}
-	}
-	return "", nil
-}
-
 // PendingReviewForHEAD applies the commit-guard exemptions and returns the
 // pending review for the currently checked-out branch, plus that branch name.
 // It returns (nil, "", nil) whenever the guard must not trip: detached HEAD,
 // an @review branch, a merge in progress (concluding a merge is exactly how
 // incorporation happens), an untracked branch, or nothing pending.
-func PendingReviewForHEAD(ctx context.Context, client *git.Client, s *store.Store) (*PendingReview, string, error) {
+func PendingReviewForHEAD(ctx context.Context, client *git.Client) (*PendingReview, string, error) {
 	branchName, err := client.CurrentBranch()
 	if err != nil || branchName == "" {
 		return nil, "", nil
@@ -111,11 +95,11 @@ func PendingReviewForHEAD(ctx context.Context, client *git.Client, s *store.Stor
 	if inProgress, mhErr := client.MergeInProgress(); mhErr == nil && inProgress {
 		return nil, "", nil
 	}
-	slug, err := IssueSlugForBranch(ctx, s, branchName)
-	if err != nil || slug == "" {
+	st, _, err := branch.Find(ctx, client, branchName)
+	if err != nil || st == nil {
 		return nil, "", nil
 	}
-	pending, err := PendingReviewCommits(ctx, client, slug, branchName)
+	pending, err := PendingReviewCommits(ctx, client, st.Slug, branchName)
 	if err != nil || pending == nil {
 		return nil, "", nil
 	}

@@ -70,11 +70,11 @@ $ git zf issue label [<id> +add -remove …]
 $ git zf issue sync             # fetch, merge and push the repository issues
 ```
 
-**`issue start`** — start work on an issue: fetch your open issues from the configured tracker (Redmine, GitHub, Forgejo/Gitea), or take the manual path: pick an open issue stored in the repository, or fill the form. Leaving the form's Issue ID empty creates a new issue in the repository; typing one (for a tracker git-zf does not talk to) uses it as is. A branch named `{issue-id}@{type}@{slug}` (see [Branch naming](#branch-naming)) is created and checked out, **or a git worktree is created** so the main working tree stays untouched. A prompt asks which; pin the choice with `branch.use-worktree` in the config. When a worktree is created the command prints its path and a `cd` hint, since the shell cannot change directory for you. With a tracker configured, you can move the issue to "In Progress" in the same step. Branch and worktree state is tracked in a local SQLite store shared by all worktrees of the repository.
+**`issue start`** — start work on an issue: fetch your open issues from the configured tracker (Redmine, GitHub, Forgejo/Gitea), or take the manual path: pick an open issue stored in the repository, or fill the form. Leaving the form's Issue ID empty creates a new issue in the repository; typing one (for a tracker git-zf does not talk to) uses it as is. A branch named `{issue-id}@{type}@{slug}` (see [Branch naming](#branch-naming)) is created and checked out, **or a git worktree is created** so the main working tree stays untouched. A prompt asks which; pin the choice with `branch.use-worktree` in the config. When a worktree is created the command prints its path and a `cd` hint, since the shell cannot change directory for you. With a tracker configured, you can move the issue to "In Progress" in the same step. The branch is recorded in the repository, under `refs/zf/branches/<issue-id>` (see [Branches in the repository](#branches-in-the-repository)), and that record is pushed: every clone sees that the issue is in progress.
 
 Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
-**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured. Otherwise the list is the issues stored in the repository plus the branches of the local store. Columns: Issue ID · [Project] · Title · Branch · Local Status · Issue Status · Created. Labels follow the title in brackets. `∅` means no local branch yet; `N.A.` means the row has neither a tracker nor a repository issue.
+**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured. Otherwise the list is the issues stored in the repository plus the tracked branches. Columns: Issue ID · [Project] · Title · Branch · Local Status · Issue Status · Created. Labels follow the title in brackets. `∅` means no branch started yet; `N.A.` means the row has neither a tracker nor a repository issue.
 
 In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycles the status filter (Open → Closed → All), **`p`** opens the project picker, **`q`** quits. Flags: `--status open|closed|all`, `--stdout` (plain table), `--json`.
 
@@ -83,12 +83,12 @@ In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycle
 1. **Reviewer commits** left on `<IssueID>@review` by an approved or rejected review are incorporated (fast-forward or merge); a conflicting merge refuses with a hint to run `git zf review sync`. A parent issue with open sub-tasks is refused.
 2. **Conflict dry-run** via `git merge-tree` against the target (`--base <branch>` overrides the default: the parent branch for a sub-task, otherwise the configured base). Conflicts abort the command before anything is touched.
 3. **Pick a merge strategy** — Rebase (default), Squash or Classic (see [Merge strategies](#merge-strategies)) — and compose the final commit in the commitizen form, pre-filled from the issue.
-4. **Confirm.** The branch is marked `merged` and the issue `closed` in the local store. An issue stored in the repository is closed there too, and pushed.
+4. **Confirm.** The branch is recorded as `merged` on its chain, which is pushed. An issue stored in the repository is closed there too, and pushed.
 5. **Tracker status** picker, if a tracker is configured (or skip).
 6. **Worktree removal**, if the branch was started in one. Never forced: a worktree with modified or untracked files is left in place. A `cd` hint back to the main checkout is printed when you ran the command from inside the removed worktree.
 7. **Branch deletion**, locally and on the remote, then a push proposal. Classic uses `git branch -d`; Squash and Rebase need `-D` since neither preserves ancestry. A branch still held by a kept worktree is not deleted.
 
-The picker also lists branches known only from fetched `refs/zf/branches/*` refs, so a teammate can close an issue they did not start: the branch is materialized from `origin/<branch>` and tracked automatically.
+The picker also lists branches started in another clone, known from the fetched `refs/zf/branches/*` chains, so a teammate can close an issue they did not start: the branch is materialized from `origin/<branch>`.
 
 Closing works from inside a linked worktree. Rebase runs its steps in the worktree holding the branch and fast-forwards the base from the main checkout; Squash and Classic run in the main checkout. Git refuses the close when the *base* branch is checked out in another linked worktree.
 
@@ -132,7 +132,7 @@ An issue branch can serve as the integration branch for sub-tasks. Start one wit
 - gets parent drift merged in by `git zf review sync`,
 - must be closed before its parent can be closed.
 
-The parent relation is stored locally and in `refs/zf/branches/<slug>`, so it survives a fresh clone.
+The parent relation is recorded in `refs/zf/branches/<slug>`, so every clone has it.
 
 #### Merge strategies
 
@@ -154,24 +154,37 @@ All three compose the final commit through the commitizen form. The mechanics, r
 $ git zf branch new            # create a branch with manual input
 $ git zf branch list           # list tracked branches
 $ git zf branch merge          # merge a branch via TUI
-$ git zf branch prune          # clean up stale store records (local-only)
+$ git zf branch prune          # record branches merged or deleted outside git-zf
+$ git zf branch close <name>   # record one branch as closed (abandoned)
 $ git zf branch prune-tracker  # reap branches whose tracker issue is closed
 ```
 
 **`branch new`** — the `issue start` flow with manual input pre-selected. Accepts `--variant=<label>` too.
 
-**`branch list`** — tracked branches with their store status. Flags: `--status in_progress|merged|closed|all`, `--stdout`, `--json`.
+**`branch list`** — tracked branches with their status, yours and the ones other clones started. It does not contact the remote: it shows what the last `git fetch` brought. Flags: `--status in_progress|merged|closed|all`, `--stdout`, `--json`.
 
 **`branch merge`** — pick a local or remote-only branch and merge it into the current branch with one of the [merge strategies](#merge-strategies), then offer to delete the source (local + remote) and propose a push. Issue branches are refused: use `git zf issue close` for those, so the review, tracker and store steps still run. A source branch checked out in another working tree is merged in place; when that tree is a linked worktree you are offered to remove it after the commit lands (the main checkout is never removed). A branch held by a stale worktree entry is refused with a `git worktree prune` hint.
 
-**`branch prune`** — compare each in-progress store row against the local refs and remove rows whose branch is gone or already merged into the base. Flags: `--base <branch>`, `--dry-run`, `--yes` (skip the confirmation, for CI).
+**`branch prune`** — record what happened to in-progress branches outside git-zf. A local branch already merged into the base is marked `merged`. A branch gone locally and on the remote is marked `closed`, if you started it; one that someone else started is listed and left to them, since it may be work they have not pushed yet. When you know such branches are abandoned (their author left, or you changed your git name or email), `--others` closes them too; `git zf issue track` on a closed branch reopens it. A branch still on the remote is left alone. Nothing is closed when the remote cannot be reached. Flags: `--base <branch>`, `--dry-run`, `--others`, `--yes` (skip the confirmation, for CI).
 
-**`branch prune-tracker`** — find local branches whose issue ID (parsed from the branch name) is closed in the configured tracker, then offer a per-branch action: safe-delete (default), force-delete or skip. Successful reaps flip the store row to `closed`. Branches whose name does not parse are skipped silently; tracker lookup failures print a `WARN:` line and skip that branch. For non-interactive use pass exactly one of `--safe-delete`, `--force-delete` or `--skip-delete` to apply it to every candidate; `--dry-run` previews with no prompts or mutations.
+**`branch close <branch-name>`** — record one tracked branch as closed, and push that record. Nothing is merged and no git branch is deleted, so this is not `issue close`: it is for a branch that will not be merged. The branch does not have to exist in your clone, and it does not matter who started it. Only a branch in progress can be closed. To undo, check the branch out and run `git zf issue track`. Not in the `git zf branch` menu, since it needs a name.
+
+**`branch prune-tracker`** — find local branches whose issue ID (parsed from the branch name) is closed in the configured tracker, then offer a per-branch action: safe-delete (default), force-delete or skip. Successful reaps record the branch as `closed`. Branches whose name does not parse are skipped silently; tracker lookup failures print a `WARN:` line and skip that branch. For non-interactive use pass exactly one of `--safe-delete`, `--force-delete` or `--skip-delete` to apply it to every candidate; `--dry-run` previews with no prompts or mutations.
 
 ```
 $ git zf branch prune-tracker --dry-run
 $ git zf branch prune-tracker --safe-delete --base main   # CI
 ```
+
+#### Branches in the repository
+
+The branches of an issue are recorded under `refs/zf/branches/<issue>` as a
+chain of commits: one when a branch is started, one each time its status
+changes (in progress, merged, closed). The chain also holds the issue's title,
+its parent issue and the tracker it came from. It is pushed and fetched like
+the review and issue chains, so every clone knows which branches are in
+progress, and git-zf keeps no database of its own. See
+[docs/branch-refs.md](docs/branch-refs.md).
 
 ### Review
 
@@ -201,11 +214,11 @@ A review round:
 
 `request`, `approve` and `reject` accept `--push` / `--no-push`, and propose a tracker status update when the issue came from a tracker.
 
-- **`review list`** reads `refs/zf/reviews/*` directly (works on a fresh clone with an empty store) and prints every open review, `in_review` or `approved`, with its round number. A closed review stays in the repository but is not listed.
-- **`review status`** shows a round-by-round history for an issue: status, reviewer, timestamps, whether the reviewer pushed commits. The latest round is reconciled from the ref, so decisions made elsewhere show up.
+- **`review list`** reads `refs/zf/reviews/*` (works on a fresh clone) and prints every open review, `in_review` or `approved`, with its round number. A closed review stays in the repository but is not listed.
+- **`review status`** shows a round-by-round history for an issue: status, reviewer, timestamps, whether the reviewer pushed commits. It is read from the review chain, so it is the same on every clone.
 - **`review fetch`** fetches the review chains, merges them with the local ones, and pushes the ones the remote lacks. Nothing is pruned locally. The interactive commands sync on their own; use this before scripting around review state.
 - **`review sync`** brings an in-progress branch up to date (the current one is pre-selected). First it merges pending reviewer commits from `<IssueID>@review`; on conflict the merge is left in progress for you to resolve, then `git zf commit` concludes it. Then, for sub-task branches only, it merges the parent branch (`origin/<parent>`) into the sub-task; a conflict there is aborted and reported. A dirty working tree is refused for the first step (`git stash` first).
-- **`review track`** registers the current branch without creating anything, for branches made with plain `git checkout`: a feature branch goes into the store, a review branch records you as the reviewer on the review chain.
+- **`review track`** registers the current branch without creating anything, for branches made with plain `git checkout`: a feature branch is recorded as in progress on its branch chain, a review branch records you as the reviewer on the review chain.
 
 #### Reviews in the repository
 
@@ -232,9 +245,9 @@ Installs two hooks in the current repository:
 - **pre-push** blocks pushes to branches locked for review. Bypass: `git push --no-verify`.
 - **pre-commit** blocks commits on a feature branch while reviewer commits await incorporation. Bypass: `git commit --no-verify`.
 
-It also configures every remote so that `git fetch` brings the reviews and issues stored under `refs/zf/`.
+It also configures every remote so that `git fetch` brings the reviews, issues and branch records stored under `refs/zf/`.
 
-**Upgrading:** after installing a git-zf that stores reviews as commit chains, re-run `git zf init` in each existing clone: it adds the fetch refspecs and removes the old tracking refs. A review that was in progress in the old format must be requested again (`git zf review request`).
+**Upgrading:** after installing a git-zf that stores reviews and branches as commit chains, re-run `git zf init` in each existing clone: it adds the fetch refspecs and removes the old tracking refs. A review that was in progress in the old format must be requested again (`git zf review request`). Branches are no longer read from `.git/git-zf.db`: upgrade every clone together, then run `git zf issue track` on each branch still in progress (see [docs/branch-refs.md](docs/branch-refs.md#upgrading-from-the-sqlite-store)).
 
 Run it once per repository and per submodule (hooks go to the submodule's own git directory). **Run it from the main checkout, not from a linked worktree**: git reads hooks from the common git dir, and inside a worktree they would be written where git never looks (see [ROADMAP.md](ROADMAP.md)). Re-running is safe and idempotent. A foreign hook is never overwritten; a warning prints the snippet to add to it instead.
 

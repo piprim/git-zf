@@ -4,15 +4,16 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/issue"
 )
 
 func TestApplyFilters(t *testing.T) {
-	allRows := func() []store.IssueRow {
-		return []store.IssueRow{
+	allRows := func() []issue.Row {
+		return []issue.Row{
 			{IssueSlug: "A", Title: "A"},
-			{IssueSlug: "B", Title: "B", Branch: &store.BranchRow{Status: store.BranchStatusInProgress}},
-			{IssueSlug: "C", Title: "C", Branch: &store.BranchRow{Status: store.BranchStatusMerged}},
+			{IssueSlug: "B", Title: "B", Branch: &branch.Row{Status: branch.StatusInProgress}},
+			{IssueSlug: "C", Title: "C", Branch: &branch.Row{Status: branch.StatusMerged}},
 		}
 	}
 
@@ -44,9 +45,9 @@ func TestApplyFilters(t *testing.T) {
 	})
 
 	t.Run("text filter matches only rows whose title contains the query", func(t *testing.T) {
-		rows := []store.IssueRow{
-			{IssueSlug: "ABC-1", Title: "Fix login", Branch: &store.BranchRow{Status: store.BranchStatusInProgress}},
-			{IssueSlug: "ABC-2", Title: "Update signup", Branch: &store.BranchRow{Status: store.BranchStatusInProgress}},
+		rows := []issue.Row{
+			{IssueSlug: "ABC-1", Title: "Fix login", Branch: &branch.Row{Status: branch.StatusInProgress}},
+			{IssueSlug: "ABC-2", Title: "Update signup", Branch: &branch.Row{Status: branch.StatusInProgress}},
 		}
 		got := applyFilters(rows, "open", "login", projectAll, false)
 		if len(got) != 1 {
@@ -58,9 +59,9 @@ func TestApplyFilters(t *testing.T) {
 	})
 
 	t.Run("status and text filters combine with AND semantics", func(t *testing.T) {
-		rows := []store.IssueRow{
-			{IssueSlug: "X-1", Title: "Fix auth", Branch: &store.BranchRow{Status: store.BranchStatusInProgress}},
-			{IssueSlug: "X-2", Title: "Fix auth", Branch: &store.BranchRow{Status: store.BranchStatusMerged}},
+		rows := []issue.Row{
+			{IssueSlug: "X-1", Title: "Fix auth", Branch: &branch.Row{Status: branch.StatusInProgress}},
+			{IssueSlug: "X-2", Title: "Fix auth", Branch: &branch.Row{Status: branch.StatusMerged}},
 		}
 		got := applyFilters(rows, "open", "auth", projectAll, false)
 		if len(got) != 1 {
@@ -74,7 +75,7 @@ func TestApplyFilters(t *testing.T) {
 	t.Run("project filter returns only rows belonging to that project", func(t *testing.T) {
 		t.Parallel()
 
-		rows := []store.IssueRow{
+		rows := []issue.Row{
 			{IssueSlug: "A", Title: "a", Project: "octo/cat"},
 			{IssueSlug: "B", Title: "b", Project: "octo/dog"},
 			{IssueSlug: "C", Title: "c", Project: "octo/cat"},
@@ -91,7 +92,7 @@ func TestApplyFilters(t *testing.T) {
 	t.Run("projectAll sentinel passes rows from every project", func(t *testing.T) {
 		t.Parallel()
 
-		rows := []store.IssueRow{
+		rows := []issue.Row{
 			{IssueSlug: "A", Project: "octo/cat"},
 			{IssueSlug: "B", Project: "octo/dog"},
 		}
@@ -122,17 +123,17 @@ func TestNextStatus(t *testing.T) {
 }
 
 func TestBranchPicker(t *testing.T) {
-	rows := []store.BranchRow{
+	rows := []branch.Row{
 		{IssueSlug: "A-1", Title: "First", BranchName: "feature-a"},
 		{IssueSlug: "B-1", Title: "Second", BranchName: "feature-b"},
 	}
 
-	named := func(name string) func(*store.BranchRow) bool {
-		return func(b *store.BranchRow) bool { return b.BranchName == name }
+	named := func(name string) func(*branch.Row) bool {
+		return func(b *branch.Row) bool { return b.BranchName == name }
 	}
 
 	t.Run("pre-selects the row the predicate matches", func(t *testing.T) {
-		var selected store.BranchRow
+		var selected branch.Row
 		BranchPicker("pick:", rows, named("feature-b"), &selected)
 		if selected.BranchName != "feature-b" {
 			t.Errorf("pre-selected = %q, want %q", selected.BranchName, "feature-b")
@@ -140,7 +141,7 @@ func TestBranchPicker(t *testing.T) {
 	})
 
 	t.Run("defaults to first row when no row matches", func(t *testing.T) {
-		var selected store.BranchRow
+		var selected branch.Row
 		BranchPicker("pick:", rows, named("not-in-list"), &selected)
 		if selected.BranchName != "feature-a" {
 			t.Errorf("pre-selected = %q, want first row %q", selected.BranchName, "feature-a")
@@ -170,7 +171,7 @@ func TestIssueMergeStrategy_rendersGivenOptions(t *testing.T) {
 func TestUniqueProjects(t *testing.T) {
 	t.Parallel()
 
-	rows := []store.IssueRow{
+	rows := []issue.Row{
 		{Project: "z/y"},
 		{Project: "a/b"},
 		{Project: ""},
@@ -178,7 +179,7 @@ func TestUniqueProjects(t *testing.T) {
 		{Project: "z/y"},
 	}
 
-	got := store.UniqueProjects(rows)
+	got := issue.UniqueProjects(rows)
 	want := []string{"a/b", "z/y"} // sorted, no empty, deduplicated
 	if !slices.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
@@ -223,20 +224,20 @@ func TestWorktreeToggle(t *testing.T) {
 }
 
 func TestMatchesStatus_RepoIssueState(t *testing.T) {
-	merged := &store.BranchRow{Status: store.BranchStatusMerged}
+	merged := &branch.Row{Status: branch.StatusMerged}
 
 	for name, tc := range map[string]struct {
-		row    store.IssueRow
+		row    issue.Row
 		status string
 		want   bool
 	}{
-		"closed record without branch is not open":    {store.IssueRow{State: "closed"}, statusOpen, false},
-		"closed record without branch is closed":      {store.IssueRow{State: "closed"}, statusClosed, true},
-		"open record without branch is open":          {store.IssueRow{State: "open"}, statusOpen, true},
-		"open record with a merged branch stays open": {store.IssueRow{State: "open", Branch: merged}, statusOpen, true},
-		"open record with a merged branch not closed": {store.IssueRow{State: "open", Branch: merged}, statusClosed, false},
-		"any record matches all":                      {store.IssueRow{State: "closed"}, statusAll, true},
-		"row without state falls back to its branch":  {store.IssueRow{Branch: merged}, statusClosed, true},
+		"closed record without branch is not open":    {issue.Row{State: "closed"}, statusOpen, false},
+		"closed record without branch is closed":      {issue.Row{State: "closed"}, statusClosed, true},
+		"open record without branch is open":          {issue.Row{State: "open"}, statusOpen, true},
+		"open record with a merged branch stays open": {issue.Row{State: "open", Branch: merged}, statusOpen, true},
+		"open record with a merged branch not closed": {issue.Row{State: "open", Branch: merged}, statusClosed, false},
+		"any record matches all":                      {issue.Row{State: "closed"}, statusAll, true},
+		"row without state falls back to its branch":  {issue.Row{Branch: merged}, statusClosed, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := matchesStatus(&tc.row, tc.status); got != tc.want {
@@ -248,14 +249,14 @@ func TestMatchesStatus_RepoIssueState(t *testing.T) {
 
 func TestIssueRowToTableRow_Labels(t *testing.T) {
 	t.Run("labels are appended to the title cell", func(t *testing.T) {
-		row := store.IssueRowCells(&store.IssueRow{IssueSlug: "1a2b3c4", Title: "Login fails", Labels: []string{"bug", "ui"}}, false)
+		row := issue.RowCells(&issue.Row{IssueSlug: "1a2b3c4", Title: "Login fails", Labels: []string{"bug", "ui"}}, false)
 		if row[1] != "Login fails [bug, ui]" {
 			t.Errorf("title cell = %q", row[1])
 		}
 	})
 
 	t.Run("no labels leaves the bare title", func(t *testing.T) {
-		row := store.IssueRowCells(&store.IssueRow{IssueSlug: "1", Title: "Plain"}, false)
+		row := issue.RowCells(&issue.Row{IssueSlug: "1", Title: "Plain"}, false)
 		if row[1] != "Plain" {
 			t.Errorf("title cell = %q", row[1])
 		}

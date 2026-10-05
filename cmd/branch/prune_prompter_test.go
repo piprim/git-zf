@@ -15,15 +15,15 @@ type scriptedPrunePrompter struct {
 	// Call-counter so tests can assert ConfirmPrune was (or was not) called.
 	ConfirmCalls int
 
-	// LastToDelete + LastToMerge capture the most recent call's arguments
+	// LastToClose + LastToMerge capture the most recent call's arguments
 	// so tests can assert the values handed to the prompter.
-	LastToDelete int
-	LastToMerge  int
+	LastToClose int
+	LastToMerge int
 }
 
-func (s *scriptedPrunePrompter) ConfirmPrune(_ context.Context, toDelete, toMerge int) (bool, error) {
+func (s *scriptedPrunePrompter) ConfirmPrune(_ context.Context, toClose, toMerge int) (bool, error) {
 	s.ConfirmCalls++
-	s.LastToDelete = toDelete
+	s.LastToClose = toClose
 	s.LastToMerge = toMerge
 
 	if s.ConfirmErr != nil {

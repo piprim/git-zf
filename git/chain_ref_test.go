@@ -221,11 +221,46 @@ func TestChainRef_LegacyBlobs(t *testing.T) {
 	// bob still holds the blob locally, as a clone upgraded in place does.
 	mustGit(t, bobDir, "update-ref", "refs/zf/reviews/old", blob)
 
-	if err := alice.DeleteChainRef(ctx, ReviewRefs, "old"); err != nil {
+	t.Run("LegacyBlob reads the local blob and sees none on the remote before a fetch", func(t *testing.T) {
+		content, remoteSHA, err := alice.LegacyBlob(ctx, ReviewRefs, "old")
+		if err != nil || string(content) != `{"status":"in_review"}` || remoteSHA != "" {
+			t.Errorf("LegacyBlob = %q, %q, %v", content, remoteSHA, err)
+		}
+	})
+
+	t.Run("LegacyBlob falls back to the tracking blob", func(t *testing.T) {
+		content, remoteSHA, err := bob.LegacyBlob(ctx, ReviewRefs, "old")
+		if err != nil || string(content) != `{"status":"in_review"}` || remoteSHA != blob {
+			t.Errorf("LegacyBlob = %q, %q, %v", content, remoteSHA, err)
+		}
+	})
+
+	if err := alice.DeleteChainRef(ctx, ReviewRefs, "old", ""); err != nil {
 		t.Fatalf("DeleteChainRef: %v", err)
 	}
 
-	t.Run("DeleteChainRef removes the ref locally and on the remote", func(t *testing.T) {
+	t.Run("DeleteChainRef without a remote blob leaves the remote alone", func(t *testing.T) {
+		if tip, _ := alice.ChainTip(ctx, ReviewRefs, "old"); tip != "" {
+			t.Errorf("local ref survives: %q", tip)
+		}
+		if refs := originRefs(t, originDir, "refs/zf/reviews/"); len(refs) != 1 {
+			t.Errorf("origin has %v, want the blob ref", refs)
+		}
+	})
+
+	mustGit(t, aliceDir, "update-ref", "refs/zf/reviews/old", blob)
+	if err := alice.FetchChainRefs(ctx, ReviewRefs, false); err != nil {
+		t.Fatalf("FetchChainRefs: %v", err)
+	}
+	_, remoteBlob, err := alice.LegacyBlob(ctx, ReviewRefs, "old")
+	if err != nil || remoteBlob != blob {
+		t.Fatalf("LegacyBlob after fetch = %q, %v", remoteBlob, err)
+	}
+	if err := alice.DeleteChainRef(ctx, ReviewRefs, "old", remoteBlob); err != nil {
+		t.Fatalf("DeleteChainRef: %v", err)
+	}
+
+	t.Run("DeleteChainRef removes the ref locally and the blob seen on the remote", func(t *testing.T) {
 		if tip, _ := alice.ChainTip(ctx, ReviewRefs, "old"); tip != "" {
 			t.Errorf("local ref survives: %q", tip)
 		}
@@ -235,7 +270,7 @@ func TestChainRef_LegacyBlobs(t *testing.T) {
 	})
 
 	t.Run("DeleteChainRef of a missing ref is not an error", func(t *testing.T) {
-		if err := alice.DeleteChainRef(ctx, ReviewRefs, "never-existed"); err != nil {
+		if err := alice.DeleteChainRef(ctx, ReviewRefs, "never-existed", ""); err != nil {
 			t.Errorf("DeleteChainRef: %v", err)
 		}
 	})
@@ -319,6 +354,173 @@ func TestChainRef_UnpushedAndNoRemote(t *testing.T) {
 		}
 		if k, err := solo.ChainRefKind(ctx, ReviewRefs, "42"); err != nil || k != ChainCommits {
 			t.Errorf("ChainRefKind = %q, %v", k, err)
+		}
+	})
+}
+
+func TestChainRef_DeleteLeaseSparesAChainPushedSince(t *testing.T) {
+	t.Parallel()
+
+	alice, aliceDir, originDir := newDiskRepoWithOrigin(t)
+	bob, bobDir := cloneOf(t, originDir, "bob")
+	ctx := t.Context()
+
+	blob, err := alice.outputStdin(ctx, []byte(`{"issue_slug":"77"}`), "hash-object", "-w", "--stdin")
+	if err != nil {
+		t.Fatalf("hash-object: %v", err)
+	}
+	mustGit(t, aliceDir, "update-ref", "refs/zf/branches/77", blob)
+	mustGit(t, aliceDir, "push", "-q", "origin", "refs/zf/branches/77")
+
+	// bob sees the blob on the remote.
+	if err := bob.FetchChainRefs(ctx, BranchRefs, false); err != nil {
+		t.Fatalf("bob FetchChainRefs: %v", err)
+	}
+	_, seen, err := bob.LegacyBlob(ctx, BranchRefs, "77")
+	if err != nil || seen != blob {
+		t.Fatalf("bob LegacyBlob = %q, %v", seen, err)
+	}
+
+	// alice converts first: her chain replaces the blob on the remote.
+	if err := alice.FetchChainRefs(ctx, BranchRefs, false); err != nil {
+		t.Fatalf("alice FetchChainRefs: %v", err)
+	}
+	root, err := alice.WriteChainRoot(ctx, []byte(`{"type":"start"}`), "start", false)
+	if err != nil {
+		t.Fatalf("WriteChainRoot: %v", err)
+	}
+	if err := alice.DeleteChainRef(ctx, BranchRefs, "77", blob); err != nil {
+		t.Fatalf("alice DeleteChainRef: %v", err)
+	}
+	if err := alice.PublishChainRoot(ctx, BranchRefs, "77", root); err != nil {
+		t.Fatalf("PublishChainRoot: %v", err)
+	}
+	if err := alice.PushChainRef(ctx, BranchRefs, "77"); err != nil {
+		t.Fatalf("PushChainRef: %v", err)
+	}
+
+	// bob deletes with the blob he saw, which the remote no longer holds.
+	mustGit(t, bobDir, "update-ref", "refs/zf/branches/77", blob)
+	if err := bob.DeleteChainRef(ctx, BranchRefs, "77", seen); err != nil {
+		t.Fatalf("bob DeleteChainRef: %v", err)
+	}
+
+	t.Run("the chain pushed in the meantime is still on the remote", func(t *testing.T) {
+		out, err := exec.CommandContext(ctx, "git", "-C", originDir, "rev-parse", "refs/zf/branches/77").Output()
+		if err != nil {
+			t.Fatalf("rev-parse on origin: %v", err)
+		}
+		if got := strings.TrimSpace(string(out)); got != root {
+			t.Errorf("origin ref = %q, want alice's root %q", got, root)
+		}
+	})
+}
+
+func TestChainRef_ReadAllChains(t *testing.T) {
+	t.Parallel()
+
+	alice, aliceDir, originDir := newDiskRepoWithOrigin(t)
+	bob, _ := cloneOf(t, originDir, "bob")
+	ctx := t.Context()
+
+	newChain := func(c *Client, id string, payloads ...string) {
+		t.Helper()
+
+		root, err := c.WriteChainRoot(ctx, []byte(payloads[0]), "op", false)
+		if err != nil {
+			t.Fatalf("WriteChainRoot: %v", err)
+		}
+		if err := c.PublishChainRoot(ctx, BranchRefs, id, root); err != nil {
+			t.Fatalf("PublishChainRoot: %v", err)
+		}
+		for _, p := range payloads[1:] {
+			if _, err := c.AppendChainCommit(ctx, BranchRefs, id, []byte(p), "op", false); err != nil {
+				t.Fatalf("AppendChainCommit: %v", err)
+			}
+		}
+	}
+
+	// Two chains with no shared history, one of them with a merge commit: both
+	// clones create the root of 42, then reconcile joins them.
+	newChain(alice, "7", `{"n":1}`, `{"n":2}`, `{"n":3}`)
+	newChain(alice, "42", `{"by":"alice"}`)
+	if err := alice.PushChainRef(ctx, BranchRefs, "42"); err != nil {
+		t.Fatalf("PushChainRef: %v", err)
+	}
+	newChain(bob, "42", `{"by":"bob"}`)
+	if err := bob.FetchChainRefs(ctx, BranchRefs, false); err != nil {
+		t.Fatalf("FetchChainRefs: %v", err)
+	}
+	if n, err := bob.ReconcileChainRefs(ctx, BranchRefs, []byte(`{"type":"merge"}`)); err != nil || n != 1 {
+		t.Fatalf("ReconcileChainRefs = %d, %v", n, err)
+	}
+	newChain(bob, "7", `{"n":1}`, `{"n":2}`)
+
+	blob, err := alice.outputStdin(ctx, []byte(`{}`), "hash-object", "-w", "--stdin")
+	if err != nil {
+		t.Fatalf("hash-object: %v", err)
+	}
+	mustGit(t, aliceDir, "update-ref", "refs/zf/branches/old", blob)
+
+	for name, c := range map[string]*Client{"alice": alice, "bob": bob} {
+		chains, _, err := c.ReadAllChains(ctx, BranchRefs)
+		if err != nil {
+			t.Fatalf("%s ReadAllChains: %v", name, err)
+		}
+
+		for _, id := range []string{"7", "42"} {
+			t.Run(name+" reads chain "+id+" as ReadChainCommits does", func(t *testing.T) {
+				want, err := c.ReadChainCommits(ctx, BranchRefs, id)
+				if err != nil {
+					t.Fatalf("ReadChainCommits: %v", err)
+				}
+
+				got := chains[id]
+				if len(got) != len(want) {
+					t.Fatalf("got %d commits, want %d", len(got), len(want))
+				}
+
+				// Both orders put parents first; compare as sets, then check that order.
+				seen := map[string]bool{}
+				for _, commit := range got {
+					for _, p := range commit.Parents {
+						if !seen[p] {
+							t.Errorf("commit %s comes before its parent %s", commit.ID, p)
+						}
+					}
+					seen[commit.ID] = true
+
+					i := slices.IndexFunc(want, func(w ChainCommit) bool { return w.ID == commit.ID })
+					if i < 0 || string(want[i].Payload) != string(commit.Payload) || !slices.Equal(want[i].Parents, commit.Parents) {
+						t.Errorf("commit %s = %+v, not in ReadChainCommits output", commit.ID, commit)
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("a merged chain holds both roots and the merge commit", func(t *testing.T) {
+		chains, _, _ := bob.ReadAllChains(ctx, BranchRefs)
+		if got := len(chains["42"]); got != 3 {
+			t.Errorf("chain 42 has %d commits, want 3", got)
+		}
+	})
+
+	t.Run("a blob ref is reported as legacy and has no chain", func(t *testing.T) {
+		chains, legacy, _ := alice.ReadAllChains(ctx, BranchRefs)
+		if !slices.Equal(legacy, []string{"old"}) {
+			t.Errorf("legacy = %v", legacy)
+		}
+		if _, ok := chains["old"]; ok {
+			t.Error("the blob ref has a chain")
+		}
+	})
+
+	t.Run("a repository with no chain returns an empty map", func(t *testing.T) {
+		solo, _ := newDiskRepo(t)
+		chains, legacy, err := solo.ReadAllChains(ctx, BranchRefs)
+		if err != nil || len(chains) != 0 || len(legacy) != 0 {
+			t.Errorf("ReadAllChains = %v, %v, %v", chains, legacy, err)
 		}
 	})
 }

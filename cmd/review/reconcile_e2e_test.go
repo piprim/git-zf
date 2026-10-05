@@ -3,10 +3,9 @@ package review
 import (
 	"context"
 	"testing"
-	"time"
 
-	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 )
 
 // captureReviewPrompter records the branch list it was offered so tests can
@@ -15,12 +14,12 @@ import (
 // sync/request action.
 type captureReviewPrompter struct {
 	scriptedReviewPrompter
-	seen []store.BranchRow
+	seen []branch.Row
 }
 
 var _ ReviewPrompter = (*captureReviewPrompter)(nil)
 
-func (c *captureReviewPrompter) PickBranch(ctx context.Context, title string, branches []store.BranchRow, current string) (*store.BranchRow, error) {
+func (c *captureReviewPrompter) PickBranch(ctx context.Context, title string, branches []branch.Row, current string) (*branch.Row, error) {
 	c.seen = branches
 
 	return c.scriptedReviewPrompter.PickBranch(ctx, title, branches, current)
@@ -28,29 +27,27 @@ func (c *captureReviewPrompter) PickBranch(ctx context.Context, title string, br
 
 func (c *captureReviewPrompter) Confirm(_ context.Context, _ string) (bool, error) { return true, nil }
 
-// seedMergedElsewhere inserts an in-progress issue+branch into the store and
-// stamps its branch ref Merged=true, simulating a clone that closed it (the ref
-// is the cross-machine source of truth; this clone's store still lags).
-func seedMergedElsewhere(t *testing.T, rig *reviewE2ERig, slug, branchName string) {
+// seedLocalBranch creates the local branch op.Branch off main and tracks it in
+// the given status.
+func seedLocalBranch(t *testing.T, rig *reviewE2ERig, op branch.Op, status string) {
 	t.Helper()
 
-	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: slug, Title: slug},
-		&store.Branch{Name: branchName, Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed %s: %v", slug, err)
+	if err := rig.client.RunGitAt(t.Context(), rig.dir, "branch", op.Branch, "main"); err != nil {
+		t.Fatalf("create branch %s: %v", op.Branch, err)
 	}
-	if _, err := rig.client.WriteBranchRef(t.Context(), slug, git.BranchRef{
-		IssueSlug:  slug,
-		BranchName: branchName,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		Merged:     true,
-	}); err != nil {
-		t.Fatalf("seed %s merged ref: %v", slug, err)
-	}
+	branchtest.Seed(t, rig.client, op, status)
 }
 
-func branchSlugsOffered(seen []store.BranchRow) map[string]bool {
+// seedMergedElsewhere tracks a branch that still exists locally and that the
+// chain records as merged: what a clone sees once it has fetched the close
+// another clone made.
+func seedMergedElsewhere(t *testing.T, rig *reviewE2ERig, op branch.Op) {
+	t.Helper()
+
+	seedLocalBranch(t, rig, op, branch.StatusMerged)
+}
+
+func branchSlugsOffered(seen []branch.Row) map[string]bool {
 	m := make(map[string]bool, len(seen))
 	for _, b := range seen {
 		m[b.IssueSlug] = true
@@ -62,9 +59,9 @@ func branchSlugsOffered(seen []store.BranchRow) map[string]bool {
 func mergedBranchNames(t *testing.T, rig *reviewE2ERig) map[string]bool {
 	t.Helper()
 
-	merged, err := rig.store.ListBranches(t.Context(), store.BranchStatusMerged)
+	merged, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
 	if err != nil {
-		t.Fatalf("ListBranches merged: %v", err)
+		t.Fatalf("ListRows merged: %v", err)
 	}
 	m := make(map[string]bool, len(merged))
 	for _, b := range merged {
@@ -81,26 +78,9 @@ func TestReviewSync_ExcludesSubtaskMergedInSiblingClone(t *testing.T) {
 	ctx := t.Context()
 
 	// Parent X with two sub-tasks; X.2 was closed in a sibling clone.
-	if err := rig.store.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X", Title: "big"},
-		&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed X: %v", err)
-	}
-	if err := rig.store.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "X.1", Title: "one"},
-		&store.Branch{Name: "X.1@feat@one", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed X.1: %v", err)
-	}
-	seedMergedElsewhere(t, rig, "X.2", "X.2@feat@two")
-
-	if err := rig.store.InsertIssueRelation(ctx, "X", "X.1"); err != nil {
-		t.Fatalf("relation X→X.1: %v", err)
-	}
-	if err := rig.store.InsertIssueRelation(ctx, "X", "X.2"); err != nil {
-		t.Fatalf("relation X→X.2: %v", err)
-	}
+	seedLocalBranch(t, rig, branch.Op{Branch: "X@feat@big", Title: "big"}, branch.StatusInProgress)
+	seedLocalBranch(t, rig, branch.Op{Branch: "X.1@feat@one", Title: "one", Parent: "X"}, branch.StatusInProgress)
+	seedMergedElsewhere(t, rig, branch.Op{Branch: "X.2@feat@two", Parent: "X"})
 
 	prompter := &captureReviewPrompter{}
 	if err := runReviewSyncInteractive(ctx, rig.deps(), prompter); err != nil {
@@ -121,9 +101,9 @@ func TestReviewSync_ExcludesSubtaskMergedInSiblingClone(t *testing.T) {
 		}
 	})
 
-	t.Run("store reconciles the sibling-merged sub-task to merged", func(t *testing.T) {
+	t.Run("the sibling-merged sub-task stays recorded as merged", func(t *testing.T) {
 		if !mergedBranchNames(t, rig)["X.2@feat@two"] {
-			t.Errorf("expected X.2@feat@two reconciled to merged in store")
+			t.Errorf("expected X.2@feat@two to read merged")
 		}
 	})
 }
@@ -135,7 +115,7 @@ func TestReviewRequest_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 	ctx := t.Context()
 
 	// 88 was closed in a sibling clone; the rig's default 77 is still open.
-	seedMergedElsewhere(t, rig, "88", "88@feat@other")
+	seedMergedElsewhere(t, rig, branch.Op{Branch: "88@feat@other"})
 
 	prompter := &captureReviewPrompter{}
 	if err := runReviewRequestInteractive(ctx, rig.deps(), prompter); err != nil {
@@ -156,9 +136,9 @@ func TestReviewRequest_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 		}
 	})
 
-	t.Run("store reconciles the sibling-merged branch to merged", func(t *testing.T) {
+	t.Run("the sibling-merged branch stays recorded as merged", func(t *testing.T) {
 		if !mergedBranchNames(t, rig)["88@feat@other"] {
-			t.Errorf("expected 88@feat@other reconciled to merged in store")
+			t.Errorf("expected 88@feat@other to read merged")
 		}
 	})
 }

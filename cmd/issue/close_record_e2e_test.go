@@ -4,11 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	commitpkg "github.com/piprim/git-zf/commit"
 	issuepkg "github.com/piprim/git-zf/issue"
 )
 
-// Closing a branch whose BranchRef names a repo issue closes that issue.
+// Closing a branch whose chain names a repo issue closes that issue.
 func TestClose_ClosesRepoIssue(t *testing.T) {
 	t.Parallel()
 
@@ -20,14 +22,7 @@ func TestClose_ClosesRepoIssue(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	ref, err := rig.client.ReadBranchRef(ctx, "ABC-1")
-	if err != nil || ref == nil {
-		t.Fatalf("ReadBranchRef = %+v, %v", ref, err)
-	}
-	ref.IssueID = rec.ID
-	if _, err := rig.client.WriteBranchRef(ctx, "ABC-1", *ref); err != nil {
-		t.Fatalf("WriteBranchRef: %v", err)
-	}
+	branchtest.Amend(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing", IssueID: rec.ID})
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
@@ -58,7 +53,7 @@ func TestClose_ClosesRepoIssue(t *testing.T) {
 	})
 }
 
-// A BranchRef naming an issue that does not exist must not fail the close:
+// A branch chain naming an issue that does not exist must not fail the close:
 // the merge already landed.
 func TestClose_MissingRepoIssueIsAWarning(t *testing.T) {
 	t.Parallel()
@@ -66,14 +61,7 @@ func TestClose_MissingRepoIssueIsAWarning(t *testing.T) {
 	rig := newCloseRig(t)
 	ctx := t.Context()
 
-	ref, err := rig.client.ReadBranchRef(ctx, "ABC-1")
-	if err != nil || ref == nil {
-		t.Fatalf("ReadBranchRef = %+v, %v", ref, err)
-	}
-	ref.IssueID = strings.Repeat("0", 39) + "1"
-	if _, err := rig.client.WriteBranchRef(ctx, "ABC-1", *ref); err != nil {
-		t.Fatalf("WriteBranchRef: %v", err)
-	}
+	branchtest.Amend(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing", IssueID: strings.Repeat("0", 39) + "1"})
 
 	prompter := &scriptedPrompter{
 		Branch:       rig.pickedBranchRow(),
@@ -120,14 +108,7 @@ func TestClose_ClosesRepoIssueNeverFetchedLocally(t *testing.T) {
 	}
 
 	// The closer knows the issue only through the branch ref.
-	ref, err := rig.client.ReadBranchRef(ctx, "ABC-1")
-	if err != nil || ref == nil {
-		t.Fatalf("ReadBranchRef = %+v, %v", ref, err)
-	}
-	ref.IssueID = rec.ID
-	if _, err := rig.client.WriteBranchRef(ctx, "ABC-1", *ref); err != nil {
-		t.Fatalf("WriteBranchRef: %v", err)
-	}
+	branchtest.Amend(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing", IssueID: rec.ID})
 
 	prompter := &scriptedPrompter{
 		Branch:       rig.pickedBranchRow(),

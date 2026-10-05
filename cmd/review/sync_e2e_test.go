@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 )
 
 func TestRunReviewSync_MergesReviewBranch(t *testing.T) {
@@ -127,15 +128,9 @@ func seedParent(t *testing.T, rig *reviewE2ERig) {
 	mustRunGit(t, rig.dir, "add", "parent.txt")
 	mustRunGit(t, rig.dir, "commit", "-m", "feat(7): parent commit")
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
-	if err := rig.store.InsertIssueWithBranch(t.Context(),
-		&store.Issue{IDSlug: "7", Title: "parent"},
-		&store.Branch{Name: "7@feat@parent", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed parent: %v", err)
-	}
-	if err := rig.store.InsertIssueRelation(t.Context(), "7", "77"); err != nil {
-		t.Fatalf("InsertIssueRelation: %v", err)
-	}
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "7@feat@parent", Title: "parent"}, branch.StatusInProgress)
+	// 77 becomes a sub-task of 7 (the rig tracked it without a parent).
+	branchtest.Amend(t, rig.client, branch.Op{Branch: "77@feat@my-feature", Parent: "7"})
 }
 
 func TestRunReviewSync_SubtaskMergesReviewThenParent(t *testing.T) {

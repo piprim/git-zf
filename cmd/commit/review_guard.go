@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 )
 
 // reviewConfirmFunc resolves the "merge reviewer commits now?" decision.
@@ -31,8 +30,8 @@ func newHuhReviewConfirm() reviewConfirmFunc {
 // changes_requested). It offers to merge them inline; declining aborts with
 // the sync hint. Detection errors fail open — a guard must never brick
 // committing. Callers skip it entirely under --no-verify.
-func guardPendingReview(ctx context.Context, client *git.Client, s *store.Store, confirm reviewConfirmFunc) error {
-	pending, branchName, err := issueflow.PendingReviewForHEAD(ctx, client, s)
+func guardPendingReview(ctx context.Context, client *git.Client, confirm reviewConfirmFunc) error {
+	pending, branchName, err := issueflow.PendingReviewForHEAD(ctx, client)
 	if err != nil || pending == nil {
 		return nil // fail-open
 	}

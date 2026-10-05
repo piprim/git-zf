@@ -5,10 +5,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os/exec"
 	"strings"
 	"testing"
 
-	"github.com/piprim/git-zf/store"
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
+	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
+	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -31,16 +36,31 @@ func (f *fakeIssueTracker) IsIssueClosed(_ context.Context, _ string) (bool, err
 	return false, nil
 }
 
-func openTestIssueStore(t *testing.T) *store.Store {
+// newListClient returns the client of a fresh repository with no tracked
+// branch and no issue.
+func newListClient(t *testing.T) *git.Client {
 	t.Helper()
 
-	s, err := store.Open(t.Context(), t.TempDir())
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
-	t.Cleanup(func() { _ = s.Close() })
 
-	return s
+	c, err := git.NewClientAt(&pkg.IO{In: bytes.NewReader(nil), Out: io.Discard, Err: io.Discard}, dir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	return c
 }
 
 func TestBuildIssueRows(t *testing.T) {
@@ -49,21 +69,11 @@ func TestBuildIssueRows(t *testing.T) {
 	t.Run("tracker path merges remote issues with local branches (partial match)", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestIssueStore(t)
+		s := newListClient(t)
 
-		// Seed 2 of the 3 tracker issues in the local store.
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "T-1", Title: "First"},
-			&store.Branch{Name: "T-1@feat@first@uuid-t1", Type: "feat", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "T-2", Title: "Second"},
-			&store.Branch{Name: "T-2@fix@second@uuid-t2", Type: "fix", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		// Seed 2 of the 3 tracker issues as tracked branches.
+		branchtest.Seed(t, s, branch.Op{Branch: "T-1@feat@first@uuid-t1", Title: "First"}, branch.StatusInProgress)
+		branchtest.Seed(t, s, branch.Op{Branch: "T-2@fix@second@uuid-t2", Title: "Second"}, branch.StatusInProgress)
 
 		tk := &fakeIssueTracker{issues: []tracker.Issue{
 			{ID: "T-1", Subject: "First", Status: "In Progress"},
@@ -71,7 +81,7 @@ func TestBuildIssueRows(t *testing.T) {
 			{ID: "T-3", Subject: "Third", Status: "New"},
 		}}
 
-		infra := issueListInfra{tracker: tk, store: s, stderr: &bytes.Buffer{}}
+		infra := issueListInfra{client: s, tracker: tk, stderr: &bytes.Buffer{}}
 
 		rows, err := buildRows(t.Context(), infra, "open")
 		if err != nil {
@@ -81,7 +91,7 @@ func TestBuildIssueRows(t *testing.T) {
 			t.Fatalf("got %d rows, want 3", len(rows))
 		}
 
-		bySlug := make(map[string]store.IssueRow)
+		bySlug := make(map[string]issuepkg.Row)
 		for _, r := range rows {
 			bySlug[r.IssueSlug] = r
 		}
@@ -102,18 +112,13 @@ func TestBuildIssueRows(t *testing.T) {
 		}
 	})
 
-	t.Run("local fallback when tracker is nil returns store rows without TrackerStatus", func(t *testing.T) {
+	t.Run("local fallback when tracker is nil returns the tracked branches without TrackerStatus", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestIssueStore(t)
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "L-1", Title: "Local only"},
-			&store.Branch{Name: "L-1@feat@local-only@uuid-l1", Type: "feat", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		s := newListClient(t)
+		branchtest.Seed(t, s, branch.Op{Branch: "L-1@feat@local-only@uuid-l1", Title: "Local only"}, branch.StatusInProgress)
 
-		infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
+		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 
 		rows, err := buildRows(t.Context(), infra, "open")
 		if err != nil {
@@ -130,20 +135,15 @@ func TestBuildIssueRows(t *testing.T) {
 		}
 	})
 
-	t.Run("tracker error falls back to local store and logs a warning", func(t *testing.T) {
+	t.Run("tracker error falls back to the repository and logs a warning", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestIssueStore(t)
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "F-1", Title: "Fallback"},
-			&store.Branch{Name: "F-1@feat@fallback@uuid-f1", Type: "feat", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		s := newListClient(t)
+		branchtest.Seed(t, s, branch.Op{Branch: "F-1@feat@fallback@uuid-f1", Title: "Fallback"}, branch.StatusInProgress)
 
 		tk := &fakeIssueTracker{err: errors.New("network error")}
 		var stderr bytes.Buffer
-		infra := issueListInfra{tracker: tk, store: s, stderr: &stderr}
+		infra := issueListInfra{client: s, tracker: tk, stderr: &stderr}
 
 		rows, err := buildRows(t.Context(), infra, "open")
 		if err != nil {
@@ -168,10 +168,9 @@ func TestBuildIssueRows(t *testing.T) {
 			{ID: "2", Subject: "b", Status: "open", Project: "octo/dog"},
 		}}
 
-		db := openTestIssueStore(t)
-		defer db.Close()
+		db := newListClient(t)
 
-		infra := issueListInfra{tracker: tk, store: db, stderr: io.Discard}
+		infra := issueListInfra{client: db, tracker: tk, stderr: io.Discard}
 
 		rows, err := buildFromTracker(t.Context(), infra)
 		if err != nil {
@@ -192,15 +191,10 @@ func TestRunIssueList(t *testing.T) {
 	t.Run("json output includes issue slug and N.A. for nil TrackerStatus", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestIssueStore(t)
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "J-1", Title: "JSON issue"},
-			&store.Branch{Name: "J-1@feat@json-issue@uuid-j1", Type: "feat", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		s := newListClient(t)
+		branchtest.Seed(t, s, branch.Op{Branch: "J-1@feat@json-issue@uuid-j1", Title: "JSON issue"}, branch.StatusInProgress)
 
-		infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
+		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
@@ -217,15 +211,10 @@ func TestRunIssueList(t *testing.T) {
 	t.Run("stdout output includes issue slug and N.A. for nil TrackerStatus", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestIssueStore(t)
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "S-1", Title: "Stdout issue"},
-			&store.Branch{Name: "S-1@feat@stdout@uuid-s1b", Type: "feat", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		s := newListClient(t)
+		branchtest.Seed(t, s, branch.Op{Branch: "S-1@feat@stdout@uuid-s1b", Title: "Stdout issue"}, branch.StatusInProgress)
 
-		infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
+		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
@@ -239,11 +228,11 @@ func TestRunIssueList(t *testing.T) {
 		}
 	})
 
-	t.Run("stdout output says 'No issues found' for an empty store", func(t *testing.T) {
+	t.Run("stdout output says 'No issues found' for a repository with nothing tracked", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestIssueStore(t)
-		infra := issueListInfra{tracker: nil, store: s, stderr: &bytes.Buffer{}}
+		s := newListClient(t)
+		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
@@ -256,11 +245,11 @@ func TestRunIssueList(t *testing.T) {
 	t.Run("stdout output uses ∅ for tracker issue with no local branch", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestIssueStore(t)
+		s := newListClient(t)
 		tk := &fakeIssueTracker{issues: []tracker.Issue{
 			{ID: "NB-1", Subject: "No branch yet", Status: "New"},
 		}}
-		infra := issueListInfra{tracker: tk, store: s, stderr: &bytes.Buffer{}}
+		infra := issueListInfra{client: s, tracker: tk, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)

@@ -8,14 +8,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/issue"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
@@ -29,7 +27,7 @@ type StartDeps struct {
 	Cfg                *config.AppConfig
 	Tracker            tracker.Tracker // nil when cfg.IssueTracker.Type == ""
 	Flags              issue.IssueStartFlags
-	BaseBranchOverride string // set by PickBaseBranch; skips store re-query in prepareBranch
+	BaseBranchOverride string // set by PickBaseBranch; skips the parent lookup in prepareBranch
 }
 
 // BuildStartDeps constructs the production StartDeps from a cobra command.
@@ -107,7 +105,7 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 				return fmt.Errorf("pick base branch: %w", pbErr)
 			}
 			deps.BaseBranchOverride = baseBranch
-			deps.Flags.ParentIssueSlug = resolveParentSlug(ctx, deps.Client, baseBranch)
+			deps.Flags.ParentIssueSlug = resolveParentSlug(baseBranch)
 		}
 	}
 
@@ -342,36 +340,18 @@ func resolveUseWorktree(ctx context.Context, deps StartDeps, prompter StartPromp
 // createFlowCreator is the mode-specific middle of createFlow: confirm with
 // the user, create the branch or worktree, and print the success (or abort)
 // message. Returns created=false with no error when the user aborts.
-// kind ("branch" / "worktree") is used in the persist-failure warning.
+// kind ("branch" / "worktree") is used in the record-failure warning.
 type createFlowCreator func(
 	ctx context.Context, deps StartDeps, prompter StartPrompter, branchName, base string,
 ) (created bool, kind string, err error)
 
-// createFlow implements the shared prepare→resolve-conflict→[creator]→persist→tracker
+// createFlow implements the shared prepare→resolve-conflict→[creator]→record→tracker
 // pipeline. creator handles the mode-specific confirm+create+output middle.
 func createFlow(
 	ctx context.Context, deps StartDeps,
 	prompter StartPrompter,
 	picked *issue.Issue, creator createFlowCreator) error {
-	// Open a single store connection shared by prepareBranch (parent lookup)
-	// and InsertIssueRelation, avoiding two separate connections.
-	// Use the client's common git dir so this works in tests (temp dirs), production
-	// (CWD is the repo) and inside linked worktrees (which share the store).
-	var parentStore *store.Store
-	if deps.Flags.ParentIssueSlug != "" {
-		commonDir, gdErr := deps.Client.CommonDir()
-		if gdErr != nil {
-			return fmt.Errorf("resolve common git dir for parent store: %w", gdErr)
-		}
-		var openErr error
-		parentStore, openErr = store.Open(ctx, commonDir)
-		if openErr != nil {
-			return fmt.Errorf("open store for parent lookup: %w", openErr)
-		}
-		defer func() { _ = parentStore.Close() }()
-	}
-
-	b, base, err := prepareBranch(ctx, deps, picked, parentStore)
+	b, base, err := prepareBranch(ctx, deps, picked)
 	if err != nil {
 		return err
 	}
@@ -398,31 +378,21 @@ func createFlow(
 
 	publishRepoIssue(ctx, deps.Client, picked)
 
-	// trackerType is the originating tracker ("" = manual). It is recorded both
-	// in the local store (as a cache) and in the BranchRef git object (the
-	// cross-machine source of truth read back by the review commands).
+	// trackerType is the originating tracker ("" = manual). The branch chain
+	// records it, and the review commands of every clone read it back.
 	trackerType := ""
 	if picked.TrackerType != "" {
 		trackerType = deps.Cfg.IssueTracker.Type
 	}
 
-	var tt *string
-	if trackerType != "" {
-		tt = &trackerType
+	op := &branch.Op{
+		Branch: b.Name(), BranchType: b.Type(), Title: picked.Subject,
+		Parent: deps.Flags.ParentIssueSlug, TrackerType: trackerType, IssueID: picked.RecordID,
 	}
-
-	if err := persist(ctx, deps.Client, b, picked.Subject, tt); err != nil {
-		fmt.Fprintf(deps.Client.IO().Err, "warning: %s created but store record failed: %v\n", kind, err)
-	}
-
-	if deps.Flags.ParentIssueSlug != "" && parentStore != nil {
-		if err := parentStore.InsertIssueRelation(ctx, deps.Flags.ParentIssueSlug, b.IssueID()); err != nil {
-			fmt.Fprintf(deps.Client.IO().Err, "warning: record parent relation: %v\n", err)
-		}
-	}
-
-	if err := writePushBranchRef(ctx, deps, b, trackerType, picked.RecordID); err != nil {
-		fmt.Fprintf(deps.Client.IO().Err, "warning: write branch ref: %v\n", err)
+	if err := branch.Start(ctx, deps.Client, b.IssueID(), op); err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: %s created but its record failed: %v\n", kind, err)
+	} else if err := branch.Push(ctx, deps.Client, b.IssueID()); err != nil {
+		fmt.Fprintf(deps.Client.IO().Err, "warning: push branch ref: %v\n", err)
 	}
 
 	if picked.TrackerType != "" {
@@ -498,30 +468,12 @@ func worktreeCreator(
 	return true, "worktree", nil
 }
 
-// resolveParentSlug derives the parent issue slug from the chosen base branch so
-// the parent relation (store) and the branch ref's ParentSlug are recorded.
-//
-// It prefers the local store — authoritative when the base is a git-zf-tracked
-// branch present locally — and falls back to parsing the branch name
-// (<slug>@<type>@<title>) when the store has no matching row. The fallback is the
-// fresh-clone case: the parent integration branch exists only as a
-// remote-tracking ref, so it is absent from the local store, but its name still
-// encodes the slug. Returns "" when the base is not a git-zf issue branch (e.g.
-// main), leaving the new branch parentless.
-func resolveParentSlug(ctx context.Context, c *git.Client, baseBranch string) string {
-	if commonDir, gdErr := c.CommonDir(); gdErr == nil {
-		if s, openErr := store.Open(ctx, commonDir); openErr == nil {
-			defer func() { _ = s.Close() }()
-			if rows, listErr := s.ListBranches(ctx, store.BranchStatusAll); listErr == nil {
-				for _, r := range rows {
-					if r.BranchName == baseBranch {
-						return r.IssueSlug
-					}
-				}
-			}
-		}
-	}
-
+// resolveParentSlug derives the parent issue slug from the chosen base branch,
+// so that the new branch's chain records its parent. The slug is the one in the
+// branch name (<slug>@<type>@<title>), which also covers a parent branch that
+// exists only as a remote-tracking ref. Returns "" when the base is not a
+// git-zf issue branch (e.g. main), leaving the new branch parentless.
+func resolveParentSlug(baseBranch string) string {
 	if parsed, perr := branch.Parse(baseBranch); perr == nil {
 		return parsed.IssueID()
 	}
@@ -578,36 +530,38 @@ func resolveDefaultBase(deps StartDeps) (string, error) {
 // prepareBranch assembles the branch and resolves the base branch. Shared by
 // the branch and worktree creators of createFlow.
 //
-// When deps.Flags.ParentIssueSlug is set, parentStore (must be non-nil) is
-// queried to find the parent's in-progress branch, which becomes the base.
+// When deps.Flags.ParentIssueSlug is set, the parent's newest in-progress
+// branch becomes the base.
 func prepareBranch(
-	ctx context.Context, deps StartDeps,
-	picked *issue.Issue, parentStore *store.Store) (b *branch.Branch, base string, err error) {
+	ctx context.Context, deps StartDeps, picked *issue.Issue,
+) (b *branch.Branch, base string, err error) {
 	b, err = branch.New(picked.ID, picked.Type, picked.Subject, deps.Flags.Variant)
 	if err != nil {
 		return nil, "", fmt.Errorf("assemble branch name: %w", err)
 	}
 
 	// An explicit base chosen via the interactive picker (PickBaseBranch) always
-	// wins — including a remote-only parent branch that is absent from the local
-	// store on a fresh clone. Checked before the --parent store lookup so the
-	// operator's pick is never silently overridden by the config base.
+	// wins, including a remote-only parent branch. Checked before the --parent
+	// lookup so the operator's pick is never silently overridden by the config
+	// base.
 	if deps.BaseBranchOverride != "" {
 		return b, deps.BaseBranchOverride, nil
 	}
 
 	if deps.Flags.ParentIssueSlug != "" {
-		// --parent set via flag; look up the branch from the provided store.
-		if parentStore == nil {
-			return nil, "", fmt.Errorf("no store available to resolve parent issue %q", deps.Flags.ParentIssueSlug)
+		// --parent set via flag: the parent may have been started in another
+		// clone, so read its chain after a best-effort fetch.
+		if err := branch.Fetch(ctx, deps.Client); err != nil {
+			fmt.Fprintf(deps.Client.IO().Err, "warning: fetch branch refs: %v\n", err)
 		}
-		branches, err := parentStore.ListBranches(ctx, store.BranchStatusInProgress)
+
+		parent, err := branch.Load(ctx, deps.Client, deps.Flags.ParentIssueSlug)
 		if err != nil {
-			return nil, "", fmt.Errorf("list branches for parent %q: %w", deps.Flags.ParentIssueSlug, err)
+			return nil, "", fmt.Errorf("read branches of parent %q: %w", deps.Flags.ParentIssueSlug, err)
 		}
-		for _, br := range branches {
-			if br.IssueSlug == deps.Flags.ParentIssueSlug {
-				return b, br.BranchName, nil
+		if parent != nil {
+			if rows := branch.Rows([]branch.State{*parent}, branch.StatusInProgress); len(rows) > 0 {
+				return b, rows[0].BranchName, nil
 			}
 		}
 
@@ -625,36 +579,6 @@ func prepareBranch(
 	return b, base, nil
 }
 
-// persist records the new branch and its issue in the store of the repository
-// c works on. The store is opened from c's common git dir, not from the
-// process's working directory (store.OpenRepo): the two differ whenever the
-// flow runs against another repository than the one the process was started
-// in, which is the case for every test, and a working-directory lookup then
-// writes the row into the wrong repository's store.
-func persist(
-	ctx context.Context, c *git.Client, b *branch.Branch, rawTitle string, trackerType *string,
-) error {
-	commonDir, err := c.CommonDir()
-	if err != nil {
-		return fmt.Errorf("resolve common git dir: %w", err)
-	}
-
-	s, err := store.Open(ctx, commonDir)
-	if err != nil {
-		return fmt.Errorf("failed to get store: %w", err)
-	}
-	defer func() { _ = s.Close() }()
-
-	if err := s.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: b.IssueID(), Title: rawTitle, TrackerType: trackerType},
-		&store.Branch{Name: b.Name(), Type: b.Type(), StatusID: store.StatusIDInProgress},
-	); err != nil {
-		return fmt.Errorf("insert issue with branch: %w", err)
-	}
-
-	return nil
-}
-
 // worktreePath computes the absolute path for a new worktree.
 // baseDir overrides the default (sibling of repoRoot) when non-empty; ~ is expanded.
 func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
@@ -668,26 +592,4 @@ func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
 	}
 
 	return filepath.Join(base, repoName+"--"+branchName)
-}
-
-// writePushBranchRef writes a BranchRef to refs/zf/branches/<issueSlug> and
-// pushes it to the remote (best-effort). Called after every successful branch
-// or worktree creation so the parent-child relationship is available cross-machine.
-func writePushBranchRef(
-	ctx context.Context, deps StartDeps, b *branch.Branch, trackerType, recordID string,
-) error {
-	issueSlug := b.IssueID()
-	ref := git.BranchRef{
-		IssueSlug:   issueSlug,
-		BranchName:  b.Name(),
-		ParentSlug:  deps.Flags.ParentIssueSlug,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-		TrackerType: trackerType,
-		IssueID:     recordID,
-	}
-	if _, err := deps.Client.WriteBranchRef(ctx, issueSlug, ref); err != nil {
-		return err
-	}
-
-	return deps.Client.PushBranchRef(ctx, issueSlug)
 }

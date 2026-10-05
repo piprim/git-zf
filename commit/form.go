@@ -15,7 +15,6 @@ import (
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -31,11 +30,11 @@ const (
 // and an inline note, instead of silently re-rendering blank.
 var errNoHistory = errors.New("no commit history yet")
 
-// historyStore is the subset of *store.Store used by FillOutForm.
-// Injected as an interface so tests can supply a fake.
+// historyStore is what FillOutForm needs of the commit history; *History is
+// the production one. Injected as an interface so tests can supply a fake.
 type historyStore interface {
 	InsertCommandHistory(ctx context.Context, command string, payload any) error
-	ListCommandHistory(ctx context.Context, command string, limit int) ([]store.CommandHistoryRow, error)
+	ListCommandHistory(ctx context.Context, command string, limit int) ([]HistoryRow, error)
 }
 
 // formRunner is satisfied by *tui.FormRunner; the package-level var lets tests inject a stub.
@@ -67,7 +66,7 @@ func applyPayload(items []config.CommitItem, payload map[string]any) []config.Co
 }
 
 // historyLabel builds the picker display string for one history entry.
-func historyLabel(tmplText string, row store.CommandHistoryRow) (string, error) {
+func historyLabel(tmplText string, row HistoryRow) (string, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(row.Payload, &payload); err != nil {
 		return "", fmt.Errorf("unmarshal history payload: %w", err)
@@ -111,7 +110,7 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 		label, labelErr := historyLabel(tmplText, e)
 		if labelErr != nil {
 			slog.Warn("could not build history label", "error", labelErr)
-			label = fmt.Sprintf("entry #%d", e.ID)
+			label = fmt.Sprintf("entry #%d", i+1)
 		}
 
 		opts = append(opts, huh.NewOption(label, i))
@@ -161,7 +160,7 @@ func showNoHistoryDialog() {
 }
 
 // FillOutForm presents the commit TUI form and orchestrates the ctrl+r history flow.
-// hs must not be nil; pass a *store.Store opened from store.OpenRepo.
+// hs must not be nil; pass the *History of OpenHistory.
 //
 // Exit conditions:
 //   - form completed → saves payload to history, assembles and returns the commit message.

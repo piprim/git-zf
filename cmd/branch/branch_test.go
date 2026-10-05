@@ -6,21 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/config"
-	"github.com/piprim/git-zf/store"
 )
-
-func openTestBranchStore(t *testing.T) *store.Store {
-	t.Helper()
-
-	s, err := store.Open(t.Context(), t.TempDir())
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	return s
-}
 
 func TestBranchList(t *testing.T) {
 	t.Parallel()
@@ -28,20 +17,16 @@ func TestBranchList(t *testing.T) {
 	t.Run("json output includes branch and issue fields", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestBranchStore(t)
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "ABC-42", Title: "Add OAuth login"},
-			&store.Branch{Name: "ABC-42@feat@add-oauth-login@550e8400", Type: "feat", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		s := newPruneRig(t).client
+		branchtest.Seed(t, s, branch.Op{Branch: "ABC-42@feat@add-oauth-login@550e8400", Title: "Add OAuth login"},
+			branch.StatusInProgress)
 
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, s, listFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 
-		var rows []store.BranchRow
+		var rows []branch.Row
 		if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
@@ -54,21 +39,21 @@ func TestBranchList(t *testing.T) {
 		if rows[0].BranchName != "ABC-42@feat@add-oauth-login@550e8400" {
 			t.Errorf("BranchName = %q", rows[0].BranchName)
 		}
-		if string(rows[0].Status) != "in_progress" {
+		if rows[0].Status != "in_progress" {
 			t.Errorf("Status = %q, want in_progress", rows[0].Status)
 		}
 	})
 
-	t.Run("json output is an empty array for an empty store", func(t *testing.T) {
+	t.Run("json output is an empty array for a repository with no tracked branch", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestBranchStore(t)
+		s := newPruneRig(t).client
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, s, listFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 
-		var rows []store.BranchRow
+		var rows []branch.Row
 		if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
@@ -80,13 +65,9 @@ func TestBranchList(t *testing.T) {
 	t.Run("stdout output includes header and branch slug", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestBranchStore(t)
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "XY-1", Title: "Some feature"},
-			&store.Branch{Name: "XY-1@feat@some-feature@aabbccdd", Type: "feat", StatusID: 1},
-		); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		s := newPruneRig(t).client
+		branchtest.Seed(t, s, branch.Op{Branch: "XY-1@feat@some-feature@aabbccdd", Title: "Some feature"},
+			branch.StatusInProgress)
 
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, s, listFlags{stdout: true}); err != nil {
@@ -102,10 +83,10 @@ func TestBranchList(t *testing.T) {
 		}
 	})
 
-	t.Run("stdout output says 'No branches found' for an empty store", func(t *testing.T) {
+	t.Run("stdout output says 'No branches found' for a repository with no tracked branch", func(t *testing.T) {
 		t.Parallel()
 
-		s := openTestBranchStore(t)
+		s := newPruneRig(t).client
 		var buf bytes.Buffer
 		if err := runList(t.Context(), &buf, s, listFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
@@ -165,3 +146,43 @@ func TestNewRunE_InteractiveDispatch(t *testing.T) {
 	})
 }
 
+func TestBranchList_ShowsABranchStartedInAnotherClone(t *testing.T) {
+	t.Parallel()
+
+	origin := newPruneOrigin(t)
+	alice, bob := newPruneRigWithOrigin(t, origin), newPruneRigWithOrigin(t, origin)
+
+	alice.seedIssueAndBranch(t, "TM-1", "TM-1@feat@theirs", "feat")
+	if err := branch.Push(t.Context(), alice.client, "TM-1"); err != nil {
+		t.Fatalf("alice push branch ref: %v", err)
+	}
+
+	// branch list does not contact the remote: it shows what a plain
+	// `git fetch` brought, once `git zf init` has configured the refspecs.
+	if _, err := bob.client.ConfigureChainFetch(t.Context()); err != nil {
+		t.Fatalf("ConfigureChainFetch: %v", err)
+	}
+	bob.runPruneGit(t, "fetch", "-q", "origin")
+
+	var buf bytes.Buffer
+	if err := runList(t.Context(), &buf, bob.client, listFlags{jsonOut: true}); err != nil {
+		t.Fatalf("runList: %v", err)
+	}
+
+	var rows []branch.Row
+	if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	t.Run("the other clone's branch is listed as in progress", func(t *testing.T) {
+		if len(rows) != 1 || rows[0].BranchName != "TM-1@feat@theirs" || rows[0].Status != branch.StatusInProgress {
+			t.Errorf("rows = %+v", rows)
+		}
+	})
+
+	t.Run("the JSON row has no issue_id field", func(t *testing.T) {
+		if strings.Contains(buf.String(), "issue_id") {
+			t.Errorf("json = %s", buf.String())
+		}
+	})
+}

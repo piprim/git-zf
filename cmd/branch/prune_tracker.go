@@ -7,12 +7,12 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
-	"time"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/git"
-	"github.com/piprim/git-zf/store"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
 )
@@ -48,7 +48,7 @@ func extractIssueID(name string) (string, bool) {
 type trackerCandidate struct {
 	BranchName string
 	IssueID    string
-	StoreRow   *store.BranchRow // nil → branch unknown to git-zf; no store flip after delete.
+	Tracked    *branch.Row // nil → branch unknown to git-zf; no status recorded after delete.
 }
 
 // trackerPruner is the git surface area prune-tracker depends on. It keeps
@@ -76,7 +76,7 @@ type trackerPruneResult struct {
 // resolver which are closed, and produces a sorted candidate list. Warnings
 // (tracker errors) are accumulated, not fatal.
 //
-// storeByName may be nil; entries are looked up by branch name and copied into
+// trackedByName may be nil; entries are looked up by branch name and copied into
 // the candidate's StoreRow field (nil → branch unknown to git-zf).
 //
 // w is the user-facing writer for inline warnings (matches the rest of cmd/branch).
@@ -85,7 +85,7 @@ func runDiscoverTracker(
 	w io.Writer,
 	pr trackerPruner,
 	tr issueResolver,
-	storeByName map[string]*store.BranchRow,
+	trackedByName map[string]*branch.Row,
 	base string,
 ) (trackerPruneResult, error) {
 	locals, err := pr.LocalBranchNames()
@@ -128,7 +128,7 @@ func runDiscoverTracker(
 		result.Candidates = append(result.Candidates, trackerCandidate{
 			BranchName: name,
 			IssueID:    id,
-			StoreRow:   storeByName[name],
+			Tracked:    trackedByName[name],
 		})
 	}
 
@@ -139,13 +139,13 @@ func runDiscoverTracker(
 	return result, nil
 }
 
-// updateStatusFn is the small subset of store.Store reachable from execution.
-// Decoupled to keep tests off SQLite.
-type updateStatusFn func(ctx context.Context, name string, statusID int64) error
+// updateStatusFn records the new status of a tracked branch. A function, so
+// that runExecuteTracker is tested without a repository.
+type updateStatusFn func(ctx context.Context, name, status string) error
 
 // runExecuteTracker iterates candidates in input order, performs the per-branch
-// ref action requested by decisions[name], and flips the store row to closed
-// when a StoreRow is present and the ref action succeeded (or was skipped).
+// ref action requested by decisions[name], and records the branch as closed
+// when it is tracked and the ref action succeeded (or was skipped).
 //
 // Returns warnings accumulated during execution (safe-delete refusals). A
 // returned error means a fatal failure (e.g. force-delete failed against git).
@@ -166,7 +166,7 @@ func runExecuteTracker(
 
 	for _, c := range candidates {
 		action := decisions[c.BranchName]
-		flipStore := true
+		record := true
 
 		switch action {
 		case "safe":
@@ -181,7 +181,7 @@ func runExecuteTracker(
 				warnings = append(warnings, line)
 				fmt.Fprintln(w, line)
 				nKept++
-				flipStore = false
+				record = false
 			} else {
 				nSafe++
 			}
@@ -196,11 +196,11 @@ func runExecuteTracker(
 			return warnings, fmt.Errorf("internal: unknown action %q for %s", action, c.BranchName)
 		}
 
-		if !flipStore || c.StoreRow == nil {
+		if !record || c.Tracked == nil {
 			continue
 		}
 
-		if err := updateStatus(ctx, c.BranchName, store.StatusIDClosed); err != nil {
+		if err := updateStatus(ctx, c.BranchName, branch.StatusClosed); err != nil {
 			return warnings, fmt.Errorf("flip status for %s: %w", c.BranchName, err)
 		}
 	}
@@ -228,8 +228,8 @@ func (b Branch) pruneTrackerCmd() *cobra.Command {
 		Short: "Reap branches whose tracker issue is closed",
 		Long: `Discover local branches whose issue ID (regex-extracted from the branch name)
 is closed in the configured tracker, and offer per-branch reap actions
-(safe-delete / force-delete / skip). Successful reaps flip the corresponding
-store row to status='closed'.`,
+(safe-delete / force-delete / skip). Successful reaps record the branch as
+closed.`,
 	}
 
 	f := cmd.Flags()
@@ -237,7 +237,7 @@ store row to status='closed'.`,
 	f.StringVar(&flags.base, "base", "", "base branch name to exclude from candidate discovery (default: auto-detect)")
 	f.BoolVar(&flags.safeDelete, "safe-delete", false, "non-interactive: apply `git branch -d` to every match")
 	f.BoolVar(&flags.forceDelete, "force-delete", false, "non-interactive: apply `git branch -D` to every match")
-	f.BoolVar(&flags.skipDelete, "skip-delete", false, "non-interactive: never touch refs; only flip store status")
+	f.BoolVar(&flags.skipDelete, "skip-delete", false, "non-interactive: never touch refs; only record the status")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		nSet := 0
@@ -258,12 +258,6 @@ store row to status='closed'.`,
 
 func (b Branch) pruneTrackerRunE(cmd *cobra.Command, flags pruneTrackerFlags) error {
 	ctx := cmd.Context()
-
-	s, err := store.OpenRepo(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get store: %w", err)
-	}
-	defer func() { _ = s.Close() }()
 
 	c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
 	if err != nil {
@@ -286,7 +280,7 @@ func (b Branch) pruneTrackerRunE(cmd *cobra.Command, flags pruneTrackerFlags) er
 		prompter = newFixedActionPrompter("skip")
 	}
 
-	return runPruneTracker(ctx, os.Stdout, s, c, tr, prompter, flags)
+	return runPruneTracker(ctx, os.Stdout, c, c, tr, prompter, flags)
 }
 
 // runPruneTracker is the top-level orchestrator. Split out so E2E tests can
@@ -294,7 +288,7 @@ func (b Branch) pruneTrackerRunE(cmd *cobra.Command, flags pruneTrackerFlags) er
 func runPruneTracker(
 	ctx context.Context,
 	w io.Writer,
-	s *store.Store,
+	client *git.Client,
 	pr trackerPruner,
 	tr issueResolver,
 	prompter TrackerPrunePrompter,
@@ -309,17 +303,22 @@ func runPruneTracker(
 		}
 	}
 
-	allRows, err := s.ListBranches(ctx, store.BranchStatusAll)
+	// What other clones started or closed is on the remote's chains.
+	if err := branch.Fetch(ctx, client); err != nil {
+		fmt.Fprintf(client.IO().Err, "warning: fetch branch refs: %v\n", err)
+	}
+
+	allRows, err := branch.ListRows(ctx, client, branch.StatusAll)
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
 
-	storeByName := make(map[string]*store.BranchRow, len(allRows))
+	trackedByName := make(map[string]*branch.Row, len(allRows))
 	for i := range allRows {
-		storeByName[allRows[i].BranchName] = &allRows[i]
+		trackedByName[allRows[i].BranchName] = &allRows[i]
 	}
 
-	result, err := runDiscoverTracker(ctx, w, pr, tr, storeByName, base)
+	result, err := runDiscoverTracker(ctx, w, pr, tr, trackedByName, base)
 	if err != nil {
 		return err
 	}
@@ -344,13 +343,26 @@ func runPruneTracker(
 		return fmt.Errorf("decide reap: %w", err)
 	}
 
-	updateStatus := func(ctx context.Context, name string, id int64) error {
-		now := time.Now()
+	var slugs []string
+	updateStatus := func(ctx context.Context, name, status string) error {
+		slug := trackedByName[name].IssueSlug
+		if !slices.Contains(slugs, slug) {
+			slugs = append(slugs, slug)
+		}
 
-		return s.UpdateBranchStatus(ctx, name, id, &now)
+		return branch.SetStatus(ctx, client, slug, name, status)
 	}
 
-	if _, err := runExecuteTracker(ctx, w, pr, updateStatus, result.Candidates, decisions); err != nil {
+	_, err = runExecuteTracker(ctx, w, pr, updateStatus, result.Candidates, decisions)
+
+	// Whatever was recorded before an error is pushed too.
+	for _, slug := range slugs {
+		if pushErr := branch.Push(ctx, client, slug); pushErr != nil {
+			fmt.Fprintf(client.IO().Err, "warning: push branch ref: %v\n", pushErr)
+		}
+	}
+
+	if err != nil {
 		return err
 	}
 

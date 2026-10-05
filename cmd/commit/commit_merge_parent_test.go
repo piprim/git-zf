@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
-	"github.com/piprim/git-zf/store"
 )
 
 func mustRun(t *testing.T, dir string, args ...string) {
@@ -20,7 +21,7 @@ func mustRun(t *testing.T, dir string, args ...string) {
 }
 
 func TestResolveCommitMergeParent(t *testing.T) {
-	// Not parallel: store.Open + on-disk repo; each subtest builds its own dir.
+	// Not parallel: on-disk repo; each subtest builds its own dir.
 
 	t.Run("non-issue branch → no merge preview", func(t *testing.T) {
 		dir := t.TempDir()
@@ -38,13 +39,7 @@ func TestResolveCommitMergeParent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClientAt: %v", err)
 		}
-		s, err := store.Open(t.Context(), filepath.Join(dir, ".git"))
-		if err != nil {
-			t.Fatalf("store.Open: %v", err)
-		}
-		defer func() { _ = s.Close() }()
-
-		_, include := resolveCommitMergeParent(t.Context(), client, s, "main", "main")
+		_, include := resolveCommitMergeParent(t.Context(), client, "main", "main")
 		if include {
 			t.Fatal("non-issue branch must not include a merge preview")
 		}
@@ -71,24 +66,11 @@ func TestResolveCommitMergeParent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClientAt: %v", err)
 		}
-		s, err := store.Open(t.Context(), filepath.Join(dir, ".git"))
-		if err != nil {
-			t.Fatalf("store.Open: %v", err)
-		}
-		defer func() { _ = s.Close() }()
+		// Seed the parent branch and the child that names it as its parent.
+		branchtest.Seed(t, client, branch.Op{Branch: "X@feat@big", Title: "big"}, branch.StatusInProgress)
+		branchtest.Seed(t, client, branch.Op{Branch: "X.2@feat@two", Parent: "X"}, branch.StatusInProgress)
 
-		// Seed the parent branch + the parent→child relation.
-		if err := s.InsertIssueWithBranch(t.Context(),
-			&store.Issue{IDSlug: "X", Title: "big"},
-			&store.Branch{Name: "X@feat@big", Type: "feat", StatusID: store.StatusIDInProgress},
-		); err != nil {
-			t.Fatalf("seed parent: %v", err)
-		}
-		if err := s.InsertIssueRelation(t.Context(), "X", "X.2"); err != nil {
-			t.Fatalf("seed relation: %v", err)
-		}
-
-		parent, include := resolveCommitMergeParent(t.Context(), client, s, "X.2@feat@two", "main")
+		parent, include := resolveCommitMergeParent(t.Context(), client, "X.2@feat@two", "main")
 		if !include {
 			t.Fatal("issue branch with parent must include a merge preview")
 		}

@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	issuepkg "github.com/piprim/git-zf/issue"
-	"github.com/piprim/git-zf/store"
 )
 
 func TestBuildRows_RepoIssues(t *testing.T) {
@@ -16,7 +17,6 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	rig := newRecordRig(t, "alice", "")
 	ctx := t.Context()
-	s := openTestIssueStore(t)
 
 	started, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Started", BranchType: "feat", Labels: []string{"ui"}})
 	if err != nil {
@@ -34,30 +34,21 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	// One repo issue has a branch; one store row is a legacy issue with no record.
-	if err := s.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: started.ShortID(), Title: "Started"},
-		&store.Branch{Name: started.ShortID() + "@feat@started", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	if err := s.InsertIssueWithBranch(ctx,
-		&store.Issue{IDSlug: "JIRA-7", Title: "Legacy"},
-		&store.Branch{Name: "JIRA-7@feat@legacy", Type: "feat", StatusID: store.StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
+	// One repo issue has a branch; one tracked branch belongs to an issue with no record.
+	branchtest.Seed(t, rig.client,
+		branch.Op{Branch: started.ShortID() + "@feat@started", Title: "Started"}, branch.StatusInProgress)
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "JIRA-7@feat@legacy", Title: "Legacy"}, branch.StatusInProgress)
 
-	infra := issueListInfra{store: s, stderr: &bytes.Buffer{}, client: rig.client}
+	infra := issueListInfra{stderr: &bytes.Buffer{}, client: rig.client}
 
-	bySlug := func(t *testing.T, status string) map[string]store.IssueRow {
+	bySlug := func(t *testing.T, status string) map[string]issuepkg.Row {
 		t.Helper()
 
 		rows, err := buildRows(ctx, infra, status)
 		if err != nil {
 			t.Fatalf("buildRows: %v", err)
 		}
-		out := make(map[string]store.IssueRow, len(rows))
+		out := make(map[string]issuepkg.Row, len(rows))
 		for _, r := range rows {
 			out[r.IssueSlug] = r
 		}
@@ -89,7 +80,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		}
 	})
 
-	t.Run("a legacy store row without a record is kept unchanged", func(t *testing.T) {
+	t.Run("a tracked branch whose issue has no record is kept unchanged", func(t *testing.T) {
 		row := bySlug(t, "")["JIRA-7"]
 		if row.Branch == nil || row.State != "" || row.TrackerStatus != nil {
 			t.Errorf("row = %+v", row)
@@ -121,7 +112,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		if err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
-		var rows []store.IssueRow
+		var rows []issuepkg.Row
 		if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}

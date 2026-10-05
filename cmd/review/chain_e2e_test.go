@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/gittest"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
-	"github.com/piprim/git-zf/store"
 )
 
 // writeLegacyBlob points refs/zf/reviews/<slug> at a JSON blob, as git-zf did
@@ -397,7 +397,7 @@ func approvedRig(t *testing.T) (*reviewE2ERig, *scriptedReviewPrompter) {
 	}
 	reviewtest.Seed(t, rig.client, "77", reviewpkg.StatusApproved, 1, feature.String())
 
-	return rig, &scriptedReviewPrompter{Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@feat@my-feature"}}
+	return rig, &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"}}
 }
 
 func TestReviewRequest_ApprovedReviewWithRequireSigned(t *testing.T) {

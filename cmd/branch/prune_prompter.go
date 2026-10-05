@@ -9,15 +9,15 @@ import (
 )
 
 // PrunePrompter resolves the single user-facing decision in the prune flow:
-// whether to proceed with the destructive store mutations after the summary
+// whether to record the statuses listed in the summary once it
 // has been printed. The production implementation drives a huh form; the
 // auto-confirm implementation (wired via --yes) returns true unconditionally;
 // the scripted implementation in prune_prompter_test.go returns canned values
 // for tests.
 type PrunePrompter interface {
-	// ConfirmPrune is called only when there is at least one branch to delete
+	// ConfirmPrune is called only when there is at least one branch to close
 	// or to mark merged, AND the run is not a dry-run.
-	ConfirmPrune(ctx context.Context, toDelete, toMerge int) (confirmed bool, err error)
+	ConfirmPrune(ctx context.Context, toClose, toMerge int) (confirmed bool, err error)
 }
 
 // autoConfirmPrunePrompter unconditionally returns (true, nil). It is wired
@@ -36,9 +36,9 @@ var _ PrunePrompter = (*huhPrunePrompter)(nil)
 // invocation.
 type huhPrunePrompter struct{}
 
-func (p *huhPrunePrompter) ConfirmPrune(ctx context.Context, toDelete, toMerge int) (bool, error) {
+func (p *huhPrunePrompter) ConfirmPrune(ctx context.Context, toClose, toMerge int) (bool, error) {
 	var confirmed bool
-	if err := huh.NewForm(tui.BranchPruneConfirm(toDelete, toMerge, &confirmed)).RunWithContext(ctx); err != nil {
+	if err := huh.NewForm(tui.BranchPruneConfirm(toClose, toMerge, &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm prune form: %w", err)
 	}
 
