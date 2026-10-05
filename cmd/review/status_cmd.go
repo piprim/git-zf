@@ -77,7 +77,7 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 		for _, w := range ref.Warnings {
 			fmt.Fprintln(deps.client.IO().Err, w)
 		}
-		latest := &rows[len(rows)-1]
+		latest := &rows[0] // ListReviews returns the newest round first
 		if store.ReviewStatus(ref.Status) != latest.Status {
 			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
 			latest.Status = store.ReviewStatus(ref.Status)

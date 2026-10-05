@@ -675,3 +675,73 @@ func TestTrack_Reviewer_ClosedReviewIsNoOpenReview(t *testing.T) {
 		}
 	})
 }
+
+// roundLine returns the "Round <n>" line of a `review status` history.
+func roundLine(out string, round string) string {
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "Round "+round+" ") {
+			return line
+		}
+	}
+
+	return ""
+}
+
+func TestReviewStatus_ReconcilesTheNewestRound(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	rig := newReviewE2ERig(t)
+
+	// Round 1 is rejected, round 2 is requested: two rows in the store.
+	bringRigToInReview(t, rig)
+	if _, err := runReviewReject(ctx, rig.deps(), "77", "fix the tests"); err != nil {
+		t.Fatalf("runReviewReject: %v", err)
+	}
+	if err := runReviewRequest(ctx, rig.deps(), "77"); err != nil {
+		t.Fatalf("runReviewRequest round 2: %v", err)
+	}
+
+	// Round 2 is approved on the reviewer's machine: the chain knows, this
+	// clone's store still says in_review.
+	approve := &reviewpkg.Op{Type: reviewpkg.OpApprove, ApprovedSHA: "f2", Round: 2}
+	if err := reviewpkg.Append(ctx, rig.client, "77", approve, false); err != nil {
+		t.Fatalf("append approve: %v", err)
+	}
+
+	rig.stdout.Reset()
+	if err := runReviewStatus(ctx, rig.deps(), "77"); err != nil {
+		t.Fatalf("runReviewStatus: %v", err)
+	}
+	out := rig.stdout.String()
+
+	rows, err := rig.store.ListReviews(ctx, "77")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("ListReviews = %d rows, %v", len(rows), err)
+	}
+	round2, round1 := rows[0], rows[1] // newest first
+
+	t.Run("the store row of round 2 takes the chain's status", func(t *testing.T) {
+		if round2.Round != 2 || round2.Status != store.ReviewStatusApproved {
+			t.Errorf("round 2 row = %+v", round2)
+		}
+	})
+
+	t.Run("the store row of round 1 keeps changes_requested", func(t *testing.T) {
+		if round1.Round != 1 || round1.Status != store.ReviewStatusChangesRequested {
+			t.Errorf("round 1 row = %+v", round1)
+		}
+	})
+
+	t.Run("the history prints round 2 as approved", func(t *testing.T) {
+		if line := roundLine(out, "2"); !strings.Contains(line, string(store.ReviewStatusApproved)) {
+			t.Errorf("round 2 line = %q\n%s", line, out)
+		}
+	})
+
+	t.Run("the history prints round 1 as changes_requested", func(t *testing.T) {
+		if line := roundLine(out, "1"); !strings.Contains(line, string(store.ReviewStatusChangesRequested)) {
+			t.Errorf("round 1 line = %q\n%s", line, out)
+		}
+	})
+}
