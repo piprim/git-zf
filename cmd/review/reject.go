@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/piprim/git-zf/cmd/pushflow"
-	"github.com/piprim/git-zf/store"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
 
@@ -106,7 +106,7 @@ func runReviewRejectInteractive(ctx context.Context, deps reviewDeps, prompter R
 func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason string) (int, error) {
 	reason = strings.TrimSpace(reason)
 
-	d, err := recordReviewDecision(ctx, deps, issueSlug, store.ReviewStatusChangesRequested, reason)
+	d, err := recordReviewDecision(ctx, deps, issueSlug, reviewpkg.StatusChangesRequested, reason)
 	if err != nil {
 		return 0, err
 	}

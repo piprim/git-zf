@@ -521,27 +521,20 @@ func reviewPreflight(
 		return nil, nil
 	}
 
-	// Reconcile local store from ref so downstream store reads are consistent.
-	if latest, _ := deps.store.GetLatestReview(ctx, picked.IssueSlug); latest != nil {
-		if store.ReviewStatus(ref.Status) != latest.Status {
-			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
-		}
-	}
-
-	switch store.ReviewStatus(ref.Status) {
-	case store.ReviewStatusInReview:
+	switch ref.Status {
+	case reviewpkg.StatusInReview:
 		return nil, fmt.Errorf(
 			"branch %q is locked for review (issue %q, round %d) — awaiting reviewer decision.\n"+
 				"Run `git zf review list` to check review status: %w",
 			picked.BranchName, picked.IssueSlug, ref.Round, ErrBranchLockedForReview)
 
-	case store.ReviewStatusChangesRequested:
+	case reviewpkg.StatusChangesRequested:
 		return nil, fmt.Errorf(
 			"reviewer requested changes on issue %q (round %d).\n"+
 				"Address feedback and run `git zf review request` for round %d: %w",
 			picked.IssueSlug, ref.Round, ref.Round+1, ErrReviewChangesRequested)
 
-	case store.ReviewStatusApproved:
+	case reviewpkg.StatusApproved:
 		reviewBranch := branch.ReviewBranchName(picked.IssueSlug)
 
 		// Resolve pending reviewer commits through the shared helper so a stale

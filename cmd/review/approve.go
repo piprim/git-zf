@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/piprim/git-zf/cmd/pushflow"
-	"github.com/piprim/git-zf/store"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +48,7 @@ func runReviewApproveInteractive(ctx context.Context, deps reviewDeps, prompter 
 }
 
 func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	d, err := recordReviewDecision(ctx, deps, issueSlug, store.ReviewStatusApproved, "")
+	d, err := recordReviewDecision(ctx, deps, issueSlug, reviewpkg.StatusApproved, "")
 	if err != nil {
 		return err
 	}

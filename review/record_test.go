@@ -330,6 +330,41 @@ func TestFold(t *testing.T) {
 		}
 	})
 
+	t.Run("every round is kept with its decision and times", func(t *testing.T) {
+		t.Parallel()
+
+		start := op("s1", OpStart, t1, "r1")
+		start.Author = "alice"
+		ops := []Op{
+			req, start,
+			reject("x1", t2, "no", true, "s1"),
+			request("r2", t3, "f2", "x1"),
+		}
+
+		rounds := Fold("42", ops).Rounds
+		if len(rounds) != 2 {
+			t.Fatalf("rounds = %+v", rounds)
+		}
+		first, second := rounds[0], rounds[1]
+		if first.Round != 1 || first.Status != StatusChangesRequested || first.Reviewer != "alice" || !first.HasCommits {
+			t.Errorf("round 1 = %+v", first)
+		}
+		if first.OpenedAt.Format("15:04") != "10:00" || first.ResolvedAt.Format("15:04") != "12:00" {
+			t.Errorf("round 1 times = %v, %v", first.OpenedAt, first.ResolvedAt)
+		}
+		if second.Round != 2 || second.Status != StatusInReview || second.Reviewer != "" || !second.ResolvedAt.IsZero() {
+			t.Errorf("round 2 = %+v", second)
+		}
+	})
+
+	t.Run("a close before any request records no round", func(t *testing.T) {
+		t.Parallel()
+
+		if rounds := Fold("42", []Op{op("c1", OpClose, t0)}).Rounds; len(rounds) != 0 {
+			t.Errorf("rounds = %+v", rounds)
+		}
+	})
+
 	t.Run("slice order does not matter", func(t *testing.T) {
 		t.Parallel()
 

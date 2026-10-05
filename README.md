@@ -188,7 +188,7 @@ $ git zf review sync      # bring a branch up to date: reviewer commits + parent
 $ git zf review track     # register a branch created with plain git checkout
 ```
 
-Peer-to-peer code review with no server-side component. Review state lives in git refs under `refs/zf/reviews/<IssueID>`, one commit per action (see [Reviews in the repository](#reviews-in-the-repository)), pushed to and fetched from the remote. The refs are the source of truth; the local store is a cache. Concurrent actions from two machines are merged, never overwritten.
+Peer-to-peer code review with no server-side component. Review state lives in git refs under `refs/zf/reviews/<IssueID>`, one commit per action (see [Reviews in the repository](#reviews-in-the-repository)), pushed to and fetched from the remote. The refs are the only record: nothing about a review is kept outside them. Concurrent actions from two machines are merged, never overwritten.
 
 A review round:
 
@@ -205,7 +205,7 @@ A review round:
 - **`review status`** shows a round-by-round history for an issue: status, reviewer, timestamps, whether the reviewer pushed commits. The latest round is reconciled from the ref, so decisions made elsewhere show up.
 - **`review fetch`** fetches the review chains, merges them with the local ones, and pushes the ones the remote lacks. Nothing is pruned locally. The interactive commands sync on their own; use this before scripting around review state.
 - **`review sync`** brings an in-progress branch up to date (the current one is pre-selected). First it merges pending reviewer commits from `<IssueID>@review`; on conflict the merge is left in progress for you to resolve, then `git zf commit` concludes it. Then, for sub-task branches only, it merges the parent branch (`origin/<parent>`) into the sub-task; a conflict there is aborted and reported. A dirty working tree is refused for the first step (`git stash` first).
-- **`review track`** registers the current branch in the store without creating anything, for branches made with plain `git checkout`.
+- **`review track`** registers the current branch without creating anything, for branches made with plain `git checkout`: a feature branch goes into the store, a review branch records you as the reviewer on the review chain.
 
 #### Reviews in the repository
 

@@ -66,7 +66,7 @@ func runReviewGuard(ctx context.Context, deps reviewDeps, branchName string) err
 		return nil // fail-open, legacy blob included
 	}
 
-	if ref.Status == string(store.ReviewStatusInReview) {
+	if ref.Status == reviewpkg.StatusInReview {
 		return fmt.Errorf(
 			"push blocked: branch %q is locked for code review (issue %q, round %d).\n"+
 				"Wait for the reviewer to approve or reject before pushing.\n"+

@@ -190,8 +190,7 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 		_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
 	}
 
-	// Write and push the request op (the chain is the source of truth), then
-	// mirror the round in the store. A legacy blob is replaced only once the
+	// Write and push the request op. A legacy blob is replaced only once the
 	// op is written.
 	op := &reviewpkg.Op{Type: reviewpkg.OpRequest, FeatureSHA: featureSHA.String()}
 	write := reviewpkg.Append
@@ -217,17 +216,6 @@ func runReviewRequest(ctx context.Context, deps reviewDeps, issueSlug string) er
 	}
 	if st == nil {
 		return fmt.Errorf("read review ref after request: review %s not found", issueSlug)
-	}
-
-	reviewRow, err := deps.store.InsertReview(ctx, issueSlug, "")
-	if err != nil {
-		return fmt.Errorf("insert review: %w", err)
-	}
-	// InsertReview counts the rows of this clone; the chain knows the round.
-	if reviewRow.Round != st.Round {
-		if err := deps.store.SetReviewRound(ctx, reviewRow.ID, st.Round); err == nil {
-			reviewRow.Round = st.Round
-		}
 	}
 
 	fmt.Fprintf(deps.client.IO().Out,

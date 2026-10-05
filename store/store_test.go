@@ -597,130 +597,19 @@ func TestListCommandHistory(t *testing.T) {
 	})
 }
 
-func TestReviewStore(t *testing.T) {
+func TestMigration0007DropsReviews(t *testing.T) {
 	t.Parallel()
 
 	s := openTestStore(t)
 
-	// Seed an issue + branch so subsequent tests can reference a real slug.
-	if err := s.InsertIssueWithBranch(t.Context(),
-		&Issue{IDSlug: "42", Title: "test issue"},
-		&Branch{Name: "42@feature@test", Type: "feature", StatusID: StatusIDInProgress},
-	); err != nil {
-		t.Fatalf("seed issue: %v", err)
-	}
-
-	t.Run("InsertReview returns round 1 for new issue", func(t *testing.T) {
-		row, err := s.InsertReview(t.Context(), "42", "alice <alice@example.com>")
-		if err != nil {
-			t.Fatalf("InsertReview: %v", err)
+	t.Run("the reviews table is gone", func(t *testing.T) {
+		var n int
+		if err := s.db.QueryRowContext(t.Context(),
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reviews'").Scan(&n); err != nil {
+			t.Fatalf("query sqlite_master: %v", err)
 		}
-		if row.Round != 1 {
-			t.Errorf("round: got %d, want 1", row.Round)
-		}
-		if row.Status != ReviewStatusInReview {
-			t.Errorf("status: got %q, want %q", row.Status, ReviewStatusInReview)
-		}
-		if row.IssueSlug != "42" {
-			t.Errorf("IssueSlug: got %q, want %q", row.IssueSlug, "42")
-		}
-	})
-
-	t.Run("GetLatestReview returns most recent row", func(t *testing.T) {
-		got, err := s.GetLatestReview(t.Context(), "42")
-		if err != nil {
-			t.Fatalf("GetLatestReview: %v", err)
-		}
-		if got == nil {
-			t.Fatal("got nil, want review row")
-		}
-		if got.IssueSlug != "42" {
-			t.Errorf("IssueSlug: got %q, want %q", got.IssueSlug, "42")
-		}
-	})
-
-	t.Run("GetLatestReview returns nil for unknown issue", func(t *testing.T) {
-		got, err := s.GetLatestReview(t.Context(), "999")
-		if err != nil {
-			t.Fatalf("GetLatestReview: %v", err)
-		}
-		if got != nil {
-			t.Errorf("expected nil, got %+v", got)
-		}
-	})
-
-	t.Run("UpdateReviewStatus transitions to approved", func(t *testing.T) {
-		row, _ := s.GetLatestReview(t.Context(), "42")
-		if err := s.UpdateReviewStatus(t.Context(), row.ID, ReviewStatusApproved, false); err != nil {
-			t.Fatalf("UpdateReviewStatus: %v", err)
-		}
-		updated, _ := s.GetLatestReview(t.Context(), "42")
-		if updated.Status != ReviewStatusApproved {
-			t.Errorf("status: got %q, want %q", updated.Status, ReviewStatusApproved)
-		}
-		if updated.ResolvedAt == nil {
-			t.Error("resolved_at should be set after status update")
-		}
-	})
-
-	t.Run("UpdateReviewStatus sets has_commits flag", func(t *testing.T) {
-		row, _ := s.GetLatestReview(t.Context(), "42")
-		if err := s.UpdateReviewStatus(t.Context(), row.ID, ReviewStatusApproved, true); err != nil {
-			t.Fatalf("UpdateReviewStatus with has_commits: %v", err)
-		}
-		updated, _ := s.GetLatestReview(t.Context(), "42")
-		if !updated.HasCommits {
-			t.Error("HasCommits should be true")
-		}
-	})
-
-	t.Run("UpdateReviewStatus returns error for unknown id", func(t *testing.T) {
-		if err := s.UpdateReviewStatus(t.Context(), 9999, ReviewStatusApproved, false); err == nil {
-			t.Error("expected error for missing review id, got nil")
-		}
-	})
-
-	t.Run("UpdateReviewerIdentity sets reviewer field", func(t *testing.T) {
-		row, _ := s.GetLatestReview(t.Context(), "42")
-		if err := s.UpdateReviewerIdentity(t.Context(), row.ID, "bob <bob@example.com>"); err != nil {
-			t.Fatalf("UpdateReviewerIdentity: %v", err)
-		}
-		updated, _ := s.GetLatestReview(t.Context(), "42")
-		if updated.Reviewer != "bob <bob@example.com>" {
-			t.Errorf("Reviewer: got %q, want %q", updated.Reviewer, "bob <bob@example.com>")
-		}
-	})
-
-	t.Run("InsertReview increments round on second call", func(t *testing.T) {
-		row, err := s.InsertReview(t.Context(), "42", "carol <carol@example.com>")
-		if err != nil {
-			t.Fatalf("InsertReview round 2: %v", err)
-		}
-		if row.Round != 2 {
-			t.Errorf("round: got %d, want 2", row.Round)
-		}
-	})
-
-	t.Run("ListReviews returns all rounds newest first", func(t *testing.T) {
-		rows, err := s.ListReviews(t.Context(), "42")
-		if err != nil {
-			t.Fatalf("ListReviews: %v", err)
-		}
-		if len(rows) != 2 {
-			t.Fatalf("len: got %d, want 2", len(rows))
-		}
-		if rows[0].Round != 2 {
-			t.Errorf("first row round: got %d, want 2 (newest first)", rows[0].Round)
-		}
-	})
-
-	t.Run("ListReviews returns empty slice for unknown issue", func(t *testing.T) {
-		rows, err := s.ListReviews(t.Context(), "unknown-99")
-		if err != nil {
-			t.Fatalf("ListReviews: %v", err)
-		}
-		if len(rows) != 0 {
-			t.Errorf("expected empty slice, got %d rows", len(rows))
+		if n != 0 {
+			t.Error("reviews table still exists")
 		}
 	})
 }
@@ -972,9 +861,9 @@ func TestOpenRepo_linkedWorktreeSharesMainStore(t *testing.T) {
 	})
 }
 
-// TestStoredTimes checks that the driver hands back a time.Time for both text
-// forms the store holds in its DATETIME columns: SQLite's CURRENT_TIMESTAMP
-// ("2006-01-02 15:04:05") and the RFC3339 strings the store writes itself.
+// TestStoredTimes checks that the driver hands back a time.Time for the text
+// form the store holds in its DATETIME columns: SQLite's CURRENT_TIMESTAMP
+// ("2006-01-02 15:04:05").
 func TestStoredTimes(t *testing.T) {
 	s := openTestStore(t)
 	ctx := t.Context()
@@ -1012,42 +901,5 @@ func TestStoredTimes(t *testing.T) {
 		}
 
 		recent(t, "command_history created_at", history[0].CreatedAt)
-	})
-
-	t.Run("an RFC3339 string is read back as the time that was written", func(t *testing.T) {
-		inserted, err := s.InsertReview(ctx, "T-1", "carol")
-		if err != nil {
-			t.Fatalf("InsertReview: %v", err)
-		}
-
-		recent(t, "inserted created_at", inserted.CreatedAt)
-
-		latest, err := s.GetLatestReview(ctx, "T-1")
-		if err != nil {
-			t.Fatalf("GetLatestReview: %v", err)
-		}
-		if !latest.CreatedAt.Equal(inserted.CreatedAt) {
-			t.Errorf("GetLatestReview created_at = %v, want %v", latest.CreatedAt, inserted.CreatedAt)
-		}
-		if latest.ResolvedAt != nil {
-			t.Errorf("resolved_at = %v before any decision, want nil", latest.ResolvedAt)
-		}
-
-		if err := s.UpdateReviewStatus(ctx, latest.ID, ReviewStatusApproved, false); err != nil {
-			t.Fatalf("UpdateReviewStatus: %v", err)
-		}
-
-		all, err := s.ListReviews(ctx, "T-1")
-		if err != nil || len(all) != 1 {
-			t.Fatalf("ListReviews = %d rows, err %v", len(all), err)
-		}
-		if !all[0].CreatedAt.Equal(inserted.CreatedAt) {
-			t.Errorf("ListReviews created_at = %v, want %v", all[0].CreatedAt, inserted.CreatedAt)
-		}
-		if all[0].ResolvedAt == nil {
-			t.Fatal("resolved_at is nil after the decision")
-		}
-
-		recent(t, "resolved_at", *all[0].ResolvedAt)
 	})
 }

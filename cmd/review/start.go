@@ -6,7 +6,6 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
@@ -54,7 +53,7 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 	if ref == nil || ref.Closed {
 		return fmt.Errorf("no review found for issue %q — has the developer run `git zf review request %s`?", issueSlug, issueSlug)
 	}
-	if ref.Status != string(store.ReviewStatusInReview) {
+	if ref.Status != reviewpkg.StatusInReview {
 		return fmt.Errorf("issue %q is not awaiting review (current status: %s)", issueSlug, ref.Status)
 	}
 
@@ -81,22 +80,7 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 		return fmt.Errorf("create review branch at %s: %w", short, err)
 	}
 
-	// Record reviewer identity in the ref (source of truth, visible cross-machine)
-	// and in the local store (cache).
-	if reviewer, _ := deps.client.ConfigUser(ctx); reviewer != "" {
-		if ref.Reviewer == "" {
-			startOp := &reviewpkg.Op{Type: reviewpkg.OpStart, Round: ref.Round}
-			if writeErr := reviewpkg.Append(ctx, deps.client, issueSlug, startOp, false); writeErr != nil {
-				fmt.Fprintf(deps.client.IO().Err, "warning: record reviewer: %v\n", writeErr)
-			} else if pushErr := reviewpkg.Push(ctx, deps.client, issueSlug); pushErr != nil {
-				// Pushed so the developer can see who started the review.
-				fmt.Fprintf(deps.client.IO().Err, "warning: push reviewer identity: %v\n", pushErr)
-			}
-		}
-		if latest, err := deps.store.GetLatestReview(ctx, issueSlug); err == nil && latest != nil && latest.Reviewer == "" {
-			_ = deps.store.UpdateReviewerIdentity(ctx, latest.ID, reviewer)
-		}
-	}
+	recordReviewer(ctx, deps, ref)
 
 	featureSHAShort := ref.FeatureSHA
 	if len(featureSHAShort) > 7 {
@@ -111,4 +95,21 @@ func runReviewStart(ctx context.Context, deps reviewDeps, issueSlug string) erro
 		reviewBranch, featureSHAShort, ref.Round, issueSlug, issueSlug)
 
 	return nil
+}
+
+// recordReviewer names this clone's user as the reviewer of ref's round: it
+// writes the start op and pushes it, so the developer sees who started the
+// review. No-op when the round already has a reviewer or git has no user
+// configured. A failure is a warning: the review goes on without the name.
+func recordReviewer(ctx context.Context, deps reviewDeps, ref *reviewpkg.State) {
+	if reviewer, _ := deps.client.ConfigUser(ctx); reviewer == "" || ref.Reviewer != "" {
+		return
+	}
+
+	startOp := &reviewpkg.Op{Type: reviewpkg.OpStart, Round: ref.Round}
+	if err := reviewpkg.Append(ctx, deps.client, ref.Slug, startOp, false); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: record reviewer: %v\n", err)
+	} else if err := reviewpkg.Push(ctx, deps.client, ref.Slug); err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: push reviewer identity: %v\n", err)
+	}
 }

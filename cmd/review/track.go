@@ -19,7 +19,8 @@ func TrackCmd(appConfig *config.AppConfig) *cobra.Command {
 	return &cobra.Command{
 		Use:   "track",
 		Short: "Register the current branch in the git-zf store (for branches created with plain git checkout)",
-		Long: `Register the current branch into the git-zf store without creating a new branch.
+		Long: `Register the current branch without creating a new branch: a feature branch
+goes into the git-zf store, a review branch records you as the reviewer.
 
 Use this when you checked out a branch with plain 'git checkout' instead of
 'git zf issue start' or 'git zf review start'.
@@ -84,7 +85,7 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 
 	// Warn if a review ref already exists for this issue (branch is locked).
 	if ref, _ := reviewpkg.Load(ctx, deps.client, b.IssueID()); ref != nil && !ref.Closed &&
-		ref.Status == string(store.ReviewStatusInReview) {
+		ref.Status == reviewpkg.StatusInReview {
 		fmt.Fprintf(deps.client.IO().Err,
 			"Note: branch %q is currently locked for review (round %d).\n"+
 				"You cannot submit for review again until the reviewer decides.\n",
@@ -99,8 +100,9 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 	return nil
 }
 
-// runTrackReviewer registers a manually-created review branch in the git-zf
-// store so the reviewer can run approve/reject without having used review start.
+// runTrackReviewer checks that a manually-created review branch has a review
+// awaiting a decision and records the reviewer on its chain, as review start
+// would have.
 func runTrackReviewer(ctx context.Context, deps reviewDeps, branchName string) error {
 	issueSlug, _ := branch.CutReviewSuffix(branchName)
 
@@ -124,49 +126,19 @@ func runTrackReviewer(ctx context.Context, deps reviewDeps, branchName string) e
 			"no open review for issue %q — has the developer run `git zf review request`?",
 			issueSlug)
 	}
-	if ref.Status != string(store.ReviewStatusInReview) {
+	if ref.Status != reviewpkg.StatusInReview {
 		return fmt.Errorf(
 			"issue %q is not awaiting review (current status: %s)", issueSlug, ref.Status)
 	}
 
-	// Resolve reviewer identity from git config.
-	reviewer, _ := deps.client.ConfigUser(ctx)
-
-	// Check existing store record.
-	latest, err := deps.store.GetLatestReview(ctx, issueSlug)
-	if err != nil {
-		return fmt.Errorf("check review record: %w", err)
-	}
-
-	switch {
-	case latest != nil && latest.Reviewer != "":
-		// Already registered.
-		fmt.Fprintf(deps.client.IO().Out,
-			"Already registered as reviewer for issue %q (round %d).\n",
-			issueSlug, latest.Round)
-		return nil
-
-	case latest != nil && latest.Reviewer == "":
-		// Record exists but reviewer identity not yet captured.
-		if reviewer != "" {
-			_ = deps.store.UpdateReviewerIdentity(ctx, latest.ID, reviewer)
-		}
-
-	default:
-		// No record at all — insert one.
-		var insertErr error
-		latest, insertErr = deps.store.InsertReview(ctx, issueSlug, reviewer)
-		if insertErr != nil {
-			return fmt.Errorf("register review record: %w", insertErr)
-		}
-	}
+	recordReviewer(ctx, deps, ref)
 
 	fmt.Fprintf(deps.client.IO().Out,
 		"Branch %q registered as review branch for issue %q (round %d).\n"+
 			"Run:\n"+
 			"  git zf review approve\n"+
 			"  git zf review reject\n",
-		branchName, issueSlug, latest.Round)
+		branchName, issueSlug, ref.Round)
 
 	return nil
 }

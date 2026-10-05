@@ -3,9 +3,9 @@ package review
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/store"
 	"github.com/spf13/cobra"
 )
 
@@ -21,27 +21,27 @@ func (r Review) getStatusCmd() *cobra.Command {
 }
 
 func runReviewStatusInteractive(ctx context.Context, deps reviewDeps, prompter ReviewPrompter) error {
-	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
-	}
-
-	// Show branches that have any review history.
-	all, err := deps.store.ListBranches(ctx, store.BranchStatusAll)
+	withHistory, err := reviewBranches(ctx, deps, func(st *reviewpkg.State) bool { return len(st.Rounds) > 0 })
 	if err != nil {
-		return fmt.Errorf("list branches: %w", err)
-	}
-
-	var withHistory []store.BranchRow
-	for _, b := range all {
-		rows, err := deps.store.ListReviews(ctx, b.IssueSlug)
-		if err == nil && len(rows) > 0 {
-			withHistory = append(withHistory, b)
-		}
+		return err
 	}
 
 	if len(withHistory) == 0 {
 		fmt.Fprintln(deps.client.IO().Out, "No review history found.")
 		return nil
+	}
+
+	// Show the issue's own branch and title when this clone knows them.
+	slugs := make([]string, len(withHistory))
+	for i := range withHistory {
+		slugs[i] = withHistory[i].IssueSlug
+	}
+	if known, err := deps.store.ListBranchesByIssueSlugs(ctx, slugs); err == nil {
+		for i := range withHistory {
+			if b, ok := known[withHistory[i].IssueSlug]; ok {
+				withHistory[i] = b
+			}
+		}
 	}
 
 	picked, err := prompter.PickBranch(ctx, "Select issue to view review history:", withHistory, currentIssueSlug(deps.client))
@@ -60,38 +60,22 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
 	}
 
-	rows, err := deps.store.ListReviews(ctx, issueSlug)
+	ref, err := reviewpkg.Load(ctx, deps.client, issueSlug)
 	if err != nil {
-		return fmt.Errorf("list reviews: %w", err)
+		return fmt.Errorf("read review ref: %w", err)
 	}
-
-	if len(rows) == 0 {
+	if ref == nil || len(ref.Rounds) == 0 {
 		fmt.Fprintf(deps.client.IO().Out, "No review history for issue %q.\n", issueSlug)
 		return nil
 	}
-
-	// Reconcile the latest row from the ref (authoritative source).
-	// This catches status changes (e.g. rejection) made on another machine.
-	ref, _ := reviewpkg.Load(ctx, deps.client, issueSlug)
-	if ref != nil {
-		for _, w := range ref.Warnings {
-			fmt.Fprintln(deps.client.IO().Err, w)
-		}
-		latest := &rows[0] // ListReviews returns the newest round first
-		if store.ReviewStatus(ref.Status) != latest.Status {
-			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
-			latest.Status = store.ReviewStatus(ref.Status)
-		}
-		if ref.Reviewer != "" && latest.Reviewer == "" {
-			_ = deps.store.UpdateReviewerIdentity(ctx, latest.ID, ref.Reviewer)
-			latest.Reviewer = ref.Reviewer
-		}
+	for _, w := range ref.Warnings {
+		fmt.Fprintln(deps.client.IO().Err, w)
 	}
 
 	fmt.Fprintf(deps.client.IO().Out, "Review history for issue %q:\n", issueSlug)
-	for _, row := range rows {
+	for _, row := range slices.Backward(ref.Rounds) { // newest round first
 		resolved := "pending"
-		if row.ResolvedAt != nil {
+		if !row.ResolvedAt.IsZero() {
 			resolved = row.ResolvedAt.Format("2006-01-02 15:04")
 		}
 		commits := ""
@@ -104,16 +88,16 @@ func runReviewStatus(ctx context.Context, deps reviewDeps, issueSlug string) err
 		}
 		fmt.Fprintf(deps.client.IO().Out, "  Round %-2d  %-20s  reviewer: %-30s  opened: %s  resolved: %s%s\n",
 			row.Round, row.Status, reviewer,
-			row.CreatedAt.Format("2006-01-02 15:04"), resolved, commits)
+			row.OpenedAt.Format("2006-01-02 15:04"), resolved, commits)
 	}
 
 	// The state only carries the current round's reason; older ones stay in
 	// the chain's reject ops.
-	if ref != nil && ref.Comment != "" && store.ReviewStatus(ref.Status) == store.ReviewStatusChangesRequested {
+	if ref.Comment != "" && ref.Status == reviewpkg.StatusChangesRequested {
 		fmt.Fprintf(deps.client.IO().Out, "\nRound %d reason:\n%s\n", ref.Round, indentLines(ref.Comment))
 	}
 
-	if ref != nil && len(ref.Approvals) > 0 {
+	if len(ref.Approvals) > 0 {
 		fmt.Fprintf(deps.client.IO().Out, "\nRound %d approvals:\n", ref.Round)
 		for _, a := range ref.Approvals {
 			// author is what the op declares; for a verified approval, also

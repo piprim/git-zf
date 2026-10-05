@@ -11,6 +11,7 @@ import (
 
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/store"
 )
@@ -73,7 +74,7 @@ func newGuardRig(t *testing.T) *guardRig {
 	); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	reviewtest.Seed(t, client, "42", string(store.ReviewStatusChangesRequested), 1, "unused")
+	reviewtest.Seed(t, client, "42", reviewpkg.StatusChangesRequested, 1, "unused")
 	return &guardRig{dir: dir, client: client, store: s, stdout: stdout}
 }
 

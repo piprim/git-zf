@@ -13,9 +13,9 @@ import (
 // decision (approved / changes_requested) says the developer must incorporate
 // into the feature branch.
 type PendingReview struct {
-	EffectiveRef string             // "42@review" or "origin/42@review"
-	Commits      int                // commits ahead of the feature branch
-	Status       store.ReviewStatus // approved | changes_requested
+	EffectiveRef string // "42@review" or "origin/42@review"
+	Commits      int    // commits ahead of the feature branch
+	Status       string // review.StatusApproved or review.StatusChangesRequested
 }
 
 // ReviewBranchAhead finds the review branch that counts for slug and how many
@@ -68,8 +68,7 @@ func PendingReviewCommits(ctx context.Context, client *git.Client, slug, feature
 	if err != nil || st == nil || st.Closed {
 		return nil, err
 	}
-	status := store.ReviewStatus(st.Status)
-	if status != store.ReviewStatusApproved && status != store.ReviewStatusChangesRequested {
+	if st.Status != reviewpkg.StatusApproved && st.Status != reviewpkg.StatusChangesRequested {
 		return nil, nil
 	}
 
@@ -78,7 +77,7 @@ func PendingReviewCommits(ctx context.Context, client *git.Client, slug, feature
 		return nil, err
 	}
 
-	return &PendingReview{EffectiveRef: effective, Commits: n, Status: status}, nil
+	return &PendingReview{EffectiveRef: effective, Commits: n, Status: st.Status}, nil
 }
 
 // IssueSlugForBranch returns the issue slug owning branchName in the store,

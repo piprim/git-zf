@@ -12,7 +12,7 @@ import (
 
 func TestReviewRequest_RefusesWithUnincorporatedReviewerCommits(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 
 	err := runReviewRequest(t.Context(), rig.deps(), "77")
 
@@ -31,12 +31,7 @@ func TestReviewRequest_RefusesWithUnincorporatedReviewerCommits(t *testing.T) {
 
 func TestReviewRequest_InteractiveOfferMergesThenProceeds(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
-	// seedPendingReview only seeds the review chain (round 1); mirror a real
-	// rejected round-1 by also seeding the store's review row.
-	if _, err := rig.store.InsertReview(t.Context(), "77", ""); err != nil {
-		t.Fatalf("seed round-1 review row: %v", err)
-	}
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	prompter := &scriptedReviewPrompter{
 		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		ConfirmAnswer: true,
@@ -59,7 +54,7 @@ func TestReviewRequest_InteractiveOfferMergesThenProceeds(t *testing.T) {
 	})
 	t.Run("round 2 ref written", func(t *testing.T) {
 		ref, _ := reviewpkg.Load(t.Context(), rig.client, "77")
-		if ref == nil || ref.Round != 2 || ref.Status != string(store.ReviewStatusInReview) {
+		if ref == nil || ref.Round != 2 || ref.Status != reviewpkg.StatusInReview {
 			t.Fatalf("want round-2 in_review ref, got %+v", ref)
 		}
 	})
@@ -67,7 +62,7 @@ func TestReviewRequest_InteractiveOfferMergesThenProceeds(t *testing.T) {
 
 func TestReviewRequest_InteractiveDeclineAborts(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	prompter := &scriptedReviewPrompter{
 		Branch:        &store.BranchRow{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		ConfirmAnswer: false,

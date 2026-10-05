@@ -1,5 +1,8 @@
 # Roadmap
 
+1. Drop the reviews table now. It is self-contained, the chain already has the data, and it removes the cache-drift class of bug we just fixed in review status.
+2. Then branch refs as chains, absorbing branches, issues and issue_relations, with command_history moved to a file in the same change.
+
 ## Enhancement
 
 -  No command edits the title or description of a repo-only issue. An issue edit form would be one small extra task if you want it. + A close-by-ID command and a branch naming fallback (non-Latin title as a backlog item).
@@ -24,4 +27,5 @@
 
 ## To be discuss
 
-- Add the trackers for “Under development”, “To be reviewed/tested”, “Under review”, “Test/review” to the redimne conf to automate the code review workflow.
+Add the trackers for “Under development”, “To be reviewed/tested”, “Under review”, “Test/review” to the redimne conf to automate the code review workflow.
+Is it possible to do the same with Forgejo with labels or projects ?

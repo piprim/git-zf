@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/store"
 )
 
 func TestRunReviewSync_MergesReviewBranch(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 
 	err := runReviewSync(t.Context(), rig.deps(), "77")
 
@@ -39,7 +40,7 @@ func TestRunReviewSync_MergesReviewBranch(t *testing.T) {
 
 func TestRunReviewSync_ConflictLeavesMergeInProgress(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	// Conflicting change on the feature branch (same file as the reviewer's).
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
 	if err := os.WriteFile(filepath.Join(rig.dir, "reviewer.txt"), []byte("mine\n"), 0o644); err != nil {
@@ -70,7 +71,7 @@ func TestRunReviewSync_ConflictLeavesMergeInProgress(t *testing.T) {
 
 func TestRunReviewSync_DirtyTreeRefusedBeforeMerge(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
 	if err := os.WriteFile(filepath.Join(rig.dir, "feature.txt"), []byte("wip\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -93,7 +94,7 @@ func TestRunReviewSync_DirtyTreeRefusedBeforeMerge(t *testing.T) {
 
 func TestRunReviewSync_InReviewStatusDoesNotMerge(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusInReview)
+	seedPendingReview(t, rig, reviewpkg.StatusInReview)
 
 	err := runReviewSync(t.Context(), rig.deps(), "77")
 
@@ -139,7 +140,7 @@ func seedParent(t *testing.T, rig *reviewE2ERig) {
 
 func TestRunReviewSync_SubtaskMergesReviewThenParent(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	seedParent(t, rig)
 
 	err := runReviewSync(t.Context(), rig.deps(), "77")
@@ -165,7 +166,7 @@ func TestRunReviewSync_SubtaskMergesReviewThenParent(t *testing.T) {
 
 func TestRunReviewSync_ConflictedReviewMergeSkipsParent(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	// Conflicting change on the feature branch (same file as the reviewer's).
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
 	if err := os.WriteFile(filepath.Join(rig.dir, "reviewer.txt"), []byte("mine\n"), 0o644); err != nil {
@@ -196,7 +197,7 @@ func TestRunReviewSync_ConflictedReviewMergeSkipsParent(t *testing.T) {
 
 func TestRunReviewSyncInteractive_OffersBranchWithPendingReview(t *testing.T) {
 	rig := newReviewE2ERig(t)
-	seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+	seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 	capture := &captureReviewPrompter{} // records offered branches, picks none
 
 	err := runReviewSyncInteractive(t.Context(), rig.deps(), capture)

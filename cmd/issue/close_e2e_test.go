@@ -835,7 +835,7 @@ func TestClose_ConflictAborts(t *testing.T) {
 
 // seedReviewRef writes a review chain so reviewPreflight (which reads the
 // chain as authoritative) can see the correct status in tests.
-func seedReviewRef(t *testing.T, rig *closeTestRig, issueSlug string, status store.ReviewStatus, round int) {
+func seedReviewRef(t *testing.T, rig *closeTestRig, issueSlug string, status string, round int) {
 	t.Helper()
 
 	out, err := exec.CommandContext(t.Context(), "git", "-C", rig.dir, "rev-parse", "ABC-1@feat@add-thing").Output()
@@ -843,7 +843,7 @@ func seedReviewRef(t *testing.T, rig *closeTestRig, issueSlug string, status sto
 		t.Fatalf("rev-parse feature branch: %v", err)
 	}
 
-	reviewtest.Seed(t, rig.client, issueSlug, string(status), round, strings.TrimSpace(string(out)))
+	reviewtest.Seed(t, rig.client, issueSlug, status, round, strings.TrimSpace(string(out)))
 }
 
 func TestClose_ReviewPreflight(t *testing.T) {
@@ -853,10 +853,7 @@ func TestClose_ReviewPreflight(t *testing.T) {
 		t.Parallel()
 
 		rig := newCloseRig(t)
-		if _, err := rig.store.InsertReview(t.Context(), "ABC-1", "alice"); err != nil {
-			t.Fatalf("InsertReview: %v", err)
-		}
-		seedReviewRef(t, rig, "ABC-1", store.ReviewStatusInReview, 1)
+		seedReviewRef(t, rig, "ABC-1", reviewpkg.StatusInReview, 1)
 
 		p := &scriptedPrompter{Branch: rig.pickedBranchRow()}
 		err := runClose(t.Context(), rig.deps(), p)
@@ -877,17 +874,10 @@ func TestClose_ReviewPreflight(t *testing.T) {
 		t.Parallel()
 
 		rig := newCloseRig(t)
-		row, err := rig.store.InsertReview(t.Context(), "ABC-1", "alice")
-		if err != nil {
-			t.Fatalf("InsertReview: %v", err)
-		}
-		if err := rig.store.UpdateReviewStatus(t.Context(), row.ID, store.ReviewStatusChangesRequested, false); err != nil {
-			t.Fatalf("UpdateReviewStatus: %v", err)
-		}
-		seedReviewRef(t, rig, "ABC-1", store.ReviewStatusChangesRequested, 1)
+		seedReviewRef(t, rig, "ABC-1", reviewpkg.StatusChangesRequested, 1)
 
 		p := &scriptedPrompter{Branch: rig.pickedBranchRow()}
-		err = runClose(t.Context(), rig.deps(), p)
+		err := runClose(t.Context(), rig.deps(), p)
 
 		t.Run("returns error", func(t *testing.T) {
 			if err == nil {
@@ -1873,7 +1863,7 @@ func TestClose_ReviewPreflight_DivergedCleanAutoMerges(t *testing.T) {
 	mustRunGitAt(t, rig.dir, "add", "dev-later.txt")
 	mustRunGitAt(t, rig.dir, "commit", "-m", "feat: more work")
 
-	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
+	seedReviewRef(t, rig, slug, reviewpkg.StatusApproved, 1)
 
 	cleanup, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
 
@@ -1932,7 +1922,7 @@ func TestClose_ReviewPreflight_DivergedConflictRefusesWithSyncHint(t *testing.T)
 	mustRunGitAt(t, rig.dir, "add", "clash.txt")
 	mustRunGitAt(t, rig.dir, "commit", "-m", "feat: developer version")
 
-	seedReviewRef(t, rig, slug, store.ReviewStatusApproved, 1)
+	seedReviewRef(t, rig, slug, reviewpkg.StatusApproved, 1)
 
 	_, err := reviewPreflight(t.Context(), rig.deps(), rig.pickedBranchRow(), nil)
 
@@ -2821,7 +2811,7 @@ func seedApprovedReviewBranch(t *testing.T, rig *closeTestRig, file, content str
 	mustRunGitAt(t, rig.dir, "commit", "-q", "-m", "fix: reviewer nit")
 	mustRunGitAt(t, rig.dir, "checkout", "-q", "main")
 
-	seedReviewRef(t, rig, "ABC-1", store.ReviewStatusApproved, 1)
+	seedReviewRef(t, rig, "ABC-1", reviewpkg.StatusApproved, 1)
 }
 
 // The feature branch lives in a linked worktree, so the reviewer-commit

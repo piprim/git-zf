@@ -687,13 +687,13 @@ func roundLine(out string, round string) string {
 	return ""
 }
 
-func TestReviewStatus_ReconcilesTheNewestRound(t *testing.T) {
+func TestReviewStatus_PrintsEveryRoundFromTheChain(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
 	rig := newReviewE2ERig(t)
 
-	// Round 1 is rejected, round 2 is requested: two rows in the store.
+	// Round 1 is rejected, round 2 is requested.
 	bringRigToInReview(t, rig)
 	if _, err := runReviewReject(ctx, rig.deps(), "77", "fix the tests"); err != nil {
 		t.Fatalf("runReviewReject: %v", err)
@@ -702,8 +702,7 @@ func TestReviewStatus_ReconcilesTheNewestRound(t *testing.T) {
 		t.Fatalf("runReviewRequest round 2: %v", err)
 	}
 
-	// Round 2 is approved on the reviewer's machine: the chain knows, this
-	// clone's store still says in_review.
+	// Round 2 is approved on the reviewer's machine: only the chain knows.
 	approve := &reviewpkg.Op{Type: reviewpkg.OpApprove, ApprovedSHA: "f2", Round: 2}
 	if err := reviewpkg.Append(ctx, rig.client, "77", approve, false); err != nil {
 		t.Fatalf("append approve: %v", err)
@@ -715,33 +714,21 @@ func TestReviewStatus_ReconcilesTheNewestRound(t *testing.T) {
 	}
 	out := rig.stdout.String()
 
-	rows, err := rig.store.ListReviews(ctx, "77")
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("ListReviews = %d rows, %v", len(rows), err)
-	}
-	round2, round1 := rows[0], rows[1] // newest first
-
-	t.Run("the store row of round 2 takes the chain's status", func(t *testing.T) {
-		if round2.Round != 2 || round2.Status != store.ReviewStatusApproved {
-			t.Errorf("round 2 row = %+v", round2)
-		}
-	})
-
-	t.Run("the store row of round 1 keeps changes_requested", func(t *testing.T) {
-		if round1.Round != 1 || round1.Status != store.ReviewStatusChangesRequested {
-			t.Errorf("round 1 row = %+v", round1)
-		}
-	})
-
 	t.Run("the history prints round 2 as approved", func(t *testing.T) {
-		if line := roundLine(out, "2"); !strings.Contains(line, string(store.ReviewStatusApproved)) {
+		if line := roundLine(out, "2"); !strings.Contains(line, reviewpkg.StatusApproved) {
 			t.Errorf("round 2 line = %q\n%s", line, out)
 		}
 	})
 
 	t.Run("the history prints round 1 as changes_requested", func(t *testing.T) {
-		if line := roundLine(out, "1"); !strings.Contains(line, string(store.ReviewStatusChangesRequested)) {
+		if line := roundLine(out, "1"); !strings.Contains(line, reviewpkg.StatusChangesRequested) {
 			t.Errorf("round 1 line = %q\n%s", line, out)
+		}
+	})
+
+	t.Run("the newest round comes first", func(t *testing.T) {
+		if strings.Index(out, "Round 2 ") > strings.Index(out, "Round 1 ") {
+			t.Errorf("round 1 printed before round 2:\n%s", out)
 		}
 	})
 }

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
-	"github.com/piprim/git-zf/store"
 )
 
 // mustRunGit runs a git command in the given directory, failing the test on error.
@@ -23,7 +23,7 @@ func mustRunGit(t *testing.T, dir string, args ...string) {
 
 // seedPendingReview creates 77@review with one commit ahead of the feature
 // branch and seeds a local review chain with the given status.
-func seedPendingReview(t *testing.T, rig *reviewE2ERig, status store.ReviewStatus) {
+func seedPendingReview(t *testing.T, rig *reviewE2ERig, status string) {
 	t.Helper()
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
 	mustRunGit(t, rig.dir, "checkout", "-b", "77@review")
@@ -33,13 +33,13 @@ func seedPendingReview(t *testing.T, rig *reviewE2ERig, status store.ReviewStatu
 	mustRunGit(t, rig.dir, "add", "reviewer.txt")
 	mustRunGit(t, rig.dir, "commit", "-m", "fix: reviewer nit")
 	mustRunGit(t, rig.dir, "checkout", "77@feat@my-feature")
-	reviewtest.Seed(t, rig.client, "77", string(status), 1, "unused")
+	reviewtest.Seed(t, rig.client, "77", status, 1, "unused")
 }
 
 func TestGuardCommit(t *testing.T) {
 	t.Run("blocks with sync hint on changes_requested", func(t *testing.T) {
 		rig := newReviewE2ERig(t)
-		seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+		seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 		err := runReviewGuardCommit(t.Context(), rig.deps())
 		if err == nil {
 			t.Fatal("want guard error, got nil")
@@ -54,7 +54,7 @@ func TestGuardCommit(t *testing.T) {
 
 	t.Run("passes during in_review", func(t *testing.T) {
 		rig := newReviewE2ERig(t)
-		seedPendingReview(t, rig, store.ReviewStatusInReview)
+		seedPendingReview(t, rig, reviewpkg.StatusInReview)
 		if err := runReviewGuardCommit(t.Context(), rig.deps()); err != nil {
 			t.Fatalf("want pass, got %v", err)
 		}
@@ -62,7 +62,7 @@ func TestGuardCommit(t *testing.T) {
 
 	t.Run("passes on the @review branch itself", func(t *testing.T) {
 		rig := newReviewE2ERig(t)
-		seedPendingReview(t, rig, store.ReviewStatusChangesRequested)
+		seedPendingReview(t, rig, reviewpkg.StatusChangesRequested)
 		mustRunGit(t, rig.dir, "checkout", "77@review")
 		if err := runReviewGuardCommit(t.Context(), rig.deps()); err != nil {
 			t.Fatalf("want pass on review branch, got %v", err)

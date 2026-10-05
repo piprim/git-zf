@@ -95,10 +95,19 @@ func branchNameForIssue(ctx context.Context, s *store.Store, issueSlug string) (
 	return rows[issueSlug].BranchName, nil
 }
 
-// inReviewBranches returns synthetic BranchRows for issues currently in_review,
+// inReviewBranches returns synthetic BranchRows for issues currently in_review.
+func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, error) {
+	return reviewBranches(ctx, deps, func(st *reviewpkg.State) bool {
+		return !st.Closed && st.Status == reviewpkg.StatusInReview
+	})
+}
+
+// reviewBranches returns a synthetic BranchRow for every review keep accepts,
 // built from git refs rather than the local store. This works on fresh reviewer
 // clones where the store is empty and no git zf issue start has been run.
-func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, error) {
+func reviewBranches(
+	ctx context.Context, deps reviewDeps, keep func(*reviewpkg.State) bool,
+) ([]store.BranchRow, error) {
 	// Fetch latest state and push anything still local (best-effort).
 	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
@@ -113,8 +122,9 @@ func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, 
 	}
 
 	var result []store.BranchRow
-	for _, st := range states {
-		if st.Closed || st.Status != reviewpkg.StatusInReview {
+	for i := range states {
+		st := &states[i]
+		if !keep(st) {
 			continue
 		}
 		// Build a synthetic BranchRow from the review. The reviewer's branch
@@ -126,69 +136,6 @@ func inReviewBranches(ctx context.Context, deps reviewDeps) ([]store.BranchRow, 
 		})
 	}
 	return result, nil
-}
-
-// ensureReviewRecord returns a store ReviewRow for issueSlug that matches the
-// current ref (the source of truth). It handles three cases:
-//
-//  1. Store empty / ref is ahead by round: inserts a new store record.
-//  2. Store round matches ref round but status differs: updates the store row.
-//  3. Store and ref agree: returns the existing row as-is.
-//
-// This allows approve/reject to work correctly even when the reviewer's store
-// is stale (e.g. they rejected round 1 and the developer has since submitted
-// round 2 — the store still shows round 1 / changes_requested).
-func ensureReviewRecord(ctx context.Context, deps reviewDeps, issueSlug string) (*store.ReviewRow, error) {
-	// Ref is always authoritative — read it first.
-	ref, refErr := reviewpkg.Load(ctx, deps.client, issueSlug)
-	if refErr != nil {
-		return nil, fmt.Errorf("read review ref: %w", refErr)
-	}
-	if ref == nil {
-		return nil, fmt.Errorf("no review found for issue %q — has the developer run `git zf review request`?", issueSlug)
-	}
-
-	latest, err := deps.store.GetLatestReview(ctx, issueSlug)
-	if err != nil {
-		return nil, fmt.Errorf("get latest review: %w", err)
-	}
-
-	// If store is current (same round as ref), reconcile status/reviewer and return.
-	if latest != nil && latest.Round >= ref.Round {
-		if store.ReviewStatus(ref.Status) != latest.Status {
-			_ = deps.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatus(ref.Status), latest.HasCommits)
-			latest.Status = store.ReviewStatus(ref.Status)
-		}
-		if ref.Reviewer != "" && latest.Reviewer == "" {
-			_ = deps.store.UpdateReviewerIdentity(ctx, latest.ID, ref.Reviewer)
-			latest.Reviewer = ref.Reviewer
-		}
-		return latest, nil
-	}
-
-	// Store is behind (empty or stale round) — insert a record for the current
-	// round. InsertReview auto-computes round as (existing count + 1).
-	reviewer := ref.Reviewer
-	if reviewer == "" {
-		reviewer, _ = deps.client.ConfigUser(ctx)
-	}
-	inserted, insertErr := deps.store.InsertReview(ctx, issueSlug, reviewer)
-	if insertErr != nil {
-		return nil, fmt.Errorf("auto-register review record: %w", insertErr)
-	}
-	// InsertReview always sets status to in_review; sync from ref when different.
-	if store.ReviewStatus(ref.Status) != inserted.Status {
-		_ = deps.store.UpdateReviewStatus(ctx, inserted.ID, store.ReviewStatus(ref.Status), false)
-		inserted.Status = store.ReviewStatus(ref.Status)
-	}
-	// Sync round if InsertReview computed the wrong round (store was empty
-	// but ref is at round N > 1).
-	if inserted.Round != ref.Round {
-		if err := deps.store.SetReviewRound(ctx, inserted.ID, ref.Round); err == nil {
-			inserted.Round = ref.Round
-		}
-	}
-	return inserted, nil
 }
 
 // reviewDecision is what recordReviewDecision resolved while recording.
@@ -203,21 +150,27 @@ type reviewDecision struct {
 // recordReviewDecision flips the in-review issue to status (approved or
 // changes requested). comment is the reviewer's reason, "" when approving.
 //
-// It writes and pushes the review ref FIRST (the ref is the source of truth)
-// and updates the store after: a store failure leaves the ref correct, a ref
-// failure leaves the store unchanged.
+// It writes the decision op on the review chain and pushes it. status is
+// reviewpkg.StatusApproved or reviewpkg.StatusChangesRequested.
 func recordReviewDecision(
-	ctx context.Context, deps reviewDeps, issueSlug string, status store.ReviewStatus, comment string,
+	ctx context.Context, deps reviewDeps, issueSlug, status, comment string,
 ) (reviewDecision, error) {
-	latest, err := ensureReviewRecord(ctx, deps, issueSlug)
+	st, err := reviewpkg.Load(ctx, deps.client, issueSlug)
 	if err != nil {
-		return reviewDecision{}, err
+		return reviewDecision{}, fmt.Errorf("read review ref: %w", err)
 	}
-	if latest.Status != store.ReviewStatusInReview {
-		return reviewDecision{}, fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, latest.Status)
+	if st == nil {
+		return reviewDecision{}, fmt.Errorf(
+			"no review found for issue %q — has the developer run `git zf review request`?", issueSlug)
+	}
+	for _, w := range st.Warnings {
+		fmt.Fprintln(deps.client.IO().Err, w)
+	}
+	if st.Status != reviewpkg.StatusInReview {
+		return reviewDecision{}, fmt.Errorf("issue %q is not in review (current status: %s)", issueSlug, st.Status)
 	}
 
-	d := reviewDecision{round: latest.Round, reviewBranch: branch.ReviewBranchName(issueSlug)}
+	d := reviewDecision{round: st.Round, reviewBranch: branch.ReviewBranchName(issueSlug)}
 
 	var branchErr error
 	if d.featureBranch, branchErr = branchNameForIssue(ctx, deps.store, issueSlug); branchErr != nil {
@@ -231,16 +184,8 @@ func recordReviewDecision(
 		d.hasCommits = countErr == nil && n > 0
 	}
 
-	st, err := reviewpkg.Load(ctx, deps.client, issueSlug)
-	if err != nil {
-		return reviewDecision{}, fmt.Errorf("read review ref: %w", err)
-	}
-	for _, w := range st.Warnings {
-		fmt.Fprintln(deps.client.IO().Err, w)
-	}
-
 	op := &reviewpkg.Op{Type: reviewpkg.OpReject, Comment: comment, HasCommits: d.hasCommits, Round: st.Round}
-	if status == store.ReviewStatusApproved {
+	if status == reviewpkg.StatusApproved {
 		// What the reviewer approved: their review branch when they have one,
 		// else the commit the developer submitted.
 		approved := st.FeatureSHA
@@ -256,17 +201,13 @@ func recordReviewDecision(
 
 	// review.require-signed: the approval is signed whatever commit.gpgsign
 	// says, and the command fails when it cannot be.
-	sign := status == store.ReviewStatusApproved && deps.cfg.Review.RequireSigned
+	sign := status == reviewpkg.StatusApproved && deps.cfg.Review.RequireSigned
 	if err := reviewpkg.Append(ctx, deps.client, issueSlug, op, sign); err != nil {
 		return reviewDecision{}, fmt.Errorf("write review ref: %w", err)
 	}
 
 	if err := reviewpkg.Push(ctx, deps.client, issueSlug); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: push review ref: %v\n", err)
-	}
-
-	if err := deps.store.UpdateReviewStatus(ctx, latest.ID, status, d.hasCommits); err != nil {
-		return reviewDecision{}, fmt.Errorf("update review status: %w", err)
 	}
 
 	return d, nil

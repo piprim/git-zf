@@ -88,7 +88,7 @@ func TestPendingReviewCommits(t *testing.T) {
 	t.Run("trips on changes_requested with unincorporated commits", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")
 		if err != nil {
 			t.Fatalf("err: %v", err)
@@ -101,7 +101,7 @@ func TestPendingReviewCommits(t *testing.T) {
 	t.Run("trips on approved", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusApproved))
+		rig.writeReviewRef(t, reviewpkg.StatusApproved)
 		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")
 		if err != nil || p == nil {
 			t.Fatalf("want pending, got %+v err %v", p, err)
@@ -111,7 +111,7 @@ func TestPendingReviewCommits(t *testing.T) {
 	t.Run("silent during in_review", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusInReview))
+		rig.writeReviewRef(t, reviewpkg.StatusInReview)
 		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")
 		if err != nil || p != nil {
 			t.Fatalf("want nil pending, got %+v err %v", p, err)
@@ -130,7 +130,7 @@ func TestPendingReviewCommits(t *testing.T) {
 	t.Run("silent on a closed review", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusApproved))
+		rig.writeReviewRef(t, reviewpkg.StatusApproved)
 		if err := reviewpkg.Append(t.Context(), rig.client, "42", &reviewpkg.Op{Type: reviewpkg.OpClose}, false); err != nil {
 			t.Fatalf("append close: %v", err)
 		}
@@ -143,7 +143,7 @@ func TestPendingReviewCommits(t *testing.T) {
 	t.Run("silent when commits are contained", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		rig.run("merge", "--no-edit", "42@review")
 		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")
 		if err != nil || p != nil {
@@ -153,7 +153,7 @@ func TestPendingReviewCommits(t *testing.T) {
 
 	t.Run("silent when no review branch exists anywhere", func(t *testing.T) {
 		rig := newGuardRig(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")
 		if err != nil || p != nil {
 			t.Fatalf("want nil pending, got %+v err %v", p, err)
@@ -168,7 +168,7 @@ func TestPendingReviewCommits(t *testing.T) {
 		// hand with update-ref, exactly the state a past `git fetch` leaves.
 		// The remote is added before the seed: the client caches Remote().
 		rig.run("remote", "add", "origin", rig.dir)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		rig.run("checkout", "42@review")
 		if err := os.WriteFile(filepath.Join(rig.dir, "review-fix-2.txt"), []byte("fix2\n"), 0o644); err != nil {
 			t.Fatal(err)
@@ -194,7 +194,7 @@ func TestPendingReviewCommits(t *testing.T) {
 		// Remote-tracking ref exists but points one commit behind the local
 		// branch — the reviewer's own machine before pushing.
 		rig.run("remote", "add", "origin", rig.dir)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		rig.run("update-ref", "refs/remotes/origin/42@review", "42@review~1")
 
 		p, err := PendingReviewCommits(t.Context(), rig.client, "42", "42@feat@title")
@@ -211,7 +211,7 @@ func TestPendingReviewForHEAD(t *testing.T) {
 	t.Run("pending on the checked-out tracked branch", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		p, branch, err := PendingReviewForHEAD(t.Context(), rig.client, rig.store)
 		if err != nil || p == nil || branch != "42@feat@title" {
 			t.Fatalf("want pending on 42@feat@title, got %+v %q err %v", p, branch, err)
@@ -221,7 +221,7 @@ func TestPendingReviewForHEAD(t *testing.T) {
 	t.Run("exempt on @review branch", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		rig.run("checkout", "42@review")
 		p, _, err := PendingReviewForHEAD(t.Context(), rig.client, rig.store)
 		if err != nil || p != nil {
@@ -232,7 +232,7 @@ func TestPendingReviewForHEAD(t *testing.T) {
 	t.Run("exempt while a merge is in progress", func(t *testing.T) {
 		rig := newGuardRig(t)
 		rig.addReviewBranchWithCommit(t)
-		rig.writeReviewRef(t, string(store.ReviewStatusChangesRequested))
+		rig.writeReviewRef(t, reviewpkg.StatusChangesRequested)
 		// Force a conflicted merge so MERGE_HEAD exists.
 		if err := os.WriteFile(filepath.Join(rig.dir, "review-fix.txt"), []byte("mine\n"), 0o644); err != nil {
 			t.Fatal(err)

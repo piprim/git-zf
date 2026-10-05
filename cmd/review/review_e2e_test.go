@@ -137,19 +137,17 @@ func TestReviewLifecycle_RequestApprove(t *testing.T) {
 			t.Fatalf("runReviewRequestInteractive: %v", err)
 		}
 
-		latest, err := rig.store.GetLatestReview(ctx, "77")
+		latest, err := reviewpkg.Load(ctx, rig.client, "77")
 		if err != nil {
-			t.Fatalf("GetLatestReview: %v", err)
+			t.Fatalf("Load: %v", err)
+		}
+		if latest == nil {
+			t.Fatal("expected a review chain, got none")
 		}
 
-		t.Run("review record exists", func(t *testing.T) {
-			if latest == nil {
-				t.Fatal("expected review row, got nil")
-			}
-		})
 		t.Run("status is in_review", func(t *testing.T) {
-			if latest.Status != store.ReviewStatusInReview {
-				t.Errorf("status: got %q, want %q", latest.Status, store.ReviewStatusInReview)
+			if latest.Status != reviewpkg.StatusInReview {
+				t.Errorf("status: got %q, want %q", latest.Status, reviewpkg.StatusInReview)
 			}
 		})
 		t.Run("round is 1", func(t *testing.T) {
@@ -160,23 +158,18 @@ func TestReviewLifecycle_RequestApprove(t *testing.T) {
 	})
 
 	t.Run("review approve transitions to approved", func(t *testing.T) {
-		latest, err := rig.store.GetLatestReview(ctx, "77")
-		if err != nil || latest == nil {
-			t.Fatalf("GetLatestReview: %v (row=%v)", err, latest)
+		if err := runReviewApprove(ctx, rig.deps(), "77"); err != nil {
+			t.Fatalf("runReviewApprove: %v", err)
 		}
 
-		if err := rig.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatusApproved, false); err != nil {
-			t.Fatalf("UpdateReviewStatus: %v", err)
-		}
-
-		updated, err := rig.store.GetLatestReview(ctx, "77")
-		if err != nil {
-			t.Fatalf("GetLatestReview after approve: %v", err)
+		updated, err := reviewpkg.Load(ctx, rig.client, "77")
+		if err != nil || updated == nil {
+			t.Fatalf("Load after approve: %v (state=%v)", err, updated)
 		}
 
 		t.Run("status is approved", func(t *testing.T) {
-			if updated.Status != store.ReviewStatusApproved {
-				t.Errorf("status: got %q, want %q", updated.Status, store.ReviewStatusApproved)
+			if updated.Status != reviewpkg.StatusApproved {
+				t.Errorf("status: got %q, want %q", updated.Status, reviewpkg.StatusApproved)
 			}
 		})
 	})
@@ -228,16 +221,6 @@ func TestReviewLifecycle_RequestReject(t *testing.T) {
 			t.Fatalf("runReviewRequestInteractive round 1: %v", err)
 		}
 
-		latest, _ := rig.store.GetLatestReview(ctx, "77")
-		if latest == nil {
-			t.Fatal("review row not found after request")
-		}
-
-		if err := rig.store.UpdateReviewStatus(ctx, latest.ID, store.ReviewStatusChangesRequested, false); err != nil {
-			t.Fatalf("UpdateReviewStatus to changes_requested: %v", err)
-		}
-		// Also reject on the chain — the guard in runReviewRequest reads the
-		// chain (not the store) to avoid stale-cache false positives.
 		if err := reviewpkg.Append(ctx, rig.client, "77", &reviewpkg.Op{Type: reviewpkg.OpReject}, false); err != nil {
 			t.Fatalf("append reject: %v", err)
 		}
@@ -256,9 +239,9 @@ func TestReviewLifecycle_RequestReject(t *testing.T) {
 			t.Fatalf("runReviewRequestInteractive round 2: %v", err)
 		}
 
-		latest, err := rig.store.GetLatestReview(ctx, "77")
-		if err != nil {
-			t.Fatalf("GetLatestReview: %v", err)
+		latest, err := reviewpkg.Load(ctx, rig.client, "77")
+		if err != nil || latest == nil {
+			t.Fatalf("Load: %v (state=%v)", err, latest)
 		}
 
 		t.Run("round is 2", func(t *testing.T) {
@@ -268,19 +251,25 @@ func TestReviewLifecycle_RequestReject(t *testing.T) {
 		})
 	})
 
-	t.Run("ListReviews returns full history ordered newest first", func(t *testing.T) {
-		rows, err := rig.store.ListReviews(ctx, "77")
-		if err != nil {
-			t.Fatalf("ListReviews: %v", err)
+	t.Run("the chain keeps the full history, oldest round first", func(t *testing.T) {
+		st, err := reviewpkg.Load(ctx, rig.client, "77")
+		if err != nil || st == nil {
+			t.Fatalf("Load: %v (state=%v)", err, st)
 		}
+		rows := st.Rounds
 		t.Run("two rounds recorded", func(t *testing.T) {
 			if len(rows) != 2 {
-				t.Errorf("len: got %d, want 2", len(rows))
+				t.Fatalf("len: got %d, want 2", len(rows))
 			}
 		})
-		t.Run("newest round first", func(t *testing.T) {
-			if len(rows) > 0 && rows[0].Round != 2 {
-				t.Errorf("rows[0].Round = %d, want 2", rows[0].Round)
+		t.Run("round 1 was rejected", func(t *testing.T) {
+			if rows[0].Round != 1 || rows[0].Status != reviewpkg.StatusChangesRequested {
+				t.Errorf("rows[0] = %+v", rows[0])
+			}
+		})
+		t.Run("round 2 is in review", func(t *testing.T) {
+			if rows[1].Round != 2 || rows[1].Status != reviewpkg.StatusInReview {
+				t.Errorf("rows[1] = %+v", rows[1])
 			}
 		})
 	})
@@ -455,11 +444,6 @@ func TestReviewRefPush_ReachesRemote(t *testing.T) {
 	})
 
 	t.Run("review approve pushes approved ref to remote", func(t *testing.T) {
-		latest, err := rig.store.GetLatestReview(ctx, "77")
-		if err != nil || latest == nil {
-			t.Fatalf("GetLatestReview: %v (row=%v)", err, latest)
-		}
-
 		p := &scriptedReviewPrompter{Branch: &store.BranchRow{IssueSlug: "77", BranchName: "77@feat@my-feature"}}
 		if err := runReviewApproveInteractive(ctx, rig.deps(), p); err != nil {
 			t.Fatalf("runReviewApproveInteractive: %v", err)
@@ -655,14 +639,10 @@ func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 
 	// ── Developer: simulate reject + new commit + round 2 request ────────────
 	// Simulate reject: append a reject op to the chain and push it.
-	round1Latest, _ := devRig.store.GetLatestReview(ctx, "77")
-	if round1Latest != nil {
-		_ = devRig.store.UpdateReviewStatus(ctx, round1Latest.ID, store.ReviewStatusChangesRequested, false)
-		if err := reviewpkg.Append(ctx, devRig.client, "77", &reviewpkg.Op{Type: reviewpkg.OpReject}, false); err != nil {
-			t.Fatalf("append reject: %v", err)
-		}
-		_ = reviewpkg.Push(ctx, devRig.client, "77")
+	if err := reviewpkg.Append(ctx, devRig.client, "77", &reviewpkg.Op{Type: reviewpkg.OpReject}, false); err != nil {
+		t.Fatalf("append reject: %v", err)
 	}
+	_ = reviewpkg.Push(ctx, devRig.client, "77")
 
 	// Developer adds a new commit (the round-2 fix) and pushes it.
 	if err := os.WriteFile(filepath.Join(devRig.dir, "fix.txt"), []byte("round 2 fix\n"), 0o644); err != nil {
@@ -810,13 +790,12 @@ func TestReviewApproveReject_WorkOnEmptyReviewerStore(t *testing.T) {
 		if err := runReviewRejectInteractive(ctx, reviewerDeps, rejectPrompter, "", true); err != nil {
 			t.Fatalf("runReviewRejectInteractive on empty store: %v", err)
 		}
-		// Verify the store now has a record (auto-registered then resolved).
-		latest, storeErr := reviewerStore.GetLatestReview(ctx, "77")
-		if storeErr != nil {
-			t.Fatalf("GetLatestReview after reject: %v", storeErr)
+		latest, loadErr := reviewpkg.Load(ctx, reviewerClient, "77")
+		if loadErr != nil || latest == nil {
+			t.Fatalf("Load after reject: %v (state=%v)", loadErr, latest)
 		}
-		if latest == nil {
-			t.Error("expected review record after reject, got nil")
+		if latest.Status != reviewpkg.StatusChangesRequested {
+			t.Errorf("status after reject = %q", latest.Status)
 		}
 	})
 }
@@ -1091,20 +1070,23 @@ func TestTrack_Reviewer_RegistersReviewBranch(t *testing.T) {
 		}
 	})
 
-	t.Run("review record exists in store", func(t *testing.T) {
-		latest, getErr := rig.store.GetLatestReview(ctx, "77")
-		if getErr != nil {
-			t.Fatalf("GetLatestReview: %v", getErr)
+	t.Run("reviewer identity recorded on the chain", func(t *testing.T) {
+		latest, loadErr := reviewpkg.Load(ctx, rig.client, "77")
+		if loadErr != nil || latest == nil {
+			t.Fatalf("Load: %v (state=%v)", loadErr, latest)
 		}
-		if latest == nil {
-			t.Fatal("expected review row, got nil")
+		if !strings.Contains(latest.Reviewer, "Test User") {
+			t.Errorf("Reviewer = %q, want the clone's user", latest.Reviewer)
 		}
 	})
 
-	t.Run("reviewer identity recorded", func(t *testing.T) {
-		latest, _ := rig.store.GetLatestReview(ctx, "77")
-		if latest != nil && latest.Reviewer == "" {
-			t.Error("reviewer identity not recorded")
+	t.Run("tracking again is a no-op that still succeeds", func(t *testing.T) {
+		if err := runTrack(ctx, rig.deps()); err != nil {
+			t.Fatalf("second runTrack: %v", err)
+		}
+		st, _ := reviewpkg.Load(ctx, rig.client, "77")
+		if st == nil || !strings.Contains(st.Reviewer, "Test User") {
+			t.Errorf("state after second track = %+v", st)
 		}
 	})
 

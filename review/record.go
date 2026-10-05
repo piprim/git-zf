@@ -23,7 +23,7 @@ const (
 	OpMerge   = "merge"
 )
 
-// Review statuses. The values are the ones stored in the reviews table.
+// Review statuses.
 const (
 	StatusInReview         = "in_review"
 	StatusApproved         = "approved"
@@ -71,6 +71,16 @@ type Approval struct {
 	HasCommits  bool
 }
 
+// RoundState is one round of a review: from its request to the decision.
+type RoundState struct {
+	Round      int
+	Status     string
+	Reviewer   string
+	HasCommits bool
+	OpenedAt   time.Time // at of the request op
+	ResolvedAt time.Time // at of the last approve or reject op; zero while in review
+}
+
 // State is the current state of a review: the fold of its op chain.
 type State struct {
 	Slug       string
@@ -78,9 +88,10 @@ type State struct {
 	Round      int
 	FeatureSHA string
 	Reviewer   string
-	Comment    string     // reject comments of the round, joined by a blank line
-	HasCommits bool       // OR over the round's approve and reject ops
-	Approvals  []Approval // approvals of the current round
+	Comment    string       // reject comments of the round, joined by a blank line
+	HasCommits bool         // OR over the round's approve and reject ops
+	Approvals  []Approval   // approvals of the current round
+	Rounds     []RoundState // every round, oldest first; the last one is the current round
 	Closed     bool
 	UpdatedAt  time.Time // at of the last applied op
 
@@ -98,8 +109,22 @@ func Fold(slug string, ops []Op) State {
 		return chain.Node{ID: op.ID, Parents: op.Parents, At: op.At}
 	})
 	for i := range ordered {
-		if apply(&st, &ordered[i]) {
-			st.UpdatedAt = chain.ParseAt(ordered[i].At)
+		op := &ordered[i]
+		if !apply(&st, op) {
+			continue
+		}
+		st.UpdatedAt = chain.ParseAt(op.At)
+
+		if op.Type == OpRequest {
+			st.Rounds = append(st.Rounds, RoundState{Round: st.Round, OpenedAt: st.UpdatedAt})
+		}
+		if len(st.Rounds) == 0 {
+			continue // a close before any request
+		}
+		r := &st.Rounds[len(st.Rounds)-1]
+		r.Status, r.Reviewer, r.HasCommits = st.Status, st.Reviewer, st.HasCommits
+		if op.Type == OpApprove || op.Type == OpReject {
+			r.ResolvedAt = st.UpdatedAt
 		}
 	}
 
