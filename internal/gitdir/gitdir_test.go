@@ -27,76 +27,8 @@ func initGitRepo(t *testing.T, dir string) {
 	}
 }
 
-func TestGet_insideGitRepo(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-	t.Chdir(dir)
-
-	got, err := gitdir.Get()
-	if err != nil {
-		t.Fatalf("Get() error = %v, want nil", err)
-	}
-
-	t.Run("returns an absolute path", func(t *testing.T) {
-		if !filepath.IsAbs(got) {
-			t.Errorf("Get() = %q, want absolute path", got)
-		}
-	})
-
-	t.Run("path ends with .git", func(t *testing.T) {
-		if filepath.Base(got) != ".git" {
-			t.Errorf("Get() = %q, want path ending in .git", got)
-		}
-	})
-
-	t.Run("path is under the repo root", func(t *testing.T) {
-		if !strings.HasPrefix(got, dir) {
-			t.Errorf("Get() = %q, want path under %q", got, dir)
-		}
-	})
-}
-
-func TestGet_outsideGitRepo(t *testing.T) {
-	t.Chdir(t.TempDir()) // plain directory, no git repo
-
-	_, err := gitdir.Get()
-	if err == nil {
-		t.Fatal("Get() error = nil, want non-nil outside a git repo")
-	}
-}
-
-func TestGet_linkedWorktree(t *testing.T) {
-	mainDir := t.TempDir()
-	initGitRepo(t, mainDir)
-
-	worktreeDir := t.TempDir()
-
-	// Add a linked worktree on a new branch.
-	cmd := exec.Command("git", "worktree", "add", "--orphan", "-b", "wt-branch", worktreeDir)
-	cmd.Dir = mainDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("git worktree add failed (may need git >= 2.15): %v\n%s", err, out)
-	}
-
-	t.Chdir(worktreeDir)
-
-	got, err := gitdir.Get()
-	if err != nil {
-		t.Fatalf("Get() inside linked worktree error = %v, want nil", err)
-	}
-
-	if !filepath.IsAbs(got) {
-		t.Errorf("Get() = %q, want absolute path", got)
-	}
-
-	// A linked worktree's git dir lives under the main repo's .git/worktrees/.
-	if !strings.Contains(got, ".git") {
-		t.Errorf("Get() = %q, want path containing .git", got)
-	}
-}
-
 func TestCommon(t *testing.T) {
-	t.Run("main tree: equals Get", func(t *testing.T) {
+	t.Run("main tree: returns the repository's .git", func(t *testing.T) {
 		mainDir := t.TempDir()
 		initGitRepo(t, mainDir)
 		t.Chdir(mainDir)
@@ -105,12 +37,21 @@ func TestCommon(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Common() error = %v", err)
 		}
-		want, err := gitdir.Get()
-		if err != nil {
-			t.Fatalf("Get() error = %v", err)
+		if !filepath.IsAbs(got) {
+			t.Errorf("Common() = %q, want absolute path", got)
 		}
-		if got != want {
-			t.Errorf("Common() = %q, want Get() = %q", got, want)
+		gotReal, _ := filepath.EvalSymlinks(got)
+		wantReal, _ := filepath.EvalSymlinks(filepath.Join(mainDir, ".git"))
+		if gotReal != wantReal {
+			t.Errorf("Common() = %q, want %q", gotReal, wantReal)
+		}
+	})
+
+	t.Run("outside a repository: returns an error", func(t *testing.T) {
+		t.Chdir(t.TempDir()) // plain directory, no git repo
+
+		if _, err := gitdir.Common(); err == nil {
+			t.Fatal("Common() error = nil, want non-nil outside a git repo")
 		}
 	})
 

@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// prePushHookScript is the shell script written to .git/hooks/pre-push.
+// prePushHookScript is the shell script written as the pre-push hook.
 // It calls `git zf review guard` for each pushed branch so that pushes to
 // branches locked for code review are blocked at the client side.
 //
@@ -30,7 +30,7 @@ done
 exit 0
 `
 
-// preCommitHookScript is the shell script written to .git/hooks/pre-commit.
+// preCommitHookScript is the shell script written as the pre-commit hook.
 // It calls `git zf review guard-commit`, which blocks new commits on a feature
 // branch while reviewer commits on <slug>@review await incorporation.
 const preCommitHookScript = `#!/bin/sh
@@ -44,7 +44,7 @@ exit 0
 
 // hookSpec describes one hook managed by `git zf init`.
 type hookSpec struct {
-	name    string // file name under .git/hooks/
+	name    string // file name in the hooks directory
 	script  string // full managed script body
 	snippet string // line to suggest when a foreign hook already exists
 }
@@ -80,8 +80,10 @@ branches that are locked for code review. The pre-commit hook calls 'git zf revi
 guard-commit', which blocks new commits on a feature branch while reviewer commits
 await incorporation.
 
-Works correctly in git submodules: the hooks are written to the submodule's own
-git directory (resolved via 'git rev-parse --git-dir'), not the parent repo.
+The hooks are written where git reads them (resolved via 'git rev-parse
+--git-path hooks'): the directory named by core.hooksPath when it is set,
+otherwise the hooks directory shared by every worktree. In a git submodule that
+is the submodule's own git directory, not the parent repo's.
 
 It also adds two fetch refspecs to every remote, so that a plain 'git fetch'
 brings the reviews and issues stored under refs/zf/ and 'git fetch --prune'
@@ -103,16 +105,18 @@ func (i Init) runE(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	// GitDir resolves the real git directory via 'git rev-parse --git-dir',
-	// which handles submodules (where <worktree>/.git is a gitlink file, not
-	// a directory) and linked worktrees transparently.
-	gitDir, err := client.GitDir()
+	// HooksDir is where git reads hooks from: core.hooksPath when set,
+	// otherwise the hooks directory of the common git dir. The per-worktree
+	// git dir of a linked worktree (--git-dir) is never searched, and in a
+	// submodule (where <worktree>/.git is a gitlink file, not a directory) it
+	// is the submodule's own git directory.
+	hooksDir, err := client.HooksDir()
 	if err != nil {
-		return fmt.Errorf("resolve git dir: %w", err)
+		return fmt.Errorf("resolve hooks dir: %w", err)
 	}
 
 	for _, h := range managedHooks {
-		if err := installHook(cmd, gitDir, h); err != nil {
+		if err := installHook(cmd, hooksDir, h); err != nil {
 			return err
 		}
 	}
@@ -143,8 +147,8 @@ func (i Init) runE(cmd *cobra.Command, _ []string) error {
 // installHook writes one managed hook, preserving foreign hooks. Mirrors the
 // original single-hook logic: byte-identical → up-to-date no-op; foreign hook
 // → never overwrite, print the snippet to add manually; missing → write.
-func installHook(cmd *cobra.Command, gitDir string, h hookSpec) error {
-	hookPath := filepath.Join(gitDir, "hooks", h.name)
+func installHook(cmd *cobra.Command, hooksDir string, h hookSpec) error {
+	hookPath := filepath.Join(hooksDir, h.name)
 
 	if info, err := os.Stat(hookPath); err == nil {
 		existing, readErr := os.ReadFile(hookPath) //nolint:gosec

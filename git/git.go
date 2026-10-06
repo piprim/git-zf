@@ -166,12 +166,20 @@ func (c *Client) GitDir() (string, error) {
 	return c.revParsePath("--git-dir")
 }
 
-// revParsePath resolves `git rev-parse <flag>` (--git-dir, --git-common-dir)
-// to an absolute path.
-func (c *Client) revParsePath(flag string) (string, error) {
-	dir, err := c.output(context.Background(), "rev-parse", flag)
+// HooksDir returns the absolute path of the directory git reads hooks from:
+// core.hooksPath when it is set (a relative value is taken from the working
+// tree root), otherwise the hooks directory of the common git dir, which every
+// worktree shares. Resolved with `git rev-parse --git-path hooks`.
+func (c *Client) HooksDir() (string, error) {
+	return c.revParsePath("--git-path", "hooks")
+}
+
+// revParsePath resolves `git rev-parse <args>` (--git-dir, --git-common-dir,
+// --git-path <path>) to an absolute path.
+func (c *Client) revParsePath(args ...string) (string, error) {
+	dir, err := c.output(context.Background(), append([]string{"rev-parse"}, args...)...)
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse %s: %w", flag, err)
+		return "", fmt.Errorf("git rev-parse %s: %w", strings.Join(args, " "), err)
 	}
 
 	if !filepath.IsAbs(dir) {

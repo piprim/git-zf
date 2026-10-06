@@ -28,6 +28,10 @@ func newInitRepo(t *testing.T) string {
 
 func runInit(t *testing.T, dir string) string {
 	t.Helper()
+	// init writes where git reads hooks: keep a core.hooksPath of the
+	// developer's own configuration out of the tests.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Chdir(dir)
 	cmd := New().GetRootCmd()
 	out := &bytes.Buffer{}
@@ -222,4 +226,92 @@ func TestInit_MentionsTheUnusedDatabase(t *testing.T) {
 			t.Errorf("unexpected notice:\n%s", out)
 		}
 	})
+}
+
+func TestInit_LinkedWorktree_InstallsHooksInCommonDir(t *testing.T) {
+	dir := newInitRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitOut(t, dir, "commit", "-q", "--allow-empty", "-m", "root")
+	gitOut(t, dir, "worktree", "add", "-q", "-b", "feature", wt)
+
+	out := runInit(t, wt)
+
+	for _, name := range []string{"pre-push", "pre-commit"} {
+		t.Run(name+" written where git reads hooks", func(t *testing.T) {
+			if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", name)); err != nil {
+				t.Fatalf("%s missing from the common git dir: %v\n%s", name, err, out)
+			}
+		})
+		t.Run(name+" not written under the per-worktree git dir", func(t *testing.T) {
+			stray := filepath.Join(dir, ".git", "worktrees", "wt", "hooks", name)
+			if _, err := os.Stat(stray); err == nil {
+				t.Fatalf("%s written to %s, which git never reads", name, stray)
+			}
+		})
+	}
+	t.Run("pre-commit sits in the hooks path git resolves for the worktree", func(t *testing.T) {
+		hooksDir := gitOut(t, wt, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
+		if _, err := os.Stat(filepath.Join(hooksDir, "pre-commit")); err != nil {
+			t.Fatalf("pre-commit not in git's hooks path %s: %v", hooksDir, err)
+		}
+	})
+}
+
+func TestInit_HooksPath(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "shared-hooks")
+
+	cases := []struct {
+		name      string
+		hooksPath string
+		worktree  bool // run init from a linked worktree
+		wantDir   func(repo, wt string) string
+	}{
+		{
+			name:      "relative path: under the working tree root",
+			hooksPath: ".githooks",
+			wantDir:   func(repo, _ string) string { return filepath.Join(repo, ".githooks") },
+		},
+		{
+			name:      "absolute path: outside the repository",
+			hooksPath: outside,
+			wantDir:   func(_, _ string) string { return outside },
+		},
+		{
+			name:      "relative path in a linked worktree: under that worktree's root",
+			hooksPath: ".githooks",
+			worktree:  true,
+			wantDir:   func(_, wt string) string { return filepath.Join(wt, ".githooks") },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newInitRepo(t)
+			wt := filepath.Join(t.TempDir(), "wt")
+			gitOut(t, repo, "config", "core.hooksPath", tc.hooksPath)
+
+			from := repo
+			if tc.worktree {
+				gitOut(t, repo, "commit", "-q", "--allow-empty", "-m", "root")
+				gitOut(t, repo, "worktree", "add", "-q", "-b", "feature", wt)
+				from = wt
+			}
+
+			out := runInit(t, from)
+
+			for _, name := range []string{"pre-push", "pre-commit"} {
+				t.Run(name+" written in core.hooksPath", func(t *testing.T) {
+					if _, err := os.Stat(filepath.Join(tc.wantDir(repo, wt), name)); err != nil {
+						t.Fatalf("%s missing from core.hooksPath: %v\n%s", name, err, out)
+					}
+				})
+				t.Run(name+" not written in .git/hooks, which git no longer reads", func(t *testing.T) {
+					stray := filepath.Join(repo, ".git", "hooks", name)
+					if _, err := os.Stat(stray); err == nil {
+						t.Fatalf("%s written to %s", name, stray)
+					}
+				})
+			}
+		})
+	}
 }

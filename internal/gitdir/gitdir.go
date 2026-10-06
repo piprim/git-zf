@@ -8,19 +8,11 @@ import (
 	"strings"
 )
 
-// Get returns the path to the .git directory for the current working tree.
-// It resolves gitfiles, submodules, and linked worktrees via git rev-parse,
-// without importing go-git. Inside a linked worktree this is the per-worktree
-// dir (.git/worktrees/<name>), which is where MERGE_HEAD and friends live.
-func Get() (string, error) {
-	return revParse("--git-dir")
-}
-
 // Common returns the path to the common .git directory shared by every
-// worktree of the repository. In the main working tree it equals Get; inside
-// a linked worktree Get returns .git/worktrees/<name> while Common returns the
-// main .git. Files that must be shared across worktrees (the git-zf store)
-// belong here.
+// worktree of the repository, resolving gitfiles and submodules via git
+// rev-parse, without importing go-git. Inside a linked worktree this is the
+// main .git, not the per-worktree dir (.git/worktrees/<name>): files that must
+// be shared across worktrees (the repo-level config) belong here.
 func Common() (string, error) {
 	return revParse("--git-common-dir")
 }

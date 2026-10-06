@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -334,6 +335,56 @@ func TestLoadReviewRequireSigned(t *testing.T) {
 		}
 		if !cfg.Review.RequireSigned {
 			t.Fatalf("Review.RequireSigned = false, want true (override)")
+		}
+	})
+}
+
+func TestRepoPath(t *testing.T) {
+	git := func(t *testing.T, dir string, args ...string) {
+		t.Helper()
+
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	mainDir := t.TempDir()
+	git(t, mainDir, "init", "-q", "-b", "main")
+	git(t, mainDir, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root")
+	worktreeDir := filepath.Join(t.TempDir(), "wt")
+	git(t, mainDir, "worktree", "add", "-q", "-b", "feature", worktreeDir)
+
+	want, err := filepath.EvalSymlinks(filepath.Join(mainDir, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = filepath.Join(want, ".git-zf.toml")
+
+	for name, dir := range map[string]string{
+		"main tree: the file in .git":                           mainDir,
+		"linked worktree: the same file, in the common git dir": worktreeDir,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(dir)
+
+			got := config.RepoPath()
+			if real, err := filepath.EvalSymlinks(filepath.Dir(got)); err == nil {
+				got = filepath.Join(real, filepath.Base(got))
+			}
+			if got != want {
+				t.Errorf("RepoPath() = %q, want %q", got, want)
+			}
+		})
+	}
+
+	t.Run("outside a repository: empty", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
+
+		if got := config.RepoPath(); got != "" {
+			t.Errorf("RepoPath() = %q, want empty", got)
 		}
 	})
 }

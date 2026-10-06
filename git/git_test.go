@@ -1157,6 +1157,67 @@ func TestGitDir(t *testing.T) {
 	})
 }
 
+func TestHooksDir(t *testing.T) {
+	resolved := func(t *testing.T, path string) string {
+		t.Helper()
+
+		// The hooks directory may not exist yet: resolve its parent.
+		parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+		if err != nil {
+			t.Fatalf("resolve %s: %v", path, err)
+		}
+
+		return filepath.Join(parent, filepath.Base(path))
+	}
+
+	t.Run("regular repo returns <root>/.git/hooks", func(t *testing.T) {
+		c, dir := newTestClient(t)
+
+		got, err := c.HooksDir()
+		if err != nil {
+			t.Fatalf("HooksDir: %v", err)
+		}
+		if want := filepath.Join(dir, ".git", "hooks"); resolved(t, got) != resolved(t, want) {
+			t.Fatalf("HooksDir = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("submodule returns parent <root>/.git/modules/<name>/hooks", func(t *testing.T) {
+		_, parentDir := newTestClient(t)
+		_, remoteDir := newTestClient(t)
+
+		// Recent git refuses to add a local-path submodule without this.
+		runGitInDir(t, parentDir, "-c", "protocol.file.allow=always",
+			"submodule", "add", remoteDir, "sub")
+
+		c, err := NewClientAt(nil, filepath.Join(parentDir, "sub"))
+		if err != nil {
+			t.Fatalf("NewClientAt(sub): %v", err)
+		}
+
+		got, err := c.HooksDir()
+		if err != nil {
+			t.Fatalf("HooksDir: %v", err)
+		}
+		if want := filepath.Join(parentDir, ".git", "modules", "sub", "hooks"); resolved(t, got) != resolved(t, want) {
+			t.Fatalf("HooksDir = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("core.hooksPath relative to the working tree root", func(t *testing.T) {
+		c, dir := newTestClient(t)
+		runGitInDir(t, dir, "config", "core.hooksPath", ".githooks")
+
+		got, err := c.HooksDir()
+		if err != nil {
+			t.Fatalf("HooksDir: %v", err)
+		}
+		if want := filepath.Join(dir, ".githooks"); resolved(t, got) != resolved(t, want) {
+			t.Fatalf("HooksDir = %q, want %q", got, want)
+		}
+	})
+}
+
 func TestAuthors(t *testing.T) {
 	t.Parallel()
 

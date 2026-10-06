@@ -147,11 +147,12 @@ func HomePath() (string, error) {
 	return filepath.Join(home, configFileName), nil
 }
 
-// RepoPath returns the configuration file path in the repository's git
-// directory (gitfiles, submodules and linked worktrees resolved via git
-// rev-parse), or "" when not inside a git repository.
+// RepoPath returns the configuration file path in the repository's common git
+// directory (gitfiles and submodules resolved via git rev-parse), or "" when
+// not inside a git repository. Every linked worktree shares the one file of
+// the main checkout.
 func RepoPath() string {
-	d, err := gitdir.Get()
+	d, err := gitdir.Common()
 	if err != nil {
 		return ""
 	}
