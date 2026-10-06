@@ -56,6 +56,20 @@ func IssueNewForm(title, branchType, description, labels *string, allowedBranchT
 	)
 }
 
+// IssueEditForm is the form of `issue edit`: title and description come
+// prefilled with the issue's current values.
+func IssueEditForm(title, description *string) *huh.Group {
+	return huh.NewGroup(
+		huh.NewInput().
+			Title("Title:").
+			Validate(requiredText).
+			Value(title),
+		huh.NewText().
+			Title("Description:").
+			Value(description),
+	)
+}
+
 // IssueRecordPicker lists repo issues as "[short-id] title". picked receives
 // the full ID of the chosen record. With offerNew, a first "New issue…" entry
 // stores IssueRecordNew instead.

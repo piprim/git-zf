@@ -93,12 +93,12 @@ levels, all on real on-disk repos:
 - `issue/repo_test.go` — the glue (`Create`, `Append`, `Load`, `Resolve`,
   `Sync`), including two clones diverging and merging.
 - `cmd/issue/record_e2e_test.go`, `record_ops_e2e_test.go` — the `new`, `show`,
-  `comment`, `label` and `sync` commands, driven by a `scriptedRecordPrompter`
-  on a `recordRig` (`newRecordRig(t, user, origin)`; pass `newBareOrigin(t)` to
-  two rigs to get two clones of one remote).
+  `edit`, `comment`, `label`, `sync` and `close <id>` commands, driven by a
+  `scriptedRecordPrompter` on a `recordRig` (`newRecordRig(t, user, origin)`;
+  pass `newBareOrigin(t)` to two rigs to get two clones of one remote).
 
     mise exec -- go test ./issue/... ./git/... -run "TestFold|TestIssueRef_|TestPushFetchSync" -v
-    mise exec -- go test ./cmd/issue/... -run "^TestRun(New|Show|Comment|Label|Sync)" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestRun(New|Show|Edit|Comment|Label|Sync|CloseByID)" -v
 
 The start, close and list integrations live next to their flows:
 `start_record_e2e_test.go`, `close_record_e2e_test.go`, `list_record_test.go`.

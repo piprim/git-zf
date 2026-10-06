@@ -126,10 +126,16 @@ var ErrApprovalNotSigned = errors.New("no verified approval covers the branch")
 
 func (i Issue) getCloseCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "close",
+		Use:   "close [<id>]",
 		Short: "Close an issue (merge branch, record it, update the tracker)",
 		Long: `Pick an in-progress branch, merge it into the base branch (rebase, squash, or classic),
-record the branch as merged, update the remote tracker, then optionally delete the local branch.`,
+record the branch as merged, update the remote tracker, then optionally delete the local branch.
+
+With <id>, close an issue stored in the repository without merging anything: for
+a duplicate or an issue that will not be worked on. <id> is the full ID or a
+unique prefix of at least 4 characters. It is refused while a branch of the
+issue is in progress, and it takes none of the flags below.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: i.closeRunE,
 	}
 
@@ -141,8 +147,12 @@ record the branch as merged, update the remote tracker, then optionally delete t
 	return cmd
 }
 
-func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
+func (i Issue) closeRunE(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
+
+	if len(args) > 0 {
+		return i.closeByIDRunE(cmd, args[0])
+	}
 
 	deps, err := buildCloseDeps(ctx, cmd, i.appConfig)
 	if err != nil {
@@ -155,6 +165,23 @@ func (i Issue) closeRunE(cmd *cobra.Command, _ []string) error {
 	deps.pushConfirm = pushflow.NewHuhConfirm()
 
 	return runClose(ctx, deps, newHuhPrompter(deps.client, i.appConfig))
+}
+
+// closeByIDRunE runs `issue close <id>`. The merge flags mean nothing there:
+// passing one is refused instead of being silently ignored.
+func (i Issue) closeByIDRunE(cmd *cobra.Command, id string) error {
+	for _, name := range []string{"base", "push", "no-push"} {
+		if cmd.Flags().Changed(name) {
+			return fmt.Errorf("--%s applies to a merge: it cannot be combined with an issue ID", name)
+		}
+	}
+
+	client, err := cmdutil.NewClientForCmd(cmd, i.appConfig)
+	if err != nil {
+		return fmt.Errorf("open repository: %w", err)
+	}
+
+	return runCloseByID(cmd.Context(), client, id)
 }
 
 // runClose runs the full merge → record → tracker → delete-branch pipeline

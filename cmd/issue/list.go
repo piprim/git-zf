@@ -140,7 +140,7 @@ func buildRows(ctx context.Context, infra issueListInfra, status string) ([]issu
 }
 
 // mergeRepoIssues enriches the branch rows with the issues stored in the
-// repository: a row whose issue has a record gets its labels and state, and
+// repository: a row whose issue has a record gets its title, labels and state, and
 // every record without a branch row is appended, so the backlog shows up
 // before anyone starts a branch. status filters the appended rows on the
 // issue state ("open" / "closed"; anything else keeps all).
@@ -168,6 +168,9 @@ func mergeRepoIssues(
 			continue
 		}
 		started[rec.ID] = true
+		// The record's title, not the one the branch chain froze at start: it
+		// follows `issue edit`.
+		out[i].Title = rec.Title
 		out[i].Labels, out[i].State, out[i].TrackerStatus = rec.Labels, rec.State, &rec.State
 	}
 

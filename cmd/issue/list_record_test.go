@@ -140,3 +140,33 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		}
 	})
 }
+
+// A started issue is listed with the title of its record, so an `issue edit`
+// shows up, and not with the title the branch chain recorded at start.
+func TestBuildRows_StartedIssueShowsEditedTitle(t *testing.T) {
+	t.Parallel()
+
+	rig := newRecordRig(t, "alice", "")
+	ctx := t.Context()
+
+	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Old title", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	branchtest.Seed(t, rig.client,
+		branch.Op{Branch: rec.ShortID() + "@feat@old-title", Title: "Old title", IssueID: rec.ID}, branch.StatusInProgress)
+	if err := issuepkg.Append(ctx, rig.client, rec.ID, &issuepkg.Op{Type: issuepkg.OpSetTitle, Value: "New title"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	rows, err := buildRows(ctx, issueListInfra{stderr: &bytes.Buffer{}, client: rig.client}, "")
+	if err != nil {
+		t.Fatalf("buildRows: %v", err)
+	}
+
+	t.Run("the row carries the edited title and still its branch", func(t *testing.T) {
+		if len(rows) != 1 || rows[0].Title != "New title" || rows[0].Branch == nil {
+			t.Errorf("rows = %+v", rows)
+		}
+	})
+}

@@ -14,12 +14,14 @@ const OpVersion = 1
 // Op types. Fold skips any type it does not know, so an older binary tolerates
 // ops written by a newer one.
 const (
-	OpCreate      = "create"
-	OpSetState    = "set_state"
-	OpAddLabel    = "add_label"
-	OpRemoveLabel = "remove_label"
-	OpAddComment  = "add_comment"
-	OpMerge       = "merge"
+	OpCreate         = "create"
+	OpSetTitle       = "set_title"
+	OpSetDescription = "set_description"
+	OpSetState       = "set_state"
+	OpAddLabel       = "add_label"
+	OpRemoveLabel    = "remove_label"
+	OpAddComment     = "add_comment"
+	OpMerge          = "merge"
 )
 
 // Issue states.
@@ -42,7 +44,7 @@ type Op struct {
 	Title       string `json:"title,omitempty"`       // create
 	Description string `json:"description,omitempty"` // create
 	BranchType  string `json:"branch_type,omitempty"` // create
-	Value       string `json:"value,omitempty"`       // set_state, add_label, remove_label
+	Value       string `json:"value,omitempty"`       // set_title, set_description, set_state, add_label, remove_label
 	Body        string `json:"body,omitempty"`        // add_comment
 
 	ID      string   `json:"-"`
@@ -117,6 +119,10 @@ func Fold(id string, ops []Op) Record {
 			if op.ID == id {
 				rec.CreatedAt = chain.ParseAt(op.At)
 			}
+		case OpSetTitle:
+			rec.Title = op.Value
+		case OpSetDescription:
+			rec.Description = op.Value
 		case OpSetState:
 			if op.Value == StateOpen || op.Value == StateClosed {
 				rec.State = op.Value

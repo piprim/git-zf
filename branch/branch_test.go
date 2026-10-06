@@ -69,11 +69,29 @@ func TestNew(t *testing.T) {
 		}
 	})
 
-	t.Run("all-punctuation title that produces empty slug returns error", func(t *testing.T) {
+	for _, title := range []string{"!!!", "日本語のタイトル"} {
+		t.Run("title "+title+" that produces an empty slug falls back to FallbackSlug", func(t *testing.T) {
+			t.Parallel()
+
+			b, err := New("ABC-42", "feat", title, "")
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if want := "ABC-42@feat@" + FallbackSlug; b.Name() != want {
+				t.Errorf("Name() = %q, want %q", b.Name(), want)
+			}
+		})
+	}
+
+	t.Run("a partly non-Latin title keeps its Latin words", func(t *testing.T) {
 		t.Parallel()
 
-		if _, err := New("ABC-42", "feat", "!!!", ""); err == nil {
-			t.Error("expected error for all-punctuation title, got nil")
+		b, err := New("ABC-42", "feat", "修复 login bug", "")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if got := b.Title(); got != "login-bug" {
+			t.Errorf("Title() = %q, want %q", got, "login-bug")
 		}
 	})
 

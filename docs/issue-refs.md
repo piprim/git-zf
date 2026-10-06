@@ -33,6 +33,8 @@ commit is signed when `commit.gpgsign` is true.
 | `type` | Fields | Effect |
 |---|---|---|
 | `create` | `title`, `description`, `branch_type` | First commit of the chain. |
+| `set_title` | `value` | Replaces the title. Written by `git zf issue edit`. |
+| `set_description` | `value` | Replaces the description; no `value` clears it. Written by `git zf issue edit`. |
 | `set_state` | `value`: `open` or `closed` | Opens or closes the issue. |
 | `add_label` | `value` | Adds a label. |
 | `remove_label` | `value` | Removes a label; nothing happens if it is absent. |
@@ -45,8 +47,8 @@ commit is signed when `commit.gpgsign` is true.
 
 The current state is the fold of all ops: a commit is applied after its
 parents; commits with no order between them (made on two clones before either
-synced) are applied by `at`, then by commit ID. The last `set_state` wins,
-labels form a set, comments accumulate. An op of an unknown type or version is
+synced) are applied by `at`, then by commit ID. The last `set_title`, `set_description` and
+`set_state` win, labels form a set, comments accumulate. An op of an unknown type or version is
 skipped, so an older git-zf reads refs written by a newer one.
 
 ## Sharing

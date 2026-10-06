@@ -587,3 +587,14 @@ Found while verifying, not raised by the review:
 - Imported issues had no way to get a branch type. `set_branch_type` added.
 - A deterministic commit also depends on the date's UTC offset and on
   `i18n.commitEncoding`; both are now pinned, with the committer date.
+
+
+2026-10-06, the open points of this spec, closed outside both plans:
+
+- `issue edit [<id>]` writes `set_title` and `set_description`, from a form or
+  from `--title` / `--description`. Their fold cases ship with it instead of
+  waiting for the bridge.
+- `issue close <id>` writes `set_state closed` without a merge. It refuses
+  while a branch of the issue is in progress.
+- A title that slugs to nothing names its branch with the constant slug
+  `issue` (`branch.FallbackSlug`); the start flow no longer refuses it.

@@ -1,11 +1,7 @@
 # Roadmap
 
-1. Drop the reviews table now. It is self-contained, the chain already has the data, and it removes the cache-drift class of bug we just fixed in review status.
-2. Then branch refs as chains, absorbing branches, issues and issue_relations, with command_history moved to a file in the same change.
-
 ## Enhancement
 
--  No command edits the title or description of a repo-only issue. An issue edit form would be one small extra task if you want it. + A close-by-ID command and a branch naming fallback (non-Latin title as a backlog item).
 - In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine' without a tracker.
 - `git zf init` installs hooks under the per-worktree git dir when run inside a linked worktree; git reads hooks from the common dir. Run `init` from the main checkout for now.
 - AI assistant. See https://github.com/rshdhere/vibecheck

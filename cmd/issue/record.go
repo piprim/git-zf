@@ -23,6 +23,8 @@ type recordPrompter interface {
 	NewIssue(ctx context.Context, allowedTypes []string, in *issuepkg.NewIssue) error
 	// PickRecord returns the full ID of the record the user picked.
 	PickRecord(ctx context.Context, records []issuepkg.Record) (string, error)
+	// EditIssue edits title and description in place; both come prefilled.
+	EditIssue(ctx context.Context, title, description *string) error
 	// CommentBody returns the comment text.
 	CommentBody(ctx context.Context) (string, error)
 	// LabelChanges returns "+add -remove" tokens on one line.
@@ -53,6 +55,14 @@ func (huhRecordPrompter) PickRecord(ctx context.Context, records []issuepkg.Reco
 	}
 
 	return id, nil
+}
+
+func (huhRecordPrompter) EditIssue(ctx context.Context, title, description *string) error {
+	if err := huh.NewForm(tui.IssueEditForm(title, description)).RunWithContext(ctx); err != nil {
+		return fmt.Errorf("edit issue form: %w", err)
+	}
+
+	return nil
 }
 
 func (huhRecordPrompter) CommentBody(ctx context.Context) (string, error) {
@@ -186,4 +196,61 @@ func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State) 
 	}
 
 	pushIssue(ctx, client, id)
+}
+
+// runCloseByID closes the repo issue named by query (full ID or unique prefix)
+// without merging anything: the way out for a duplicate or a wontfix. It
+// refuses while a branch of the issue is in progress, so that the work is
+// merged (`issue close`) or abandoned (`branch close`) knowingly.
+func runCloseByID(ctx context.Context, client *git.Client, query string) error {
+	fetchIssues(ctx, client)
+
+	rec, err := resolveRecord(ctx, client, nil, []string{query})
+	if err != nil {
+		return err
+	}
+
+	if rec.State == issuepkg.StateClosed {
+		fmt.Fprintf(client.IO().Out, "Issue %s is already closed.\n", rec.DisplayID())
+
+		return nil
+	}
+
+	// Another clone may have started a branch for the issue.
+	if err := branch.Fetch(ctx, client); err != nil {
+		fmt.Fprintf(client.IO().Err, "warning: fetch branch refs: %v\n", err)
+	}
+
+	// The branch chain is keyed by the display ID, like the join of `issue
+	// list`. A chain that cannot be read stops the close: its branches may be
+	// in progress.
+	st, err := branch.Load(ctx, client, rec.DisplayID())
+	if err != nil {
+		return fmt.Errorf("read the branches of issue %s: %w", rec.DisplayID(), err)
+	}
+
+	var inProgress []string
+	if st != nil {
+		for i := range st.Entries {
+			if st.Entries[i].Status == branch.StatusInProgress {
+				inProgress = append(inProgress, st.Entries[i].Name)
+			}
+		}
+	}
+	if len(inProgress) > 0 {
+		return fmt.Errorf(
+			"issue %s has a branch in progress (%s): merge it with `git zf issue close`, "+
+				"or abandon it with `git zf branch close <branch-name>`, then close the issue",
+			rec.DisplayID(), strings.Join(inProgress, ", "))
+	}
+
+	op := &issuepkg.Op{Type: issuepkg.OpSetState, Value: issuepkg.StateClosed}
+	if err := issuepkg.Append(ctx, client, rec.ID, op); err != nil {
+		return fmt.Errorf("close issue: %w", err)
+	}
+
+	pushIssue(ctx, client, rec.ID)
+	fmt.Fprintf(client.IO().Out, "Closed issue %s: %s\n", rec.DisplayID(), rec.Title)
+
+	return nil
 }

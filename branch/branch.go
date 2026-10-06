@@ -1,6 +1,7 @@
 package branch
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"regexp"
@@ -11,6 +12,10 @@ import (
 // issue ID and type, this keeps the full branch name comfortably under
 // ~100 chars even when an operator adds --variant.
 const MaxSlugLen = 50
+
+// FallbackSlug names the branch of a title that slugs to nothing (a title in a
+// non-Latin script, or punctuation only). The issue ID keeps the name unique.
+const FallbackSlug = "issue"
 
 var (
 	reSpaces          = regexp.MustCompile(`\s+`)
@@ -35,6 +40,7 @@ type Branch struct {
 
 // New constructs a Branch.
 //
+//	title slugs to "" → FallbackSlug stands in for it
 //	variant == ""  → 3-part name
 //	variant != ""  → 4-part name; the variant is slugged and rejected
 //	                 if the result is empty.
@@ -43,10 +49,7 @@ func New(issueID, branchType, title, variant string) (*Branch, error) {
 		return nil, errors.New("branch type is empty")
 	}
 
-	slug := Slug(title)
-	if slug == "" {
-		return nil, fmt.Errorf("branch.New: title %q produces an empty slug", title)
-	}
+	slug := cmp.Or(Slug(title), FallbackSlug)
 
 	var v string
 	if variant != "" {

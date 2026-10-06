@@ -138,6 +138,46 @@ func TestFold(t *testing.T) {
 		}
 	})
 
+	t.Run("set_title and set_description replace the create values", func(t *testing.T) {
+		t.Parallel()
+
+		title := op("c1", OpSetTitle, "2026-10-01T11:00:00Z", "c0")
+		title.Value = "Login fails on Safari"
+		desc := op("c2", OpSetDescription, "2026-10-01T12:00:00Z", "c1")
+		desc.Value = "New steps"
+
+		rec := Fold("c0", []Op{create, title, desc})
+		if rec.Title != "Login fails on Safari" || rec.Description != "New steps" {
+			t.Errorf("unexpected record: %+v", rec)
+		}
+		if rec.BranchType != "fix" {
+			t.Errorf("BranchType = %q, want it untouched", rec.BranchType)
+		}
+	})
+
+	t.Run("set_description with no value clears the description", func(t *testing.T) {
+		t.Parallel()
+
+		desc := op("c1", OpSetDescription, "2026-10-01T11:00:00Z", "c0")
+		if got := Fold("c0", []Op{create, desc}).Description; got != "" {
+			t.Errorf("Description = %q, want empty", got)
+		}
+	})
+
+	t.Run("concurrent title edits: the later At wins", func(t *testing.T) {
+		t.Parallel()
+
+		early := op("bb", OpSetTitle, "2026-10-01T11:00:00Z", "c0")
+		early.Value = "early"
+		late := op("aa", OpSetTitle, "2026-10-01T12:00:00Z", "c0")
+		late.Value = "late"
+		merge := op("m", OpMerge, "2026-10-01T13:00:00Z", "bb", "aa")
+
+		if got := Fold("c0", []Op{create, early, late, merge}).Title; got != "late" {
+			t.Errorf("Title = %q, want %q", got, "late")
+		}
+	})
+
 	t.Run("unknown op types are skipped", func(t *testing.T) {
 		t.Parallel()
 

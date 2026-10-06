@@ -220,12 +220,6 @@ func getFromRepoOrUser(
 		return got, nil
 	}
 
-	// Check the title before writing anything: an issue whose branch cannot
-	// be named would be left behind as an orphan.
-	if branch.Slug(got.Subject) == "" {
-		return nil, fmt.Errorf("title %q produces an empty branch name", got.Subject)
-	}
-
 	// Only prepare the issue here: it gets its ID, which names the branch, but
 	// it does not exist until createFlow publishes it, after the branch was
 	// created. Every abort in between (base picker, confirm, branch conflict,

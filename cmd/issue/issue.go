@@ -22,7 +22,7 @@ func (i Issue) GetRootCmd() *cobra.Command {
 	// The registration order is also the menu order.
 	menu := []*cobra.Command{
 		i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(),
-		i.getNewCmd(), i.getShowCmd(), i.getCommentCmd(), i.getLabelCmd(), i.getSyncCmd(),
+		i.getNewCmd(), i.getShowCmd(), i.getEditCmd(), i.getCommentCmd(), i.getLabelCmd(), i.getSyncCmd(),
 	}
 
 	cmd := &cobra.Command{

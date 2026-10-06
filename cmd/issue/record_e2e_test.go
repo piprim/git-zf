@@ -23,9 +23,12 @@ type scriptedRecordPrompter struct {
 	PickID  string            // returned by PickRecord; "" picks the first record offered
 	Comment string
 	Labels  string
-	Err     error // returned by every method when non-nil
+	// EditTitle and EditDescription are what EditIssue leaves in the form.
+	EditTitle, EditDescription string
+	Err                        error // returned by every method when non-nil
 
-	PickedFrom []issuepkg.Record // records PickRecord was offered
+	PickedFrom  []issuepkg.Record // records PickRecord was offered
+	EditOffered [2]string         // title and description EditIssue was prefilled with
 }
 
 var _ recordPrompter = (*scriptedRecordPrompter)(nil)
@@ -53,6 +56,16 @@ func (s *scriptedRecordPrompter) PickRecord(_ context.Context, records []issuepk
 
 func (s *scriptedRecordPrompter) CommentBody(_ context.Context) (string, error) {
 	return s.Comment, s.Err
+}
+
+func (s *scriptedRecordPrompter) EditIssue(_ context.Context, title, description *string) error {
+	if s.Err != nil {
+		return s.Err
+	}
+	s.EditOffered = [2]string{*title, *description}
+	*title, *description = s.EditTitle, s.EditDescription
+
+	return nil
 }
 
 func (s *scriptedRecordPrompter) LabelChanges(_ context.Context) (string, error) {

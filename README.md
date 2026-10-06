@@ -62,9 +62,11 @@ On an issue branch the form is pre-filled from the branch name (see [Commit auto
 ```
 $ git zf issue start
 $ git zf issue list
-$ git zf issue close
+$ git zf issue close            # merge an in-progress branch and close its issue
+$ git zf issue close <id>       # close a repository issue without merging
 $ git zf issue new              # create an issue in the repository, no branch
 $ git zf issue show [<id>]      # show an issue and its comments
+$ git zf issue edit [<id>]      # change the title and description of an issue
 $ git zf issue comment [<id>]   # comment on an issue
 $ git zf issue label [<id> +add -remove …]
 $ git zf issue sync             # fetch, merge and push the repository issues
@@ -92,6 +94,8 @@ The picker also lists branches started in another clone, known from the fetched 
 
 Closing works from inside a linked worktree. Rebase runs its steps in the worktree holding the branch and fast-forwards the base from the main checkout; Squash and Classic run in the main checkout. Git refuses the close when the *base* branch is checked out in another linked worktree.
 
+**`issue close <id>`** — close an issue stored in the repository without merging anything, for a duplicate or an issue that will not be worked on. The close is pushed. It is refused while a branch of the issue is in progress: merge it with `git zf issue close`, or abandon it with `git zf branch close <branch-name>`, then close the issue. `--base`, `--push` and `--no-push` belong to the merge and are refused with an ID.
+
 #### Issues in the repository
 
 Without a tracker, issues live in the repository itself, under
@@ -104,16 +108,21 @@ $ git zf issue new --title "Login fails on Safari" --type fix --label bug
 Created issue 1a2b3c4: Login fails on Safari
 $ git zf issue comment 1a2b3c4 -m "Reproduced on 17.4"
 $ git zf issue label 1a2b3c4 +ui -bug
+$ git zf issue edit 1a2b3c4 --title "Login fails on Safari 17"
 $ git zf issue show 1a2b3c4
 $ git zf issue start            # pick it, the branch is 1a2b3c4@fix@login-fails-on-safari
 ```
 
 - **`issue new`** opens a form (title, type, description, labels). Any flag
   (`--title`, `--type`, `--description`, `--label`, repeatable) skips it.
-- **`issue show`**, **`issue comment`** and **`issue label`** take the issue ID
-  shown by `issue list`: the 7-character ID, the full one, or any unique prefix
-  of at least 4 characters. Without an ID they open a picker. `show --json`
-  prints the record; `comment -m` skips the form.
+- **`issue show`**, **`issue edit`**, **`issue comment`** and **`issue label`**
+  take the issue ID shown by `issue list`: the 7-character ID, the full one, or
+  any unique prefix of at least 4 characters. Without an ID they open a picker.
+  `show --json` prints the record; `comment -m` skips the form.
+- **`issue edit`** opens a form holding the current title and description.
+  `--title` and `--description` skip it and change only the field passed;
+  `--description ""` clears the description. A branch already started for the
+  issue keeps its name.
 - **`issue sync`** fetches the issues from the remote, merges the ones changed
   on both sides and pushes yours. Each command above also pushes its own
   change, so `sync` is mostly for bringing in other people's.
@@ -327,7 +336,7 @@ form = "multiline"
 
 ### Branch naming
 
-Branches are named `{issue-id}@{type}@{slugified-title}`, e.g. `ABC-42@feat@add-oauth-login`. The slug is capped at 50 characters so the ref stays under 100.
+Branches are named `{issue-id}@{type}@{slugified-title}`, e.g. `ABC-42@feat@add-oauth-login`. The slug is capped at 50 characters so the ref stays under 100. It keeps ASCII letters and digits only; a title that leaves nothing (a title in a non-Latin script, for instance) gets the slug `issue`, as in `1a2b3c4@feat@issue`. The full title stays on the issue and in `issue list`.
 
 ```toml
 [branch]

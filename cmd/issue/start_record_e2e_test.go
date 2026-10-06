@@ -208,28 +208,83 @@ func TestRunIssueStart_TrackerErrorFallbackCreatesRepoIssue(t *testing.T) {
 	})
 }
 
-// A title that slugs to nothing must be refused before the repo issue is
-// written, so no orphan issue is left behind.
-func TestRunIssueStart_UnsluggableTitleCreatesNoIssue(t *testing.T) {
+// A title that slugs to nothing (non-Latin script) still gets a branch: the
+// slug segment falls back to branch.FallbackSlug and the title stays whole in
+// the issue and in the branch chain.
+func TestRunIssueStart_NonLatinTitleFallsBackToIssueSlug(t *testing.T) {
 	t.Parallel()
+
+	const title = "日本語のタイトル"
 
 	rig := newStartRig(t)
 	prompter := &scriptedStartPrompter{
-		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{Subject: "???"}},
+		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{Subject: title}},
 		ConfirmBranch: true,
 	}
 
 	err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
 
-	t.Run("the flow fails naming the title", func(t *testing.T) {
-		if err == nil || !strings.Contains(err.Error(), "empty branch name") {
-			t.Fatalf("err = %v", err)
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("RunIssueStart: %v", err)
 		}
 	})
-	t.Run("no repo issue was created", func(t *testing.T) {
-		records, _, _ := issuepkg.List(t.Context(), rig.client)
-		if len(records) != 0 {
-			t.Errorf("repo has %d issues, want 0", len(records))
+
+	records, _, listErr := issuepkg.List(t.Context(), rig.client)
+	if listErr != nil || len(records) != 1 {
+		t.Fatalf("want one repo issue, got %d (%v)", len(records), listErr)
+	}
+	rec := records[0]
+	wantBranch := rec.ShortID() + "@feat@" + branch.FallbackSlug
+
+	t.Run("the repo issue keeps the title", func(t *testing.T) {
+		if rec.Title != title {
+			t.Errorf("Title = %q, want %q", rec.Title, title)
+		}
+	})
+	t.Run("the branch uses the fallback slug", func(t *testing.T) {
+		exists, err := rig.client.BranchExists(wantBranch)
+		if err != nil || !exists {
+			t.Errorf("branch %q exists = %v (%v)", wantBranch, exists, err)
+		}
+	})
+	t.Run("the branch chain keeps the title", func(t *testing.T) {
+		ref, err := branch.Load(t.Context(), rig.client, rec.ShortID())
+		if err != nil || ref == nil {
+			t.Fatalf("Load = %+v, %v", ref, err)
+		}
+		if ref.Title != title || ref.Entry(wantBranch) == nil {
+			t.Errorf("ref = %+v", ref)
+		}
+	})
+}
+
+// A backlog item created by `issue new` with a non-Latin title can be started.
+func TestRunIssueStart_NonLatinBacklogItem(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	ctx := t.Context()
+
+	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Проблема входа", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	prompter := &scriptedStartPrompter{IssueFromRepo: &rec, ConfirmBranch: true}
+
+	runErr := issueflow.RunIssueStart(ctx, rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil {
+			t.Fatalf("RunIssueStart: %v", runErr)
+		}
+	})
+	t.Run("the branch uses the fallback slug", func(t *testing.T) {
+		want := rec.ShortID() + "@fix@" + branch.FallbackSlug
+		exists, err := rig.client.BranchExists(want)
+		if err != nil || !exists {
+			t.Errorf("branch %q exists = %v (%v)", want, exists, err)
 		}
 	})
 }
