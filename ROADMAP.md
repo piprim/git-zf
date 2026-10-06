@@ -2,10 +2,12 @@
 
 ## Enhancement
 
-- In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine' without a tracker.
-- `git zf init` installs hooks under the per-worktree git dir when run inside a linked worktree; git reads hooks from the common dir. Run `init` from the main checkout for now.
+- Issue mirror, repo <-> tracker. Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
+  - Several projects: project-aware tracker calls, project-qualified slugs, a project picker in `issue new`.
+  - Sync of title, description, labels and comments.
+  - `issue start` picker reading the mirror instead of the live "assigned to me" listing.
+- In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine'. Comes after the issue mirror.
 - AI assistant. See https://github.com/rshdhere/vibecheck
-- Implement bug tracking into git repo and by-directionnal syncing with remote trackers like https://github.com/git-bug/git-bug does but without the same feature, git-zf keeps his specific workflow.
 - git zf branch close <branch-name>
   No menu entry or picker. The command takes exactly one name and is not in the git zf branch menu. A picker over in-progress branches is a small addition
 
