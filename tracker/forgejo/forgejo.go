@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/tracker"
@@ -49,6 +50,8 @@ type issue struct {
 	Repository *repository `json:"repository"`
 	//nolint:tagliatelle // Forgejo wire format
 	PullRequest *pullRequestRef `json:"pull_request"`
+	//nolint:tagliatelle // Forgejo wire format
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type forgejoAdapter struct {
@@ -233,6 +236,97 @@ func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 	}
 
 	return out, nil
+}
+
+// toIssue converts a Forgejo issue of project (an "owner/repo").
+func (a *forgejoAdapter) toIssue(iss *issue, project string) tracker.Issue {
+	return tracker.Issue{
+		TrackerType: a.trackerType,
+		ID:          strconv.Itoa(iss.Number),
+		Subject:     iss.Title,
+		Description: iss.Body,
+		Status:      iss.State,
+		Project:     project,
+		CreatedAt:   iss.CreatedAt,
+	}
+}
+
+// projectIssuesPath returns "/repos/{owner}/{repo}/issues" and the project name.
+func (a *forgejoAdapter) projectIssuesPath() (path, project string, err error) {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return "", "", err
+	}
+
+	return fmt.Sprintf("/repos/%s/%s/issues", url.PathEscape(owner), url.PathEscape(repo)), owner + "/" + repo, nil
+}
+
+// ListProjectIssues fetches every open issue of the configured repository,
+// whoever it is assigned to. Like ListIssues it walks pages until an empty
+// one or maxPages, and drops pull requests.
+func (a *forgejoAdapter) ListProjectIssues(ctx context.Context) ([]tracker.Issue, error) {
+	path, project, err := a.projectIssuesPath()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []tracker.Issue
+
+	for page := 1; page <= maxPages; page++ {
+		q := url.Values{
+			"state": {statusOpen},
+			"type":  {"issues"},
+			"limit": {strconv.Itoa(issuesPerPage)},
+			"page":  {strconv.Itoa(page)},
+		}
+
+		var batch []issue
+		if err := a.doJSON(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &batch); err != nil {
+			return nil, fmt.Errorf("forgejo: list issues of %s: %w", project, err)
+		}
+
+		if len(batch) == 0 {
+			break
+		}
+
+		for i := range batch {
+			if batch[i].PullRequest == nil {
+				out = append(out, a.toIssue(&batch[i], project))
+			}
+		}
+	}
+
+	return out, nil
+}
+
+// CreateIssue creates an issue in the configured repository.
+func (a *forgejoAdapter) CreateIssue(ctx context.Context, title, description string) (tracker.Issue, error) {
+	path, project, err := a.projectIssuesPath()
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+
+	body := struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}{Title: title, Body: description}
+
+	var created issue
+	if err := a.doJSON(ctx, http.MethodPost, path, body, &created); err != nil {
+		return tracker.Issue{}, fmt.Errorf("forgejo: create issue: %w", err)
+	}
+
+	return a.toIssue(&created, project), nil
+}
+
+// SetIssueOpen reopens (open) or closes the issue.
+func (a *forgejoAdapter) SetIssueOpen(ctx context.Context, issueID string, open bool) error {
+	state := statusClosed
+	if open {
+		state = statusOpen
+	}
+
+	return a.UpdateIssueStatus(ctx, issueID, state)
 }
 
 // ListStatuses returns the static set of Forgejo issue states (open, closed).

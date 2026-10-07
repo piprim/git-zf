@@ -812,3 +812,133 @@ func far(slugs ...string) []config.TrackerProject {
 
 	return out
 }
+
+// newMirrorAdapter returns the concrete adapter for project a/b, served by handler.
+func newMirrorAdapter(t *testing.T, handler http.HandlerFunc) *forgejoAdapter {
+	t.Helper()
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	a, ok := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")}).(*forgejoAdapter)
+	if !ok {
+		t.Fatal("New did not return a *forgejoAdapter")
+	}
+
+	return a
+}
+
+func TestListProjectIssues(t *testing.T) {
+	t.Parallel()
+
+	a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/repos/a/b/issues" ||
+			q.Get("state") != "open" || q.Get("type") != "issues" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.String(), http.StatusBadRequest)
+
+			return
+		}
+		switch q.Get("page") {
+		case "1":
+			fmt.Fprint(w, `[
+				{"number": 7, "title": "Bug", "body": "Steps", "state": "open", "created_at": "2026-09-01T10:00:00+02:00"},
+				{"number": 8, "title": "A pull request", "state": "open", "pull_request": {}, "created_at": "2026-09-02T08:00:00Z"}
+			]`)
+		case "2":
+			fmt.Fprint(w, `[{"number": 9, "title": "Second page", "state": "open", "created_at": "2026-09-03T08:00:00Z"}]`)
+		default:
+			fmt.Fprint(w, `[]`)
+		}
+	})
+
+	got, err := a.ListProjectIssues(t.Context())
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("ListProjectIssues: %v", err)
+		}
+	})
+	t.Run("pull requests are dropped and pages are walked until an empty one", func(t *testing.T) {
+		if len(got) != 2 || got[0].ID != "7" || got[1].ID != "9" {
+			t.Fatalf("issues = %+v", got)
+		}
+	})
+	t.Run("an issue carries its fields and creation date", func(t *testing.T) {
+		if len(got) == 0 {
+			t.Fatal("no issue")
+		}
+		iss := got[0]
+		if iss.Subject != "Bug" || iss.Description != "Steps" || iss.Status != "open" || iss.Project != "a/b" {
+			t.Errorf("issue = %+v", iss)
+		}
+		if want := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC); !iss.CreatedAt.Equal(want) {
+			t.Errorf("CreatedAt = %v, want %v", iss.CreatedAt, want)
+		}
+	})
+}
+
+func TestCreateIssue(t *testing.T) {
+	t.Parallel()
+
+	var sent struct{ Title, Body string }
+	a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/repos/a/b/issues" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"number": 57, "title": "Bug", "state": "open", "created_at": "2026-09-01T08:00:00Z"}`)
+	})
+
+	got, err := a.CreateIssue(t.Context(), "Bug", "Steps")
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("CreateIssue: %v", err)
+		}
+	})
+	t.Run("the title and description are sent", func(t *testing.T) {
+		if sent.Title != "Bug" || sent.Body != "Steps" {
+			t.Errorf("sent = %+v", sent)
+		}
+	})
+	t.Run("the created issue's number and status are returned", func(t *testing.T) {
+		if got.ID != "57" || got.Status != "open" {
+			t.Errorf("issue = %+v", got)
+		}
+	})
+}
+
+func TestSetIssueOpen(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		open bool
+		want string
+	}{"closing sends closed": {false, "closed"}, "reopening sends open": {true, "open"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var sent struct{ State string }
+			a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/repos/a/b/issues/57" {
+					http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+
+					return
+				}
+				_ = json.NewDecoder(r.Body).Decode(&sent)
+				fmt.Fprint(w, `{"number": 57}`)
+			})
+
+			if err := a.SetIssueOpen(t.Context(), "57", tc.open); err != nil {
+				t.Fatalf("SetIssueOpen: %v", err)
+			}
+			if sent.State != tc.want {
+				t.Errorf("state sent = %q, want %q", sent.State, tc.want)
+			}
+		})
+	}
+}
