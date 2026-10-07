@@ -102,13 +102,15 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 	}
 
 	var changed []string
+	healed := make(map[string]bool) // records whose import this run completed
 
 	for i := range listed {
 		iss := &listed[i]
-		if id, healed := healImport(ctx, c, bare, iss, warn); healed {
+		if id, named := healImport(ctx, c, bare, iss, warn); named {
 			if id != "" {
 				res.Imported++
 				changed = append(changed, id)
+				healed[id] = true
 			}
 
 			continue
@@ -146,6 +148,7 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 			}
 			res.Exported++
 			changed = append(changed, rec.ID)
+		case healed[rec.ID]: // rec is the bare record read before the heal: already in sync
 		case m.owns(rec):
 			move, err := m.syncState(ctx, c, rec, open[rec.Tracker.ID])
 			if err != nil {

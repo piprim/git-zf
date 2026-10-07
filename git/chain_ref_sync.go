@@ -256,6 +256,7 @@ func (c *Client) PushChainRef(ctx context.Context, ns ChainRefs, id string) erro
 // A rejected ref fails the call; the other refs may have gone through, and the
 // next push reports them up to date. No-op without a remote or without ids.
 func (c *Client) PushChainRefs(ctx context.Context, ns ChainRefs, ids []string) error {
+	ids = slices.Compact(slices.Sorted(slices.Values(ids))) // git rejects a refspec given twice
 	if len(ids) == 0 {
 		return nil
 	}

@@ -120,7 +120,7 @@ func TestReconcile_Import(t *testing.T) {
 func TestReconcile_ImportHealsABareRoot(t *testing.T) {
 	t.Parallel()
 
-	c := newRepo(t, "alice", "")
+	c := newRepo(t, "alice", newOrigin(t))
 	iss := trackerIssue("42", "From tracker")
 	iss.Description = "Body"
 	at := mirrorCreated.Truncate(time.Second)
@@ -145,6 +145,14 @@ func TestReconcile_ImportHealsABareRoot(t *testing.T) {
 	t.Run("the record has its title and description", func(t *testing.T) {
 		if rec.Title != "From tracker" || rec.Description != "Body" || rec.TrackerState != StateOpen {
 			t.Errorf("record = %+v", rec)
+		}
+	})
+	t.Run("the healed record is pushed once, without a warning", func(t *testing.T) {
+		if len(res.Warnings) != 0 {
+			t.Errorf("warnings = %v", res.Warnings)
+		}
+		if pushed, err := c.ChainRefPushed(t.Context(), git.IssueRefs, id); err != nil || !pushed {
+			t.Errorf("ChainRefPushed = %v, %v", pushed, err)
 		}
 	})
 
