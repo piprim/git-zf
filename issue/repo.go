@@ -285,7 +285,7 @@ func PushAll(ctx context.Context, c *git.Client, ids []string) error {
 	}
 
 	if err := c.PushChainRefs(ctx, git.IssueRefs, ids); err != nil {
-		return fmt.Errorf("push %d issue(s) after merge: %w", len(ids), err)
+		return fmt.Errorf("after merge: %w", err)
 	}
 
 	return nil

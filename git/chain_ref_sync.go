@@ -256,7 +256,6 @@ func (c *Client) PushChainRef(ctx context.Context, ns ChainRefs, id string) erro
 // A rejected ref fails the call; the other refs may have gone through, and the
 // next push reports them up to date. No-op without a remote or without ids.
 func (c *Client) PushChainRefs(ctx context.Context, ns ChainRefs, ids []string) error {
-	ids = slices.Compact(slices.Sorted(slices.Values(ids))) // git rejects a refspec given twice
 	if len(ids) == 0 {
 		return nil
 	}
@@ -276,7 +275,12 @@ func (c *Client) PushChainRefs(ctx context.Context, ns ChainRefs, ids []string) 
 
 	args := []string{"push", "--quiet", remote}
 	var updates strings.Builder
+	seen := make(map[string]bool, len(ids)) // git rejects a refspec given twice
 	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
 		tip, ok := tips[id]
 		if !ok || !tip.commit {
 			return fmt.Errorf("%s: %w", id, ErrIssueNotFound)
@@ -288,7 +292,7 @@ func (c *Client) PushChainRefs(ctx context.Context, ns ChainRefs, ids []string) 
 	}
 
 	if err := c.runInteractive(ctx, c.root, args...); err != nil {
-		return fmt.Errorf("push %d %s refs: %w", len(ids), ns.name, err)
+		return fmt.Errorf("push %d %s refs: %w", len(seen), ns.name, err)
 	}
 
 	if _, err := c.outputStdin(ctx, []byte(updates.String()), "update-ref", "--stdin"); err != nil {

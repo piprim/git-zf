@@ -285,7 +285,7 @@ func TestPushChainRefs(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a duplicate id is pushed once", func(t *testing.T) {
+	t.Run("a duplicate id is not rejected", func(t *testing.T) {
 		if err := alice.PushChainRefs(ctx, IssueRefs, []string{ids[0], ids[1], ids[0]}); err != nil {
 			t.Errorf("PushChainRefs(duplicate) = %v", err)
 		}

@@ -102,15 +102,15 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 	}
 
 	var changed []string
-	healed := make(map[string]bool) // records whose import this run completed
+	healed := make(map[string]bool) // records a heal touched this run
 
 	for i := range listed {
 		iss := &listed[i]
-		if id, named := healImport(ctx, c, bare, iss, warn); named {
-			if id != "" {
+		if id, ok := healImport(ctx, c, bare, iss, warn); id != "" {
+			healed[id] = true
+			if ok {
 				res.Imported++
 				changed = append(changed, id)
-				healed[id] = true
 			}
 
 			continue
@@ -148,7 +148,7 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 			}
 			res.Exported++
 			changed = append(changed, rec.ID)
-		case healed[rec.ID]: // rec is the bare record read before the heal: already in sync
+		case healed[rec.ID]: // rec is the bare record read before the heal: in sync, or still bare
 		case m.owns(rec):
 			move, err := m.syncState(ctx, c, rec, open[rec.Tracker.ID])
 			if err != nil {
@@ -224,11 +224,11 @@ func importOps(iss *tracker.Issue) []*Op {
 
 // healImport redoes the ops of an import that stopped after the root was
 // published (a failed signature, a crash): the record has no title yet. It
-// reports whether iss named such a record, and the record's ID when the ops
-// were written.
+// returns the ID of such a record ("" when iss names none) and whether the
+// ops were written.
 func healImport(
 	ctx context.Context, c *git.Client, bare map[string]*Record, iss *tracker.Issue, warn func(string, ...any),
-) (id string, named bool) {
+) (id string, ok bool) {
 	rec := bare[iss.ID]
 	if rec == nil || iss.Subject == "" {
 		return "", false
@@ -238,7 +238,7 @@ func healImport(
 	if err := appendAll(ctx, c, rec.ID, importOps(iss)...); err != nil {
 		warn("import tracker issue %s: %v", iss.ID, err)
 
-		return "", true
+		return rec.ID, false
 	}
 
 	return rec.ID, true
