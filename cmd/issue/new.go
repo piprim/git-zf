@@ -89,6 +89,11 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 	}
 
 	pushIssue(ctx, client, rec.ID)
+	// The reconcile reads every record: fetched first, or a record another
+	// clone just linked looks unlinked here and is exported a second time.
+	if m != nil {
+		fetchIssues(ctx, client)
+	}
 	reconcileIssues(ctx, client, m)
 	fmt.Fprintf(client.IO().Out, "Created issue %s: %s\n", rec.DisplayID(), rec.Title)
 

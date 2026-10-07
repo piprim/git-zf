@@ -119,6 +119,68 @@ func TestMirror_NewCreatesTheTrackerIssue(t *testing.T) {
 	})
 }
 
+// Two clones, one tracker: alice's reconcile exports a shared record; bob,
+// who has not fetched since, runs `issue new`. His reconcile must see the
+// link, or it imports the new tracker issue as a second record and exports
+// the shared record again.
+func TestMirror_NewFetchesBeforeReconciling(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	origin := newBareOrigin(t)
+	ft := &fake.Tracker{}
+	clone := func(user string) (*recordRig, *issuepkg.Mirror) {
+		rig := newRecordRig(t, user, origin)
+		rig.cfg.IssueTracker = config.IssueTrackerConfig{
+			Type: "fake", Mirror: true,
+			Projects: []config.TrackerProject{{NearSlug: "zf", FarSlug: "piprim/git-zf"}},
+		}
+
+		return rig, mirrorOf(rig.cfg, ft)
+	}
+	alice, aliceMirror := clone("alice")
+	bob, bobMirror := clone("bob")
+
+	shared, err := issuepkg.Create(ctx, alice.client, issuepkg.NewIssue{Title: "Shared", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := issuepkg.Push(ctx, alice.client, shared.ID); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if _, err := issuepkg.Fetch(ctx, bob.client); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if _, err := aliceMirror.Reconcile(ctx, alice.client); err != nil { // exports Shared as 1, pushes
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	runErr := runNew(ctx, bob.client, bob.cfg, issuepkg.NewIssue{Title: "Bob's bug"}, nil, bobMirror)
+	records, _, listErr := issuepkg.List(ctx, bob.client)
+
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil || listErr != nil {
+			t.Fatalf("runNew: %v, List: %v", runErr, listErr)
+		}
+	})
+	t.Run("each record got one tracker issue", func(t *testing.T) {
+		want := []fake.Create{{Title: "Shared"}, {Title: "Bob's bug"}}
+		if !slices.Equal(ft.RecordedCreates, want) {
+			t.Errorf("creates = %+v", ft.RecordedCreates)
+		}
+	})
+	t.Run("bob has two records, the shared one linked once", func(t *testing.T) {
+		if len(records) != 2 {
+			t.Fatalf("bob has %d records: %+v", len(records), records)
+		}
+		for _, rec := range records {
+			if rec.Tracker == nil || rec.Tracker.Born || len(rec.DuplicateTrackerIDs) != 0 {
+				t.Errorf("record %s: tracker = %+v, duplicates = %v", rec.DisplayID(), rec.Tracker, rec.DuplicateTrackerIDs)
+			}
+		}
+	})
+}
+
 func TestMirror_NewSurvivesATrackerFailure(t *testing.T) {
 	t.Parallel()
 
