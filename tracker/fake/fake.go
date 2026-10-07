@@ -5,7 +5,10 @@ package fake
 
 import (
 	"context"
+	"slices"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/tracker"
@@ -31,6 +34,25 @@ type Tracker struct {
 	Unknown map[string]bool
 	// Errors[id] != nil → IsIssueClosed returns (false, Errors[id]) — for transport-error scenarios.
 	Errors map[string]error
+
+	// ProjectIssues is what ListProjectIssues returns: the project's open
+	// issues. CreateIssue, SetIssueOpen, CloseIssue and ReopenIssue keep it
+	// and Closed in step, so the fake behaves like one tracker over time.
+	ProjectIssues []tracker.Issue
+	// ListErr and CreateErr, when non-nil, are returned by ListProjectIssues
+	// and CreateIssue.
+	ListErr, CreateErr error
+	// ListProjectCalls counts the ListProjectIssues calls.
+	ListProjectCalls int
+	RecordedCreates  []Create
+	RecordedOpens    []Open
+	// ClosingStatuses are the status names that close an issue when
+	// UpdateIssueStatus applies them. Any other name becomes the issue's
+	// listed status.
+	ClosingStatuses []string
+
+	nextID  int
+	shelved map[string]tracker.Issue // closed issues, by ID
 }
 
 // Update captures one UpdateIssueStatus call.
@@ -97,6 +119,18 @@ func (t *Tracker) UpdateIssueStatus(_ context.Context, issueID, statusName strin
 
 	t.RecordedUpdates = append(t.RecordedUpdates, Update{IssueID: issueID, StatusName: statusName})
 
+	if slices.Contains(t.ClosingStatuses, statusName) {
+		t.setOpen(issueID, false)
+
+		return nil
+	}
+
+	for i := range t.ProjectIssues {
+		if t.ProjectIssues[i].ID == issueID {
+			t.ProjectIssues[i].Status = statusName
+		}
+	}
+
 	return nil
 }
 
@@ -107,4 +141,101 @@ func (t *Tracker) AddComment(_ context.Context, issueID, body string) error {
 	t.RecordedComments = append(t.RecordedComments, Comment{IssueID: issueID, Body: body})
 
 	return nil
+}
+
+// Create captures one CreateIssue call.
+type Create struct {
+	Title, Description string
+}
+
+// Open captures one SetIssueOpen call.
+type Open struct {
+	IssueID string
+	Open    bool
+}
+
+// ListProjectIssues returns a snapshot of the open issues.
+func (t *Tracker) ListProjectIssues(_ context.Context) ([]tracker.Issue, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.ListProjectCalls++
+	if t.ListErr != nil {
+		return nil, t.ListErr
+	}
+
+	return slices.Clone(t.ProjectIssues), nil
+}
+
+// CreateIssue records the call and adds an open issue numbered 1, 2, 3….
+func (t *Tracker) CreateIssue(_ context.Context, title, description string) (tracker.Issue, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.CreateErr != nil {
+		return tracker.Issue{}, t.CreateErr
+	}
+
+	t.nextID++
+	iss := tracker.Issue{
+		TrackerType: "fake", ID: strconv.Itoa(t.nextID), Subject: title, Description: description,
+		Status: "open", CreatedAt: time.Now().UTC(),
+	}
+	t.RecordedCreates = append(t.RecordedCreates, Create{Title: title, Description: description})
+	t.ProjectIssues = append(t.ProjectIssues, iss)
+
+	return iss, nil
+}
+
+// SetIssueOpen records the call and opens or closes the issue.
+func (t *Tracker) SetIssueOpen(_ context.Context, issueID string, open bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.RecordedOpens = append(t.RecordedOpens, Open{IssueID: issueID, Open: open})
+	t.setOpen(issueID, open)
+
+	return nil
+}
+
+// CloseIssue closes the issue the way a person does in the tracker's own UI:
+// nothing is recorded.
+func (t *Tracker) CloseIssue(issueID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.setOpen(issueID, false)
+}
+
+// ReopenIssue is the counterpart of CloseIssue.
+func (t *Tracker) ReopenIssue(issueID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.setOpen(issueID, true)
+}
+
+// setOpen moves the issue between ProjectIssues and the closed shelf. The
+// caller holds t.mu.
+func (t *Tracker) setOpen(issueID string, open bool) {
+	if t.Closed == nil {
+		t.Closed = make(map[string]bool)
+	}
+	if t.shelved == nil {
+		t.shelved = make(map[string]tracker.Issue)
+	}
+
+	t.Closed[issueID] = !open
+
+	i := slices.IndexFunc(t.ProjectIssues, func(iss tracker.Issue) bool { return iss.ID == issueID })
+	switch {
+	case !open && i >= 0:
+		t.shelved[issueID] = t.ProjectIssues[i]
+		t.ProjectIssues = slices.Delete(t.ProjectIssues, i, i+1)
+	case open && i < 0:
+		if iss, ok := t.shelved[issueID]; ok {
+			t.ProjectIssues = append(t.ProjectIssues, iss)
+			delete(t.shelved, issueID)
+		}
+	}
 }

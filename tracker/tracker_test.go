@@ -46,3 +46,9 @@ func TestNew(t *testing.T) {
 		}
 	})
 }
+
+func (s *stubTracker) ListProjectIssues(_ context.Context) ([]tracker.Issue, error) { return nil, nil }
+func (s *stubTracker) CreateIssue(_ context.Context, _, _ string) (tracker.Issue, error) {
+	return tracker.Issue{}, nil
+}
+func (s *stubTracker) SetIssueOpen(_ context.Context, _ string, _ bool) error { return nil }
