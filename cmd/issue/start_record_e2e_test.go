@@ -4,11 +4,13 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
+	"github.com/piprim/git-zf/tracker/fake"
 )
 
 // An empty issue ID in the manual form creates a repo issue and names the
@@ -443,6 +445,65 @@ func TestRunIssueStart_RecordsBranchInTheFlowRepo(t *testing.T) {
 		}
 		if len(rows) != 1 || rows[0].BranchName != "STORE-1@feat@store-location" || rows[0].IssueSlug != "STORE-1" {
 			t.Errorf("rows = %+v, want the single STORE-1 branch", rows)
+		}
+	})
+}
+
+// An issue imported by the mirror has no branch type. Started from the repo
+// picker, it asks the type with the tracker form and gets the branch a live
+// tracker listing would have created.
+func TestRunIssueStart_ImportedRecordStartsAsTrackerIssue(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	ctx := t.Context()
+	rig.tracker.Issues = nil // empty list ⇒ NotifyTrackerError ⇒ repo picker
+
+	source := &fake.Tracker{ProjectIssues: []tracker.Issue{{
+		TrackerType: "fake", ID: "42", Subject: "From tracker", Status: "open",
+		CreatedAt: time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC),
+	}}}
+	m := &issuepkg.Mirror{Tracker: source, Type: "fake", Project: "zf"}
+	if _, err := m.Reconcile(ctx, rig.client); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	records, _, _ := issuepkg.List(ctx, rig.client)
+	if len(records) != 1 {
+		t.Fatalf("repo has %d issues, want 1", len(records))
+	}
+	imported := records[0]
+
+	prompter := &scriptedStartPrompter{
+		UseTracker:       true,
+		IssueFromRepo:    &imported,
+		IssueFromTracker: &issuepkg.Issue{Type: "fix"},
+		ConfirmBranch:    true,
+	}
+
+	runErr := issueflow.RunIssueStart(ctx, rig.deps(issuepkg.IssueStartFlags{TrackerFirst: true}), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil {
+			t.Fatalf("RunIssueStart: %v", runErr)
+		}
+	})
+	t.Run("the branch is named after the tracker number and the picked type", func(t *testing.T) {
+		const want = "42@fix@from-tracker"
+		exists, err := rig.client.BranchExists(want)
+		if err != nil || !exists {
+			t.Errorf("branch %q exists = %v (%v)", want, exists, err)
+		}
+	})
+	t.Run("the branch chain records the tracker origin and the issue ID", func(t *testing.T) {
+		ref, err := branch.Load(ctx, rig.client, "42")
+		if err != nil || ref == nil || ref.TrackerType != rig.cfg.IssueTracker.Type || ref.IssueID != imported.ID {
+			t.Errorf("ref = %+v, %v", ref, err)
+		}
+	})
+	t.Run("no second issue is created", func(t *testing.T) {
+		records, _, _ := issuepkg.List(ctx, rig.client)
+		if len(records) != 1 {
+			t.Errorf("repo has %d issues, want 1", len(records))
 		}
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
+	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -133,6 +134,47 @@ func pushIssue(ctx context.Context, client *git.Client, id string) {
 	}
 }
 
+// mirrorOf returns the issue mirror over an already built tracker, or nil
+// when the mirror is off or there is no tracker.
+func mirrorOf(cfg *config.AppConfig, t tracker.Tracker) *issuepkg.Mirror {
+	tc := cfg.IssueTracker
+	if !tc.Mirror || t == nil || len(tc.Projects) != 1 {
+		return nil
+	}
+
+	return &issuepkg.Mirror{Tracker: t, Type: tc.Type, Project: tc.Projects[0].NearSlug}
+}
+
+// openMirror builds the tracker and returns the issue mirror, or nil when the
+// mirror is off. A tracker that cannot be built is a warning: the command
+// then works on local data.
+func openMirror(cfg *config.AppConfig, errW io.Writer) *issuepkg.Mirror {
+	if !cfg.IssueTracker.Mirror {
+		return nil
+	}
+
+	t, err := tracker.New(cfg.IssueTracker)
+	if err != nil {
+		fmt.Fprintf(errW, "warning: issue mirror off, could not initialize tracker: %v\n", err)
+
+		return nil
+	}
+
+	return mirrorOf(cfg, t)
+}
+
+// reconcileIssues mirrors the issues with the tracker. A failure is a
+// warning: the next run reconciles from the chains. A nil m is a no-op.
+func reconcileIssues(ctx context.Context, client *git.Client, m *issuepkg.Mirror) issuepkg.MirrorResult {
+	res, err := m.Reconcile(ctx, client)
+	if err != nil {
+		fmt.Fprintf(client.IO().Err, "warning: tracker mirror: %v\n", err)
+	}
+	printWarnings(client.IO().Err, res.Warnings)
+
+	return res
+}
+
 // resolveRecord returns the record named by args[0], or opens the picker over
 // all local issues when no ID was given.
 func resolveRecord(
@@ -180,7 +222,8 @@ func resolveRecord(
 // The issue refs are fetched first: whoever closes the branch may never have
 // run an issue command on this clone (a teammate or reviewer closing someone
 // else's branch knows the issue only through the branch chain).
-func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State) {
+// With a mirror, the tracker issue is then closed by the reconcile.
+func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State, m *issuepkg.Mirror) {
 	if ref == nil || ref.IssueID == "" {
 		return
 	}
@@ -196,13 +239,14 @@ func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State) 
 	}
 
 	pushIssue(ctx, client, id)
+	reconcileIssues(ctx, client, m)
 }
 
 // runCloseByID closes the repo issue named by query (full ID or unique prefix)
 // without merging anything: the way out for a duplicate or a wontfix. It
 // refuses while a branch of the issue is in progress, so that the work is
 // merged (`issue close`) or abandoned (`branch close`) knowingly.
-func runCloseByID(ctx context.Context, client *git.Client, query string) error {
+func runCloseByID(ctx context.Context, client *git.Client, query string, m *issuepkg.Mirror) error {
 	fetchIssues(ctx, client)
 
 	rec, err := resolveRecord(ctx, client, nil, []string{query})
@@ -250,6 +294,7 @@ func runCloseByID(ctx context.Context, client *git.Client, query string) error {
 	}
 
 	pushIssue(ctx, client, rec.ID)
+	reconcileIssues(ctx, client, m)
 	fmt.Fprintf(client.IO().Out, "Closed issue %s: %s\n", rec.DisplayID(), rec.Title)
 
 	return nil

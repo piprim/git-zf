@@ -139,13 +139,13 @@ func TestRunSync(t *testing.T) {
 	bob := newRecordRig(t, "bob", origin)
 	ctx := t.Context()
 
-	if err := runNew(ctx, alice.client, alice.cfg, issuepkg.NewIssue{Title: "Shared"}, nil); err != nil {
+	if err := runNew(ctx, alice.client, alice.cfg, issuepkg.NewIssue{Title: "Shared"}, nil, nil); err != nil {
 		t.Fatalf("runNew: %v", err)
 	}
 	rec := alice.onlyRecord(t)
 
 	t.Run("sync on another clone brings the issue in", func(t *testing.T) {
-		if err := runSync(ctx, bob.client); err != nil {
+		if err := runSync(ctx, bob.client, nil); err != nil {
 			t.Fatalf("runSync: %v", err)
 		}
 		if got := bob.onlyRecord(t); got.ID != rec.ID {
@@ -161,17 +161,17 @@ func TestRunSync(t *testing.T) {
 			}
 		}
 
-		if err := runSync(ctx, alice.client); err != nil {
+		if err := runSync(ctx, alice.client, nil); err != nil {
 			t.Fatalf("alice sync: %v", err)
 		}
 		bob.stdout.Reset()
-		if err := runSync(ctx, bob.client); err != nil {
+		if err := runSync(ctx, bob.client, nil); err != nil {
 			t.Fatalf("bob sync: %v", err)
 		}
 		if !strings.Contains(bob.stdout.String(), "1 merged, 1 pushed") {
 			t.Errorf("bob stdout = %q", bob.stdout.String())
 		}
-		if err := runSync(ctx, alice.client); err != nil {
+		if err := runSync(ctx, alice.client, nil); err != nil {
 			t.Fatalf("alice second sync: %v", err)
 		}
 
@@ -185,7 +185,7 @@ func TestRunSync(t *testing.T) {
 
 	t.Run("sync without a remote reports nothing to do", func(t *testing.T) {
 		solo := newRecordRig(t, "solo", "")
-		if err := runSync(ctx, solo.client); err != nil {
+		if err := runSync(ctx, solo.client, nil); err != nil {
 			t.Fatalf("runSync: %v", err)
 		}
 		if !strings.Contains(solo.stdout.String(), "0 merged, 0 pushed") {
@@ -394,7 +394,7 @@ func TestRunCloseByID(t *testing.T) {
 	dup := create(t, "Duplicate")
 
 	t.Run("an issue with no branch is closed and pushed", func(t *testing.T) {
-		if err := runCloseByID(ctx, rig.client, dup.ShortID()); err != nil {
+		if err := runCloseByID(ctx, rig.client, dup.ShortID(), nil); err != nil {
 			t.Fatalf("runCloseByID: %v", err)
 		}
 		if got := state(t, dup.ID); got != issuepkg.StateClosed {
@@ -412,7 +412,7 @@ func TestRunCloseByID(t *testing.T) {
 	t.Run("an already closed issue writes no op", func(t *testing.T) {
 		ref := "refs/zf/issues/" + dup.ID
 		before := gitOutput(t, rig.dir, "rev-parse", ref)
-		if err := runCloseByID(ctx, rig.client, dup.ID); err != nil {
+		if err := runCloseByID(ctx, rig.client, dup.ID, nil); err != nil {
 			t.Fatalf("runCloseByID: %v", err)
 		}
 		if after := gitOutput(t, rig.dir, "rev-parse", ref); after != before {
@@ -428,7 +428,7 @@ func TestRunCloseByID(t *testing.T) {
 		name := wip.ShortID() + "@feat@in-progress"
 		branchtest.Seed(t, rig.client, branch.Op{Branch: name, Title: wip.Title, IssueID: wip.ID}, branch.StatusInProgress)
 
-		err := runCloseByID(ctx, rig.client, wip.ID)
+		err := runCloseByID(ctx, rig.client, wip.ID, nil)
 		if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "branch close") {
 			t.Fatalf("err = %v", err)
 		}
@@ -442,7 +442,7 @@ func TestRunCloseByID(t *testing.T) {
 		name := dropped.ShortID() + "@feat@abandoned"
 		branchtest.Seed(t, rig.client, branch.Op{Branch: name, Title: dropped.Title, IssueID: dropped.ID}, branch.StatusClosed)
 
-		if err := runCloseByID(ctx, rig.client, dropped.ID); err != nil {
+		if err := runCloseByID(ctx, rig.client, dropped.ID, nil); err != nil {
 			t.Fatalf("runCloseByID: %v", err)
 		}
 		if got := state(t, dropped.ID); got != issuepkg.StateClosed {
@@ -451,7 +451,7 @@ func TestRunCloseByID(t *testing.T) {
 	})
 
 	t.Run("an unknown ID is an error", func(t *testing.T) {
-		if err := runCloseByID(ctx, rig.client, "ffffffff"); err == nil {
+		if err := runCloseByID(ctx, rig.client, "ffffffff", nil); err == nil {
 			t.Fatal("expected an error, got nil")
 		}
 	})

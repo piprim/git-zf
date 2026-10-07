@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,6 +30,9 @@ type issueListInfra struct {
 	stderr  io.Writer
 	// client reads the branch chains and the issues stored in the repository.
 	client *git.Client
+	// mirror is non-nil when the issues are mirrored with the tracker: the
+	// list then reads the repository, never the assigned-to-me listing.
+	mirror *issuepkg.Mirror
 }
 
 func (ir Issue) getIssueListCmd() *cobra.Command {
@@ -73,6 +77,7 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		tracker: t,
 		stderr:  cmd.OutOrStderr(),
 		client:  client,
+		mirror:  mirrorOf(ir.appConfig, t),
 	}
 
 	return runList(ctx, os.Stdout, infra, flags)
@@ -122,7 +127,7 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 }
 
 func buildRows(ctx context.Context, infra issueListInfra, status string) ([]issuepkg.Row, error) {
-	if infra.tracker != nil {
+	if infra.tracker != nil && infra.mirror == nil {
 		rows, err := buildFromTracker(ctx, infra)
 		if err == nil {
 			return rows, nil
@@ -148,6 +153,7 @@ func mergeRepoIssues(
 	ctx context.Context, infra issueListInfra, rows []issuepkg.Row, status string,
 ) ([]issuepkg.Row, error) {
 	fetchIssues(ctx, infra.client)
+	reconcileIssues(ctx, infra.client, infra.mirror)
 
 	records, warnings, err := issuepkg.List(ctx, infra.client)
 	if err != nil {
@@ -171,7 +177,8 @@ func mergeRepoIssues(
 		// The record's title, not the one the branch chain froze at start: it
 		// follows `issue edit`.
 		out[i].Title = rec.Title
-		out[i].Labels, out[i].State, out[i].TrackerStatus = rec.Labels, rec.State, &rec.State
+		out[i].Labels, out[i].State, out[i].TrackerStatus = rec.Labels, rec.State, trackerStatusOf(rec)
+		out[i].TrackerID = exportedNumber(rec)
 	}
 
 	for i := range records {
@@ -184,11 +191,30 @@ func mergeRepoIssues(
 		}
 		out = append(out, issuepkg.Row{
 			IssueSlug: rec.DisplayID(), Title: rec.Title,
-			Labels: rec.Labels, State: rec.State, TrackerStatus: &rec.State,
+			Labels: rec.Labels, State: rec.State, TrackerStatus: trackerStatusOf(rec),
+			TrackerID: exportedNumber(rec),
 		})
 	}
 
 	return out, nil
+}
+
+// trackerStatusOf is the status shown for a repo issue: the tracker's status
+// name when the issue is mirrored, its open/closed state otherwise.
+func trackerStatusOf(rec *issuepkg.Record) *string {
+	s := cmp.Or(rec.TrackerStatus, rec.State)
+
+	return &s
+}
+
+// exportedNumber is the tracker number of a repo-born issue that was
+// exported, "" otherwise.
+func exportedNumber(rec *issuepkg.Record) string {
+	if rec.Tracker == nil || rec.Tracker.Born {
+		return ""
+	}
+
+	return rec.Tracker.ID
 }
 
 func buildFromTracker(ctx context.Context, infra issueListInfra) ([]issuepkg.Row, error) {

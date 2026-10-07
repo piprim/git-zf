@@ -20,6 +20,9 @@ type Row struct {
 	// repo issue and its status is derived from the branch.
 	Labels []string `json:"labels"`
 	State  string   `json:"state"`
+	// TrackerID is the tracker's number for a repo-born issue that was
+	// exported; "" otherwise (a tracker-born issue has it as IssueSlug).
+	TrackerID string `json:"tracker_id"`
 }
 
 // BranchFieldOrEmpty returns fn(b) or "∅" when b is nil.
@@ -56,7 +59,11 @@ func TitleWithLabels(r *Row) string {
 // when includeProject is set), title, branch, branch status, tracker status,
 // creation date.
 func RowCells(r *Row, includeProject bool) []string {
-	cells := []string{r.IssueSlug}
+	id := r.IssueSlug
+	if r.TrackerID != "" {
+		id += " (#" + r.TrackerID + ")"
+	}
+	cells := []string{id}
 	if includeProject {
 		cells = append(cells, r.Project)
 	}

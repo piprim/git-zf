@@ -52,12 +52,12 @@ func (i Issue) newRunE(cmd *cobra.Command, in issuepkg.NewIssue, interactive boo
 		p = huhRecordPrompter{}
 	}
 
-	return runNew(cmd.Context(), client, i.appConfig, in, p)
+	return runNew(cmd.Context(), client, i.appConfig, in, p, openMirror(i.appConfig, client.IO().Err))
 }
 
 // runNew creates the issue described by in. A non-nil p fills in from the
 // form first.
-func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in issuepkg.NewIssue, p recordPrompter) error {
+func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in issuepkg.NewIssue, p recordPrompter, m *issuepkg.Mirror) error {
 	types := commitTypeNames(cfg)
 	if len(types) == 0 {
 		return errors.New("config: no commit types found")
@@ -89,6 +89,7 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 	}
 
 	pushIssue(ctx, client, rec.ID)
+	reconcileIssues(ctx, client, m)
 	fmt.Fprintf(client.IO().Out, "Created issue %s: %s\n", rec.DisplayID(), rec.Title)
 
 	return nil

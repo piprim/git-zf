@@ -15,6 +15,7 @@ import (
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	issuepkg "github.com/piprim/git-zf/issue"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
@@ -181,7 +182,7 @@ func (i Issue) closeByIDRunE(cmd *cobra.Command, id string) error {
 		return fmt.Errorf("open repository: %w", err)
 	}
 
-	return runCloseByID(cmd.Context(), client, id)
+	return runCloseByID(cmd.Context(), client, id, openMirror(i.appConfig, client.IO().Err))
 }
 
 // runClose runs the full merge → record → tracker → delete-branch pipeline
@@ -689,7 +690,8 @@ func getPickedBranch(
 // updateClosedStatus records the branch as merged on its chain and, when a
 // tracker is configured, drives the status-picker form. Every error here is
 // non-fatal: the merge already committed, so the operator must be able to
-// clean up drift manually.
+// clean up drift manually. With the issue mirror on, the record and the
+// tracker issue are reconciled afterwards.
 func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row, prompter ClosePrompter) {
 	// Pushed so sibling developers on other clones see this close. The same
 	// chain also carries the repo issue and the tracker origin used below.
@@ -700,18 +702,40 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 	}
 
 	existing, _ := branch.Load(ctx, deps.client, picked.IssueSlug)
+	mirror := mirrorOf(deps.cfg, deps.tracker)
 
-	closeRepoIssue(ctx, deps.client, existing)
+	// A tracker-born issue gets the status the operator picks.
+	if existing != nil && existing.TrackerType != "" {
+		issueflow.ApplyTrackerStatus(ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug, deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
+	}
 
-	// Only offer a tracker status update for tracker-born issues. The origin
-	// lives on the branch chain, so this is correct on a reviewer's clone too.
-	// A manual issue (TrackerType == "") must not prompt even when a tracker is
-	// configured.
-	if existing == nil || existing.TrackerType == "" {
+	// A record born from the tracker is never closed directly: it follows the
+	// tracker, so that a status that leaves the issue open (Redmine's
+	// "Resolved") is not overridden by a forced close. Any other record is
+	// closed here, and with a mirror the reconcile closes the tracker issue.
+	if mirror != nil && trackerBornRecord(ctx, deps.client, existing) {
+		fetchIssues(ctx, deps.client)
+		reconcileIssues(ctx, deps.client, mirror)
+
 		return
 	}
 
-	issueflow.ApplyTrackerStatus(ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug, deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
+	closeRepoIssue(ctx, deps.client, existing, mirror)
+}
+
+// trackerBornRecord reports whether the branch's repo issue was imported from
+// the tracker. The tracker type on the branch chain is no hint: a repo-born
+// issue exported to the tracker carries one too.
+func trackerBornRecord(ctx context.Context, client *git.Client, ref *branch.State) bool {
+	if ref == nil || ref.IssueID == "" {
+		return false
+	}
+
+	fetchIssues(ctx, client)
+
+	rec, err := issuepkg.Load(ctx, client, ref.IssueID)
+
+	return err == nil && rec.Tracker != nil && rec.Tracker.Born
 }
 
 // doDeleteBranch offers to delete the merged feature branch locally and on the

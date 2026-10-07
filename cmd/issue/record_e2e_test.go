@@ -139,7 +139,7 @@ func TestRunNew_Flags(t *testing.T) {
 	rig := newRecordRig(t, "alice", "")
 	in := issuepkg.NewIssue{Title: "  Login fails  ", Description: "Steps", Labels: []string{"ui", " ", "ui", "bug"}}
 
-	err := runNew(t.Context(), rig.client, rig.cfg, in, nil)
+	err := runNew(t.Context(), rig.client, rig.cfg, in, nil, nil)
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
@@ -182,7 +182,7 @@ func TestRunNew_Form(t *testing.T) {
 	rig := newRecordRig(t, "alice", "")
 	p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From form", BranchType: "fix"}}
 
-	err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{}, p)
+	err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{}, p, nil)
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
@@ -212,7 +212,7 @@ func TestRunNew_Rejections(t *testing.T) {
 			t.Parallel()
 
 			rig := newRecordRig(t, "alice", "")
-			err := runNew(t.Context(), rig.client, rig.cfg, tc.in, nil)
+			err := runNew(t.Context(), rig.client, rig.cfg, tc.in, nil, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want it to contain %q", err, tc.want)
 			}
@@ -227,7 +227,7 @@ func TestRunNew_Rejections(t *testing.T) {
 
 		rig := newRecordRig(t, "alice", "")
 		p := &scriptedRecordPrompter{Err: errors.New("user aborted")}
-		if err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{}, p); err == nil {
+		if err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{}, p, nil); err == nil {
 			t.Fatal("expected an error")
 		}
 	})
@@ -236,7 +236,7 @@ func TestRunNew_Rejections(t *testing.T) {
 		t.Parallel()
 
 		rig := newRecordRig(t, "alice", "")
-		err := runNew(t.Context(), rig.client, &config.AppConfig{}, issuepkg.NewIssue{Title: "T"}, nil)
+		err := runNew(t.Context(), rig.client, &config.AppConfig{}, issuepkg.NewIssue{Title: "T"}, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "no commit types") {
 			t.Fatalf("err = %v", err)
 		}
@@ -250,7 +250,7 @@ func TestRunNew_PushesToRemote(t *testing.T) {
 	alice := newRecordRig(t, "alice", origin)
 	bob := newRecordRig(t, "bob", origin)
 
-	if err := runNew(t.Context(), alice.client, alice.cfg, issuepkg.NewIssue{Title: "Shared"}, nil); err != nil {
+	if err := runNew(t.Context(), alice.client, alice.cfg, issuepkg.NewIssue{Title: "Shared"}, nil, nil); err != nil {
 		t.Fatalf("runNew: %v", err)
 	}
 	rec := alice.onlyRecord(t)
@@ -270,7 +270,7 @@ func TestRunNew_UnreachableRemoteWarns(t *testing.T) {
 
 	rig := newRecordRig(t, "alice", filepath.Join(t.TempDir(), "missing.git"))
 
-	err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{Title: "Offline"}, nil)
+	err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{Title: "Offline"}, nil, nil)
 
 	t.Run("the command still succeeds", func(t *testing.T) {
 		if err != nil {
@@ -372,7 +372,7 @@ func TestRunNew_AmbiguousRemoteWarns(t *testing.T) {
 	runGitIn(t, rig.dir, "remote", "add", "upstream", newBareOrigin(t))
 	runGitIn(t, rig.dir, "remote", "add", "fork", newBareOrigin(t))
 
-	err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{Title: "Two remotes"}, nil)
+	err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{Title: "Two remotes"}, nil, nil)
 
 	t.Run("the command still succeeds", func(t *testing.T) {
 		if err != nil {

@@ -21,8 +21,8 @@ func (i Issue) getShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show [<id>]",
 		Short: "Show an issue stored in the repository and its comments",
-		Long: `Show an issue stored in the repository. <id> is the full ID or a unique
-prefix of at least 4 characters. Without <id> a picker lists the issues.`,
+		Long: `Show an issue stored in the repository. <id> is the full ID, the number of
+the tracker issue it is mirrored with, or a unique prefix of at least 4 characters. Without <id> a picker lists the issues.`,
 		Args: cobra.MaximumNArgs(1),
 	}
 
@@ -73,6 +73,9 @@ func renderRecord(w io.Writer, rec *issuepkg.Record) {
 		fmt.Fprintf(w, "Labels: %s\n", strings.Join(rec.Labels, ", "))
 	}
 	fmt.Fprintf(w, "ID: %s\n", rec.ID)
+	if t := rec.Tracker; t != nil {
+		fmt.Fprintf(w, "Tracker: %s %s #%s\n", t.Type, t.Project, t.ID)
+	}
 
 	if rec.Description != "" {
 		fmt.Fprintf(w, "\n%s\n", rec.Description)

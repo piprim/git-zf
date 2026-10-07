@@ -259,3 +259,13 @@ func TestRunIssueList(t *testing.T) {
 		}
 	})
 }
+
+func (f *fakeIssueTracker) ListProjectIssues(_ context.Context) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (f *fakeIssueTracker) CreateIssue(_ context.Context, _, _ string) (tracker.Issue, error) {
+	return tracker.Issue{}, nil
+}
+
+func (f *fakeIssueTracker) SetIssueOpen(_ context.Context, _ string, _ bool) error { return nil }
