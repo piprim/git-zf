@@ -74,14 +74,7 @@ func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error)
 				continue
 			}
 
-			out = append(out, tracker.Issue{
-				TrackerType: trackerType,
-				ID:          strconv.Itoa(iss.GetNumber()),
-				Subject:     iss.GetTitle(),
-				Description: iss.GetBody(),
-				Status:      iss.GetState(),
-				Project:     proj,
-			})
+			out = append(out, toIssue(iss, proj))
 		}
 
 		if resp.NextPage == 0 {

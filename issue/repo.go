@@ -105,10 +105,10 @@ func Append(ctx context.Context, c *git.Client, id string, op *Op) error {
 	return nil
 }
 
-// fold decodes and folds the commits of chain id. ok is false when none of
+// foldCommits decodes and folds the commits of chain id. ok is false when none of
 // them is a root named id: the ref does not name its chain's root. Malformed
 // commits are skipped and named in warnings and in Record.Warnings.
-func fold(id string, commits []git.ChainCommit) (rec Record, warnings []string, ok bool) {
+func foldCommits(id string, commits []git.ChainCommit) (rec Record, warnings []string, ok bool) {
 	ops := make([]Op, 0, len(commits))
 	for _, commit := range commits {
 		if commit.ID == id && len(commit.Parents) == 0 {
@@ -140,7 +140,7 @@ func Load(ctx context.Context, c *git.Client, id string) (Record, error) {
 		return Record{}, fmt.Errorf("read issue %s: %w", id, err)
 	}
 
-	rec, _, ok := fold(id, commits)
+	rec, _, ok := foldCommits(id, commits)
 	if !ok {
 		return Record{}, fmt.Errorf("read issue %s: %w", id, git.ErrIssueRefCorrupt)
 	}
@@ -167,7 +167,7 @@ func List(ctx context.Context, c *git.Client) (records []Record, warnings []stri
 
 	records = make([]Record, 0, len(chains))
 	for _, id := range ids {
-		rec, w, ok := fold(id, chains[id])
+		rec, w, ok := foldCommits(id, chains[id])
 		if !ok {
 			warnings = append(warnings, fmt.Sprintf("WARN: skipping issue ref %s: %v", id, git.ErrIssueRefCorrupt))
 

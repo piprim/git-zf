@@ -359,7 +359,7 @@ func TestFold_Tracker(t *testing.T) {
 		t.Parallel()
 
 		rec := Fold("c0", []Op{root, link("c1", "58", "c0")})
-		if rec.Tracker.ID != "42" || !slices.Equal(rec.DuplicateTrackerIDs, []string{"58"}) {
+		if rec.Tracker == nil || rec.Tracker.ID != "42" || !slices.Equal(rec.DuplicateTrackerIDs, []string{"58"}) {
 			t.Errorf("Tracker = %+v, duplicates = %v", rec.Tracker, rec.DuplicateTrackerIDs)
 		}
 	})

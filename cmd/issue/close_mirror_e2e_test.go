@@ -206,9 +206,9 @@ func TestClose_Mirror_RepoBornClosesTheTrackerIssue(t *testing.T) {
 			t.Errorf("tracker writes = %+v", rig.tracker.RecordedOpens)
 		}
 	})
-	t.Run("no status picker ran", func(t *testing.T) {
-		if len(rig.tracker.RecordedUpdates) != 0 {
-			t.Errorf("updates = %+v", rig.tracker.RecordedUpdates)
+	t.Run("the status picker ran and its empty answer set nothing", func(t *testing.T) {
+		if prompter.TrackerStatusCalls != 1 || len(rig.tracker.RecordedUpdates) != 0 {
+			t.Errorf("picker calls = %d, updates = %+v", prompter.TrackerStatusCalls, rig.tracker.RecordedUpdates)
 		}
 	})
 }

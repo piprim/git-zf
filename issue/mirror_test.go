@@ -308,6 +308,81 @@ func TestReconcile_StateTable(t *testing.T) {
 	}
 }
 
+// Spec step 4: nobody moved but the status name changed → one tracker_state
+// op, and nothing on the run after.
+func TestReconcile_StatusNameChange(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "From tracker")}}
+	m := newTestMirror(ft)
+	mustReconcile(t, m, c)
+	id := onlyRecord(t, c).ID
+	before := opCount(t, c, id)
+
+	ft.ProjectIssues[0].Status = "In Progress"
+	res := mustReconcile(t, m, c)
+	rec, _ := Load(t.Context(), c, id)
+	after := opCount(t, c, id)
+
+	t.Run("one op records the new name and nothing moved", func(t *testing.T) {
+		if after != before+1 || rec.TrackerStatus != "In Progress" || res.Pulled+res.Pushed != 0 {
+			t.Errorf("ops %d → %d, status %q, res %+v", before, after, rec.TrackerStatus, res)
+		}
+	})
+
+	mustReconcile(t, m, c)
+
+	t.Run("a second run changes nothing", func(t *testing.T) {
+		if got := opCount(t, c, id); got != after {
+			t.Errorf("ops %d → %d", after, got)
+		}
+	})
+}
+
+// A reopen pushed to the tracker settles on the next run: one op records the
+// status name the listing shows, then nothing.
+func TestReconcile_PushedReopenSettles(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "From tracker")}}
+	m := newTestMirror(ft)
+	mustReconcile(t, m, c)
+	id := onlyRecord(t, c).ID
+	ft.CloseIssue("42")
+	mustReconcile(t, m, c)
+	if err := Append(ctx, c, id, &Op{Type: OpSetState, Value: StateOpen}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	pushed := mustReconcile(t, m, c)
+	before := opCount(t, c, id)
+
+	settled := mustReconcile(t, m, c)
+	rec, _ := Load(ctx, c, id)
+	after := opCount(t, c, id)
+
+	t.Run("the reopen was pushed", func(t *testing.T) {
+		if pushed.Pushed != 1 {
+			t.Errorf("res = %+v", pushed)
+		}
+	})
+	t.Run("the next run records the listed status name in one op", func(t *testing.T) {
+		if after != before+1 || rec.TrackerStatus != "open" || settled.Pulled+settled.Pushed != 0 {
+			t.Errorf("ops %d → %d, status %q, res %+v", before, after, rec.TrackerStatus, settled)
+		}
+	})
+
+	mustReconcile(t, m, c)
+
+	t.Run("the run after changes nothing", func(t *testing.T) {
+		if got := opCount(t, c, id); got != after {
+			t.Errorf("ops %d → %d", after, got)
+		}
+	})
+}
+
 func TestReconcile_LinkWithoutTrackerState(t *testing.T) {
 	t.Parallel()
 

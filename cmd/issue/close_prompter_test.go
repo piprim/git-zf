@@ -24,10 +24,12 @@ type scriptedPrompter struct {
 	Message       []byte
 	MessageOpts   tui.CommitOption
 	TrackerStatus string
-	DeleteBranch  bool
-	Base          string
-	BaseErr       error
-	BaseCalled    bool
+	// TrackerStatusCalls counts the PickTrackerStatus calls.
+	TrackerStatusCalls int
+	DeleteBranch       bool
+	Base               string
+	BaseErr            error
+	BaseCalled         bool
 
 	RemoveWorktree      bool
 	RemoveWorktreeErr   error
@@ -95,6 +97,7 @@ func (s *scriptedPrompter) ComposeMessage(_ context.Context, prefill map[string]
 }
 
 func (s *scriptedPrompter) PickTrackerStatus(_ context.Context, _, _ string, _ []string) (string, error) {
+	s.TrackerStatusCalls++
 	if s.TrackerStatusErr != nil {
 		return "", s.TrackerStatusErr
 	}

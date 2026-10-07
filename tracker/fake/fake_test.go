@@ -14,6 +14,16 @@ func TestFake_Mirror(t *testing.T) {
 
 	ctx := t.Context()
 
+	t.Run("a created issue takes the next free number", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1"}, {ID: "2"}, {ID: "x"}}}
+		ft.CloseIssue("2")
+		if iss, err := ft.CreateIssue(ctx, "T", ""); err != nil || iss.ID != "3" {
+			t.Errorf("CreateIssue = %+v, %v, want ID 3", iss, err)
+		}
+	})
+
 	t.Run("a created issue is numbered, recorded and listed", func(t *testing.T) {
 		t.Parallel()
 

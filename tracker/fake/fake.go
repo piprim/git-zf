@@ -61,6 +61,7 @@ type Update struct {
 	StatusName string
 }
 
+// Comment captures one AddComment call.
 type Comment struct {
 	IssueID string
 	Body    string
@@ -176,7 +177,13 @@ func (t *Tracker) CreateIssue(_ context.Context, title, description string) (tra
 		return tracker.Issue{}, t.CreateErr
 	}
 
+	// The next free number: a seeded or shelved issue keeps its own, so a
+	// test that seeds "1" never collides with a created issue.
+	taken := t.numbersTaken()
 	t.nextID++
+	for taken[t.nextID] {
+		t.nextID++
+	}
 	iss := tracker.Issue{
 		TrackerType: "fake", ID: strconv.Itoa(t.nextID), Subject: title, Description: description,
 		Status: "open", CreatedAt: time.Now().UTC(),
@@ -185,6 +192,24 @@ func (t *Tracker) CreateIssue(_ context.Context, title, description string) (tra
 	t.ProjectIssues = append(t.ProjectIssues, iss)
 
 	return iss, nil
+}
+
+// numbersTaken is the set of numeric IDs of the listed and shelved issues.
+// The caller holds t.mu.
+func (t *Tracker) numbersTaken() map[int]bool {
+	taken := make(map[int]bool, len(t.ProjectIssues)+len(t.shelved))
+	for _, iss := range t.ProjectIssues {
+		if n, err := strconv.Atoi(iss.ID); err == nil {
+			taken[n] = true
+		}
+	}
+	for id := range t.shelved {
+		if n, err := strconv.Atoi(id); err == nil {
+			taken[n] = true
+		}
+	}
+
+	return taken
 }
 
 // SetIssueOpen records the call and opens or closes the issue.

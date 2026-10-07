@@ -6,6 +6,7 @@
   - Several projects: project-aware tracker calls, project-qualified slugs, a project picker in `issue new`.
   - Sync of title, description, labels and comments.
   - `issue start` picker reading the mirror instead of the live "assigned to me" listing.
+  - A warning from the reconcile when two records link the same tracker number (one clone exported while another imported the new issue before fetching).
 - In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine'. Comes after the issue mirror.
 - AI assistant. See https://github.com/rshdhere/vibecheck
 - git zf branch close <branch-name>

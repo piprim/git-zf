@@ -215,20 +215,14 @@ func resolveRecord(
 
 // closeRepoIssue closes the repo issue a merged branch worked on: it writes
 // set_state closed on the issue named by ref.IssueID and pushes it. A nil
-// state or one without an issue ID (tracker issue, hand-typed ID) is a no-op. Like
-// the rest of updateClosedStatus, a failure is a warning: the merge already
-// landed.
-//
-// The issue refs are fetched first: whoever closes the branch may never have
-// run an issue command on this clone (a teammate or reviewer closing someone
-// else's branch knows the issue only through the branch chain).
-// With a mirror, the tracker issue is then closed by the reconcile.
+// state or one without an issue ID (tracker issue, hand-typed ID) is a no-op.
+// Like the rest of updateClosedStatus, a failure is a warning: the merge
+// already landed. The caller fetched the issue refs. With a mirror, the
+// tracker issue is then closed by the reconcile.
 func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State, m *issuepkg.Mirror) {
 	if ref == nil || ref.IssueID == "" {
 		return
 	}
-
-	fetchIssues(ctx, client)
 
 	id := ref.IssueID
 	op := &issuepkg.Op{Type: issuepkg.OpSetState, Value: issuepkg.StateClosed}

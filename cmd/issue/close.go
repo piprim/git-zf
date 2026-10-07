@@ -703,12 +703,31 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 
 	existing, _ := branch.Load(ctx, deps.client, picked.IssueSlug)
 	mirror := mirrorOf(deps.cfg, deps.tracker)
+	tracked := existing != nil && existing.TrackerType != ""
+
+	// The issue refs are fetched once, here: whoever closes the branch may
+	// never have run an issue command on this clone (a teammate or reviewer
+	// closing someone else's branch knows the issue only through the branch
+	// chain).
+	if existing != nil && (existing.IssueID != "" || mirror != nil) {
+		fetchIssues(ctx, deps.client)
+	}
+
+	// Without a mirror the record is closed before the status picker, as it
+	// always was: a Ctrl-C in the picker leaves it closed.
+	if mirror == nil {
+		closeRepoIssue(ctx, deps.client, existing, nil)
+	}
 
 	// A tracker-born issue gets the status the operator picks.
-	if existing != nil && existing.TrackerType != "" {
+	if tracked {
 		issueflow.ApplyTrackerStatus(
 			ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug,
 			deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
+	}
+
+	if mirror == nil {
+		return
 	}
 
 	// A tracker-typed branch may carry no issue ID (started from the live
@@ -717,25 +736,22 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 	// is never closed directly, so that a status that leaves the issue open
 	// (Redmine's "Resolved") is not overridden. A repo-born record can carry
 	// the tracker type too (its issue was exported), hence the lookup.
-	if mirror != nil && existing != nil && existing.TrackerType != "" &&
-		(existing.IssueID == "" || trackerBornRecord(ctx, deps.client, existing)) {
-		fetchIssues(ctx, deps.client)
+	if tracked && (existing.IssueID == "" || trackerBornRecord(ctx, deps.client, existing)) {
 		reconcileIssues(ctx, deps.client, mirror)
 
 		return
 	}
 
-	// Any other record is closed here, and with a mirror the reconcile closes
-	// the tracker issue.
+	// Any other record is closed here, and the reconcile closes the tracker
+	// issue.
 	closeRepoIssue(ctx, deps.client, existing, mirror)
 }
 
 // trackerBornRecord reports whether the branch's repo issue was imported from
 // the tracker. The tracker type on the branch chain is no hint: a repo-born
-// issue exported to the tracker carries one too.
+// issue exported to the tracker carries one too. The caller fetched the
+// issue refs.
 func trackerBornRecord(ctx context.Context, client *git.Client, ref *branch.State) bool {
-	fetchIssues(ctx, client)
-
 	rec, err := issuepkg.Load(ctx, client, ref.IssueID)
 
 	return err == nil && rec.Tracker != nil && rec.Tracker.Born

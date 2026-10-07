@@ -99,7 +99,7 @@ type IssueTrackerConfig struct {
 }
 
 // FarSlugs returns the tracker-side names of the configured projects.
-func (c IssueTrackerConfig) FarSlugs() []string {
+func (c *IssueTrackerConfig) FarSlugs() []string {
 	out := make([]string, len(c.Projects))
 	for i, p := range c.Projects {
 		out[i] = p.FarSlug

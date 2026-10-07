@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -291,8 +292,9 @@ func TestPushChainRefs(t *testing.T) {
 		}
 	})
 	t.Run("an unknown id is an error", func(t *testing.T) {
-		if err := alice.PushChainRefs(ctx, IssueRefs, []string{"0000000000000000000000000000000000000000"}); err == nil {
-			t.Error("PushChainRefs: want an error, got nil")
+		err := alice.PushChainRefs(ctx, IssueRefs, []string{"0000000000000000000000000000000000000000"})
+		if !errors.Is(err, ErrIssueNotFound) {
+			t.Errorf("PushChainRefs: err = %v, want ErrIssueNotFound", err)
 		}
 	})
 	t.Run("a ref that moved on the remote is rejected", func(t *testing.T) {

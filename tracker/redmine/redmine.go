@@ -288,24 +288,11 @@ func (a *redmineAdapter) CreateIssue(ctx context.Context, title, description str
 		Description string `json:"description"`
 	}
 
-	buf, err := json.Marshal(struct {
+	body := struct {
 		Issue newIssue `json:"issue"`
-	}{newIssue{ProjectID: p, Subject: title, Description: description}})
-	if err != nil {
-		return tracker.Issue{}, fmt.Errorf("redmine: marshal new issue: %w", err)
-	}
+	}{newIssue{ProjectID: p, Subject: title, Description: description}}
 
-	endpoint := strings.TrimRight(a.cfg.URL, "/") + "/issues.json"
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
-	if err != nil {
-		return tracker.Issue{}, fmt.Errorf("redmine: build create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
-
-	resp, err := a.http.Do(req)
+	resp, err := a.sendJSON(ctx, http.MethodPost, strings.TrimRight(a.cfg.URL, "/")+"/issues.json", body)
 	if err != nil {
 		return tracker.Issue{}, fmt.Errorf("redmine: create issue: %w", err)
 	}
@@ -313,7 +300,9 @@ func (a *redmineAdapter) CreateIssue(ctx context.Context, title, description str
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusCreated {
-		return tracker.Issue{}, fmt.Errorf("redmine: create issue: unexpected HTTP %d", resp.StatusCode)
+		// A 422 is the common failure (a required custom field, no default
+		// tracker): Redmine says why in the body.
+		return tracker.Issue{}, fmt.Errorf("redmine: create issue: %w", unexpectedStatus(resp))
 	}
 
 	var payload struct {
@@ -360,23 +349,9 @@ func (a *redmineAdapter) AddComment(ctx context.Context, issueID, body string) e
 // putIssue JSON-encodes payload and PUTs it to /issues/{id}.json. what names
 // the operation in error messages ("status", "comment").
 func (a *redmineAdapter) putIssue(ctx context.Context, issueID, what string, payload any) error {
-	buf, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal %s update: %w", what, err)
-	}
+	endpoint := fmt.Sprintf("%s/issues/%s.json", strings.TrimRight(a.cfg.URL, "/"), issueID)
 
-	base := strings.TrimRight(a.cfg.URL, "/")
-	endpoint := fmt.Sprintf("%s/issues/%s.json", base, issueID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(buf))
-	if err != nil {
-		return fmt.Errorf("build %s update request: %w", what, err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
-
-	resp, err := a.http.Do(req)
+	resp, err := a.sendJSON(ctx, http.MethodPut, endpoint, payload)
 	if err != nil {
 		return fmt.Errorf("update issue %s %s: %w", issueID, what, err)
 	}
@@ -384,16 +359,46 @@ func (a *redmineAdapter) putIssue(ctx context.Context, issueID, what string, pay
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		msgErr, err := io.ReadAll(resp.Body)
-		if err != nil {
-			msgErr = []byte("unreachable content")
-		}
-		format := `update issue %s %s: unexpected HTTP %d with content: "%s"`
-
-		return fmt.Errorf(format, issueID, what, resp.StatusCode, string(msgErr))
+		return fmt.Errorf("update issue %s %s: %w", issueID, what, unexpectedStatus(resp))
 	}
 
 	return nil
+}
+
+// sendJSON JSON-encodes payload and sends it to endpoint with the API key.
+// The caller closes the response body.
+func (a *redmineAdapter) sendJSON(ctx context.Context, method, endpoint string, payload any) (*http.Response, error) {
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(buf))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send: %w", err)
+	}
+
+	return resp, nil
+}
+
+// unexpectedStatus describes a response Redmine was not expected to give,
+// with its body: that is where Redmine explains a rejection.
+func unexpectedStatus(resp *http.Response) error {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		body = []byte("unreachable content")
+	}
+
+	//nolint:err113 // one-off text
+	return fmt.Errorf(`unexpected HTTP %d with content: "%s"`, resp.StatusCode, string(body))
 }
 
 // IsIssueClosed asks Redmine for the issue and reads status.is_closed.

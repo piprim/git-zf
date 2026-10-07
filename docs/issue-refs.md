@@ -120,3 +120,10 @@ it is exported. `issue show 57` finds either.
 - The project's open issues are listed in full on each reconcile.
 - Issues already closed in the tracker, or closed in the repository before
   the mirror was on, are not mirrored.
+- A close learned by asking the tracker (the issue left the open listing)
+  records the status name `closed`. On Redmine the real name ("Rejected",
+  "Closed") is only read from a listing, which no longer shows the issue, so
+  the status column of such an issue reads `closed`.
+- One clone exporting an issue while another clone reconciles before fetching
+  that push imports the new tracker issue as a second, tracker-born record.
+  Both then link the same number; close one of them.

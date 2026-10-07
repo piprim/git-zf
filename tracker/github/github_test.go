@@ -582,8 +582,8 @@ func TestCreateIssue(t *testing.T) {
 			t.Errorf("sent = %+v", sent)
 		}
 	})
-	t.Run("the created issue's number and status are returned", func(t *testing.T) {
-		if got.ID != "57" || got.Status != "open" {
+	t.Run("the created issue's number, status and creation date are returned", func(t *testing.T) {
+		if got.ID != "57" || got.Status != "open" || !got.CreatedAt.Equal(time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)) {
 			t.Errorf("issue = %+v", got)
 		}
 	})

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/piprim/git-zf/git"
@@ -69,14 +70,11 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 		return res, fmt.Errorf("list tracker issues: %w", err)
 	}
 
-	records, warnings, err := List(ctx, c)
+	// The fold warnings of List are not reported here: the command prints
+	// them from its own read, and would otherwise print them twice.
+	records, _, err := List(ctx, c)
 	if err != nil {
 		return res, err
-	}
-	res.Warnings = warnings
-
-	warn := func(format string, args ...any) {
-		res.Warnings = append(res.Warnings, "WARN: "+fmt.Sprintf(format, args...))
 	}
 
 	open := make(map[string]*tracker.Issue, len(listed))
@@ -84,29 +82,14 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 		open[listed[i].ID] = &listed[i]
 	}
 
-	linked := make(map[string]bool, len(records)) // tracker numbers a record links to
-	bare := make(map[string]*Record)              // tracker number → born record without a title
-	duplicateOf := make(map[string]string)        // losing tracker number → its record
-	for i := range records {
-		rec := &records[i]
-		if !m.owns(rec) {
-			continue
-		}
-		linked[rec.Tracker.ID] = true
-		if rec.Tracker.Born && rec.Title == "" {
-			bare[rec.Tracker.ID] = rec
-		}
-		for _, number := range rec.DuplicateTrackerIDs {
-			duplicateOf[number] = rec.DisplayID()
-		}
-	}
+	linked, bare, duplicateOf := m.index(records)
 
 	var changed []string
 	healed := make(map[string]bool) // records a heal touched this run
 
 	for i := range listed {
 		iss := &listed[i]
-		if id, ok := healImport(ctx, c, bare, iss, warn); id != "" {
+		if id, ok := healImport(ctx, c, bare, iss, res.warnf); id != "" {
 			healed[id] = true
 			if ok {
 				res.Imported++
@@ -121,14 +104,14 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 		linked[iss.ID] = true // a listing may name an issue twice
 
 		if owner, dup := duplicateOf[iss.ID]; dup {
-			warn("tracker issue %s duplicates the one linked to issue %s: close it in the tracker", iss.ID, owner)
+			res.warnf("tracker issue %s duplicates the one linked to issue %s: close it in the tracker", iss.ID, owner)
 
 			continue
 		}
 
 		id, err := m.importIssue(ctx, c, iss)
 		if err != nil {
-			warn("import tracker issue %s: %v", iss.ID, err)
+			res.warnf("import tracker issue %s: %v", iss.ID, err)
 
 			continue
 		}
@@ -136,23 +119,71 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 		changed = append(changed, id)
 	}
 
+	// The records a heal touched were read before it: in sync, or still bare.
+	records = slices.DeleteFunc(records, func(rec Record) bool { return healed[rec.ID] })
+	changed = append(changed, m.syncRecords(ctx, c, records, open, &res)...)
+
+	// One push for every record touched; one line, not one per issue, when
+	// the remote is off.
+	if err := PushAll(ctx, c, changed); err != nil {
+		res.warnf("issues saved locally but not pushed (run `git zf issue sync` later): %v", err)
+	}
+
+	return res, nil
+}
+
+// index reads the records the mirror owns: the tracker numbers they link to,
+// the born records without a title (an import that stopped) by number, and
+// the record each losing duplicate number belongs to.
+func (m *Mirror) index(records []Record) (linked map[string]bool, bare map[string]*Record, duplicateOf map[string]string) {
+	linked = make(map[string]bool, len(records))
+	bare = make(map[string]*Record)
+	duplicateOf = make(map[string]string)
+	for i := range records {
+		rec := &records[i]
+		if !m.owns(rec) {
+			continue
+		}
+		linked[rec.Tracker.ID] = true
+		if rec.Tracker.Born && rec.Title == "" {
+			bare[rec.Tracker.ID] = rec
+		}
+		for _, number := range rec.DuplicateTrackerIDs {
+			duplicateOf[number] = rec.DisplayID()
+		}
+	}
+
+	return linked, bare, duplicateOf
+}
+
+// warnf adds one warning line.
+func (r *MirrorResult) warnf(format string, args ...any) {
+	r.Warnings = append(r.Warnings, "WARN: "+fmt.Sprintf(format, args...))
+}
+
+// syncRecords exports the open records without a tracker issue and syncs the
+// state of the linked ones. It returns the IDs of the records it changed.
+func (m *Mirror) syncRecords(
+	ctx context.Context, c *git.Client, records []Record, open map[string]*tracker.Issue, res *MirrorResult,
+) []string {
+	var changed []string
+
 	for i := range records {
 		rec := &records[i]
 
 		switch {
 		case rec.Tracker == nil && rec.State == StateOpen:
 			if err := m.export(ctx, c, rec); err != nil {
-				warn("export issue %s: %v", rec.DisplayID(), err)
+				res.warnf("export issue %s: %v", rec.DisplayID(), err)
 
 				continue
 			}
 			res.Exported++
 			changed = append(changed, rec.ID)
-		case healed[rec.ID]: // rec is the bare record read before the heal: in sync, or still bare
 		case m.owns(rec):
 			move, err := m.syncState(ctx, c, rec, open[rec.Tracker.ID])
 			if err != nil {
-				warn("sync issue %s: %v", rec.DisplayID(), err)
+				res.warnf("sync issue %s: %v", rec.DisplayID(), err)
 
 				continue
 			}
@@ -170,13 +201,7 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 		}
 	}
 
-	// One push for every record touched; one line, not one per issue, when
-	// the remote is off.
-	if err := PushAll(ctx, c, changed); err != nil {
-		warn("issues saved locally but not pushed (run `git zf issue sync` later): %v", err)
-	}
-
-	return res, nil
+	return changed
 }
 
 // importIssue writes the chain of a tracker issue that has no record and
@@ -251,9 +276,15 @@ func (m *Mirror) export(ctx context.Context, c *git.Client, rec *Record) error {
 		return fmt.Errorf("create tracker issue: %w", err)
 	}
 
-	return appendAll(ctx, c, rec.ID,
+	err = appendAll(ctx, c, rec.ID,
 		&Op{Type: OpLinkTracker, TrackerType: m.Type, Project: m.Project, TrackerID: created.ID},
 		&Op{Type: OpTrackerState, Value: StateOpen, Status: created.Status})
+	if err != nil {
+		// The next run exports again: the issue named here is the orphan.
+		return fmt.Errorf("link tracker issue %s (created, now orphaned): %w", created.ID, err)
+	}
+
+	return nil
 }
 
 // syncState compares three states of a linked record: l, the tracker state its

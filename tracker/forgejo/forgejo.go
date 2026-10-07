@@ -190,48 +190,56 @@ func (e *httpError) Error() string {
 // so a short page is not a reliable end signal) or maxPages is reached, drops
 // pull requests, and applies the optional client-side Projects filter.
 func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
+	issues, err := a.listPages(ctx, "/repos/issues/search", url.Values{"assigned": {"true"}})
+	if err != nil {
+		return nil, fmt.Errorf("forgejo: list issues: %w", err)
+	}
+
 	var out []tracker.Issue
 
-	for page := 1; page <= maxPages; page++ {
-		q := url.Values{
-			"state":    {statusOpen},
-			"assigned": {"true"},
-			"type":     {"issues"},
-			"limit":    {strconv.Itoa(issuesPerPage)},
-			"page":     {strconv.Itoa(page)},
+	for i := range issues {
+		proj := ""
+		if issues[i].Repository != nil {
+			proj = issues[i].Repository.FullName
 		}
 
+		if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.FarSlugs(), proj) {
+			continue
+		}
+
+		out = append(out, a.toIssue(&issues[i], proj))
+	}
+
+	return out, nil
+}
+
+// listPages walks the open issues of path, page after page, until an empty
+// page comes back (Forgejo may cap `limit` server-side, so a short page is not
+// a reliable end signal) or maxPages is reached, and drops pull requests. q
+// adds to the query.
+func (a *forgejoAdapter) listPages(ctx context.Context, path string, q url.Values) ([]issue, error) {
+	var out []issue
+
+	q.Set("state", statusOpen)
+	q.Set("type", "issues")
+	q.Set("limit", strconv.Itoa(issuesPerPage))
+
+	for page := 1; page <= maxPages; page++ {
+		q.Set("page", strconv.Itoa(page))
+
 		var batch []issue
-		if err := a.doJSON(ctx, http.MethodGet, "/repos/issues/search?"+q.Encode(), nil, &batch); err != nil {
-			return nil, fmt.Errorf("forgejo: list issues: %w", err)
+		if err := a.doJSON(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &batch); err != nil {
+			return nil, err
 		}
 
 		if len(batch) == 0 {
 			break
 		}
 
-		for _, iss := range batch {
-			if iss.PullRequest != nil {
-				continue
+		for i := range batch {
+			if batch[i].PullRequest == nil {
+				out = append(out, batch[i])
 			}
-
-			proj := ""
-			if iss.Repository != nil {
-				proj = iss.Repository.FullName
-			}
-
-			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.FarSlugs(), proj) {
-				continue
-			}
-
-			out = append(out, tracker.Issue{
-				TrackerType: a.trackerType,
-				ID:          strconv.Itoa(iss.Number),
-				Subject:     iss.Title,
-				Description: iss.Body,
-				Status:      iss.State,
-				Project:     proj,
-			})
 		}
 	}
 
@@ -262,38 +270,21 @@ func (a *forgejoAdapter) projectIssuesPath() (path, project string, err error) {
 }
 
 // ListProjectIssues fetches every open issue of the configured repository,
-// whoever it is assigned to. Like ListIssues it walks pages until an empty
-// one or maxPages, and drops pull requests.
+// whoever it is assigned to, the way ListIssues walks pages.
 func (a *forgejoAdapter) ListProjectIssues(ctx context.Context) ([]tracker.Issue, error) {
 	path, project, err := a.projectIssuesPath()
 	if err != nil {
 		return nil, err
 	}
 
-	var out []tracker.Issue
+	issues, err := a.listPages(ctx, path, url.Values{})
+	if err != nil {
+		return nil, fmt.Errorf("forgejo: list issues of %s: %w", project, err)
+	}
 
-	for page := 1; page <= maxPages; page++ {
-		q := url.Values{
-			"state": {statusOpen},
-			"type":  {"issues"},
-			"limit": {strconv.Itoa(issuesPerPage)},
-			"page":  {strconv.Itoa(page)},
-		}
-
-		var batch []issue
-		if err := a.doJSON(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &batch); err != nil {
-			return nil, fmt.Errorf("forgejo: list issues of %s: %w", project, err)
-		}
-
-		if len(batch) == 0 {
-			break
-		}
-
-		for i := range batch {
-			if batch[i].PullRequest == nil {
-				out = append(out, a.toIssue(&batch[i], project))
-			}
-		}
+	out := make([]tracker.Issue, len(issues))
+	for i := range issues {
+		out[i] = a.toIssue(&issues[i], project)
 	}
 
 	return out, nil

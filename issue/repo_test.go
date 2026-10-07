@@ -451,8 +451,8 @@ func TestPushAll(t *testing.T) {
 		if _, err := Fetch(ctx, b); err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}
-		if records, _, _ := List(ctx, b); len(records) != 2 {
-			t.Errorf("bob has %d issues, want 2", len(records))
+		if records, _, err := List(ctx, b); err != nil || len(records) != 2 {
+			t.Errorf("bob has %d issues, want 2 (err %v)", len(records), err)
 		}
 	})
 

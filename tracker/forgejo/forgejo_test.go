@@ -905,9 +905,28 @@ func TestCreateIssue(t *testing.T) {
 			t.Errorf("sent = %+v", sent)
 		}
 	})
-	t.Run("the created issue's number and status are returned", func(t *testing.T) {
-		if got.ID != "57" || got.Status != "open" {
+	t.Run("the created issue's number, status and creation date are returned", func(t *testing.T) {
+		if got.ID != "57" || got.Status != "open" || !got.CreatedAt.Equal(time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)) {
 			t.Errorf("issue = %+v", got)
+		}
+	})
+}
+
+func TestMirrorCalls_ServerError(t *testing.T) {
+	t.Parallel()
+
+	a := newMirrorAdapter(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down", http.StatusInternalServerError)
+	})
+
+	t.Run("ListProjectIssues reports the status", func(t *testing.T) {
+		if _, err := a.ListProjectIssues(t.Context()); err == nil || !strings.Contains(err.Error(), "500") {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("CreateIssue reports the status", func(t *testing.T) {
+		if _, err := a.CreateIssue(t.Context(), "Bug", ""); err == nil || !strings.Contains(err.Error(), "500") {
+			t.Errorf("err = %v", err)
 		}
 	})
 }

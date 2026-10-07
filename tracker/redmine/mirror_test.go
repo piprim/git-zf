@@ -124,11 +124,49 @@ func TestCreateIssue(t *testing.T) {
 			t.Errorf("sent = %+v", sent.Issue)
 		}
 	})
-	t.Run("the created issue's number and status name are returned", func(t *testing.T) {
-		if got.ID != "57" || got.Status != "New" {
+	t.Run("the created issue's number, status name and creation date are returned", func(t *testing.T) {
+		if got.ID != "57" || got.Status != "New" || !got.CreatedAt.Equal(time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)) {
 			t.Errorf("issue = %+v", got)
 		}
 	})
+}
+
+func TestCreateIssue_Errors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a rejected issue reports Redmine's message", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			fmt.Fprint(w, `{"errors": ["Tracker cannot be blank"]}`)
+		})
+
+		_, err := a.CreateIssue(t.Context(), "Bug", "Steps")
+		if err == nil || !strings.Contains(err.Error(), "422") || !strings.Contains(err.Error(), "Tracker cannot be blank") {
+			t.Errorf("err = %v", err)
+		}
+	})
+
+	for name, projects := range map[string][]config.TrackerProject{
+		"no project":   nil,
+		"two projects": {{NearSlug: "a", FarSlug: "a"}, {NearSlug: "b", FarSlug: "b"}},
+	} {
+		t.Run(name+" is refused by the project calls", func(t *testing.T) {
+			t.Parallel()
+
+			a, err := New(config.IssueTrackerConfig{URL: "http://redmine.invalid", Token: "k", Projects: projects})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if _, err := a.CreateIssue(t.Context(), "Bug", ""); err == nil || !strings.Contains(err.Error(), "exactly one project") {
+				t.Errorf("CreateIssue err = %v", err)
+			}
+			if _, err := a.ListProjectIssues(t.Context()); err == nil || !strings.Contains(err.Error(), "exactly one project") {
+				t.Errorf("ListProjectIssues err = %v", err)
+			}
+		})
+	}
 }
 
 func TestSetIssueOpen(t *testing.T) {
