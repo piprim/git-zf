@@ -120,7 +120,8 @@
       "Bash(node /home/pi/code/pi/git-zf/.gitnexus/run.cjs --help)",
       "Bash(roborev review *)",
       "mcp__gitnexus__list_repos",
-      "Bash(node .gitnexus/run.cjs detect-changes)"
+      "Bash(node .gitnexus/run.cjs detect-changes)",
+      "mcp__gitnexus__detect_changes"
     ]
   }
 }
