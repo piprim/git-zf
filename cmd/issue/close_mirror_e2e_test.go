@@ -29,6 +29,14 @@ func mirrorOn(rig *closeTestRig) *issuepkg.Mirror {
 func closeTrackerBorn(t *testing.T, status string) (*closeTestRig, issuepkg.Record, error) {
 	t.Helper()
 
+	return closeTrackerBranch(t, status, true)
+}
+
+// closeTrackerBranch is closeTrackerBorn; withIssueID false leaves the branch
+// chain without an issue ID, as a branch started from the live listing is.
+func closeTrackerBranch(t *testing.T, status string, withIssueID bool) (*closeTestRig, issuepkg.Record, error) {
+	t.Helper()
+
 	rig := newCloseRig(t)
 	ctx := t.Context()
 	m := mirrorOn(rig)
@@ -44,7 +52,11 @@ func closeTrackerBorn(t *testing.T, status string) (*closeTestRig, issuepkg.Reco
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	branchtest.Amend(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing", TrackerType: "fake", IssueID: rec.ID})
+	amend := branch.Op{Branch: "ABC-1@feat@add-thing", TrackerType: "fake"}
+	if withIssueID {
+		amend.IssueID = rec.ID
+	}
+	branchtest.Amend(t, rig.client, amend)
 
 	prompter := &scriptedPrompter{
 		Branch:        rig.pickedBranchRow(),
@@ -93,6 +105,30 @@ func TestClose_Mirror_TrackerBornFollowsTheTracker(t *testing.T) {
 		}
 	})
 	t.Run("the record follows the tracker and is closed", func(t *testing.T) {
+		if rec.State != issuepkg.StateClosed || rec.TrackerState != issuepkg.StateClosed {
+			t.Errorf("State = %q, TrackerState = %q", rec.State, rec.TrackerState)
+		}
+	})
+	t.Run("the mirror did not close the tracker issue itself", func(t *testing.T) {
+		if len(rig.tracker.RecordedOpens) != 0 {
+			t.Errorf("tracker writes = %+v", rig.tracker.RecordedOpens)
+		}
+	})
+}
+
+// A branch started from the live listing has a tracker type and no issue ID:
+// the merge close still reconciles the record the mirror imported.
+func TestClose_Mirror_LivePickedBranchFollowsTheTracker(t *testing.T) {
+	t.Parallel()
+
+	rig, rec, runErr := closeTrackerBranch(t, "Closed", false)
+
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil {
+			t.Fatalf("runClose: %v", runErr)
+		}
+	})
+	t.Run("the imported record is closed with the tracker", func(t *testing.T) {
 		if rec.State != issuepkg.StateClosed || rec.TrackerState != issuepkg.StateClosed {
 			t.Errorf("State = %q, TrackerState = %q", rec.State, rec.TrackerState)
 		}

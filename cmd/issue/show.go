@@ -22,7 +22,8 @@ func (i Issue) getShowCmd() *cobra.Command {
 		Use:   "show [<id>]",
 		Short: "Show an issue stored in the repository and its comments",
 		Long: `Show an issue stored in the repository. <id> is the full ID, the number of
-the tracker issue it is mirrored with, or a unique prefix of at least 4 characters. Without <id> a picker lists the issues.`,
+the tracker issue it is mirrored with, or a unique prefix of at least 4 characters.
+Without <id> a picker lists the issues.`,
 		Args: cobra.MaximumNArgs(1),
 	}
 

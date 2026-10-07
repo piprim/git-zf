@@ -121,7 +121,8 @@ func (c *IssueTrackerConfig) normalize() error {
 		switch {
 		case !nearSlugRe.MatchString(p.NearSlug):
 			return fmt.Errorf(
-				"issue-tracker.projects: near-slug %q must be letters, digits and dashes, starting with a letter or a digit",
+				"issue-tracker.projects: near-slug %q must be letters, digits and dashes, "+
+					"starting with a letter or a digit",
 				p.NearSlug)
 		case p.FarSlug == "":
 			return fmt.Errorf("issue-tracker.projects: project %q has no far-slug", p.NearSlug)

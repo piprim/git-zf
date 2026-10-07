@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -103,6 +105,33 @@ func Append(ctx context.Context, c *git.Client, id string, op *Op) error {
 	return nil
 }
 
+// fold decodes and folds the commits of chain id. ok is false when none of
+// them is a root named id: the ref does not name its chain's root. Malformed
+// commits are skipped and named in warnings and in Record.Warnings.
+func fold(id string, commits []git.ChainCommit) (rec Record, warnings []string, ok bool) {
+	ops := make([]Op, 0, len(commits))
+	for _, commit := range commits {
+		if commit.ID == id && len(commit.Parents) == 0 {
+			ok = true
+		}
+
+		op, decoded := DecodeOp(commit.ID, commit.Parents, commit.Payload)
+		if !decoded {
+			warnings = append(warnings, fmt.Sprintf("WARN: issue %s: skipping malformed op %s", id, commit.ID))
+		}
+		ops = append(ops, op)
+	}
+
+	if !ok {
+		return Record{}, nil, false
+	}
+
+	rec = Fold(id, ops)
+	rec.Warnings = warnings
+
+	return rec, warnings, true
+}
+
 // Load reads the chain of issue id and folds it. Malformed commits are skipped
 // and named in Record.Warnings.
 func Load(ctx context.Context, c *git.Client, id string) (Record, error) {
@@ -111,40 +140,41 @@ func Load(ctx context.Context, c *git.Client, id string) (Record, error) {
 		return Record{}, fmt.Errorf("read issue %s: %w", id, err)
 	}
 
-	ops := make([]Op, 0, len(commits))
-	var warnings []string
-	for _, commit := range commits {
-		op, ok := DecodeOp(commit.ID, commit.Parents, commit.Payload)
-		if !ok {
-			warnings = append(warnings, fmt.Sprintf("WARN: issue %s: skipping malformed op %s", id, commit.ID))
-		}
-		ops = append(ops, op)
+	rec, _, ok := fold(id, commits)
+	if !ok {
+		return Record{}, fmt.Errorf("read issue %s: %w", id, git.ErrIssueRefCorrupt)
 	}
-
-	rec := Fold(id, ops)
-	rec.Warnings = warnings
 
 	return rec, nil
 }
 
-// List loads every local issue, newest first. An unreadable ref is skipped;
-// warnings names it, along with every malformed op met on the way.
+// List loads every local issue, newest first, in three git processes whatever
+// their number. A ref that is not a commit chain or does not name its chain's
+// root is skipped; warnings names it, along with every malformed op met on
+// the way.
 func List(ctx context.Context, c *git.Client) (records []Record, warnings []string, err error) {
-	ids, err := c.ListChainIDs(ctx, git.IssueRefs)
+	chains, legacy, err := c.ReadAllChains(ctx, git.IssueRefs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list issues: %w", err)
 	}
 
-	records = make([]Record, 0, len(ids))
+	for _, id := range legacy {
+		warnings = append(warnings, fmt.Sprintf("WARN: skipping issue ref %s: not a commit chain", id))
+	}
+
+	// Sorted IDs keep the order of issues created in the same second stable.
+	ids := slices.Sorted(maps.Keys(chains))
+
+	records = make([]Record, 0, len(chains))
 	for _, id := range ids {
-		rec, err := Load(ctx, c, id)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("WARN: skipping issue ref %s: %v", id, err))
+		rec, w, ok := fold(id, chains[id])
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("WARN: skipping issue ref %s: %v", id, git.ErrIssueRefCorrupt))
 
 			continue
 		}
 
-		warnings = append(warnings, rec.Warnings...)
+		warnings = append(warnings, w...)
 		records = append(records, rec)
 	}
 
@@ -153,8 +183,12 @@ func List(ctx context.Context, c *git.Client) (records []Record, warnings []stri
 	return records, warnings, nil
 }
 
-// Resolve finds the issue designated by query: a full ID, or a unique ID
-// prefix of at least 4 characters.
+// trackerNumberRe matches what GitHub, Forgejo and Redmine use as issue IDs.
+var trackerNumberRe = regexp.MustCompile(`^[0-9]+$`)
+
+// Resolve finds the issue designated by query: a full ID, the number of the
+// tracker issue it is mirrored with, or a unique ID prefix of at least 4
+// characters.
 func Resolve(ctx context.Context, c *git.Client, query string) (Record, error) {
 	ids, err := c.ListChainIDs(ctx, git.IssueRefs)
 	if err != nil {
@@ -163,6 +197,21 @@ func Resolve(ctx context.Context, c *git.Client, query string) (Record, error) {
 
 	if slices.Contains(ids, query) {
 		return Load(ctx, c, query)
+	}
+
+	// An exact tracker number wins over an ID prefix made of digits.
+	// ponytail: loads every issue to find one number; keep an index of the
+	// numbers if repositories with thousands of issues make this slow.
+	if trackerNumberRe.MatchString(query) {
+		records, _, err := List(ctx, c)
+		if err != nil {
+			return Record{}, err
+		}
+		for i := range records {
+			if records[i].Tracker != nil && records[i].Tracker.ID == query {
+				return records[i], nil
+			}
+		}
 	}
 
 	if len(query) < minPrefixLen {
@@ -217,10 +266,16 @@ func Fetch(ctx context.Context, c *git.Client) (merged int, err error) {
 	return merged, nil
 }
 
-// Push pushes issue id. A rejected push (someone pushed first) triggers one
-// fetch, merge and retry. No-op without a remote.
+// Push pushes issue id. See PushAll.
 func Push(ctx context.Context, c *git.Client, id string) error {
-	firstErr := c.PushChainRef(ctx, git.IssueRefs, id)
+	return PushAll(ctx, c, []string{id})
+}
+
+// PushAll pushes the issues ids in one git push. A rejected push (someone
+// pushed first) triggers one fetch, merge and retry. No-op without a remote
+// or without ids.
+func PushAll(ctx context.Context, c *git.Client, ids []string) error {
+	firstErr := c.PushChainRefs(ctx, git.IssueRefs, ids)
 	if firstErr == nil {
 		return nil
 	}
@@ -229,8 +284,8 @@ func Push(ctx context.Context, c *git.Client, id string) error {
 		return errors.Join(firstErr, err)
 	}
 
-	if err := c.PushChainRef(ctx, git.IssueRefs, id); err != nil {
-		return fmt.Errorf("push issue %s after merge: %w", id, err)
+	if err := c.PushChainRefs(ctx, git.IssueRefs, ids); err != nil {
+		return fmt.Errorf("push %d issue(s) after merge: %w", len(ids), err)
 	}
 
 	return nil

@@ -204,6 +204,10 @@ func getFromRepoOrUser(
 			return nil, fmt.Errorf("repo issue picker: %w", err)
 		}
 		if rec != nil {
+			if rec.Tracker != nil && rec.Tracker.Born {
+				return fromImportedRecord(ctx, p, rec, allowedTypes)
+			}
+
 			if err := checkRecordType(rec, allowedTypes); err != nil {
 				return nil, err
 			}
@@ -281,6 +285,31 @@ func issueFromRecord(rec *issue.Record) *issue.Issue {
 		RecordID: rec.ID,
 		Issue:    tracker.Issue{ID: rec.DisplayID(), Subject: rec.Title, Description: rec.Description},
 	}
+}
+
+// fromImportedRecord converts an issue imported from the tracker. Its record
+// has no branch type (the tracker has none), so the type is asked with the
+// form a live tracker listing uses, offered this one issue. The result starts
+// like a tracker issue: the tracker number names the branch and the branch
+// chain records the tracker origin; RecordID ties it to the record.
+func fromImportedRecord(
+	ctx context.Context, p StartPrompter, rec *issue.Record, allowedTypes []string,
+) (*issue.Issue, error) {
+	src := tracker.Issue{
+		TrackerType: rec.Tracker.Type, ID: rec.Tracker.ID, Subject: rec.Title, Description: rec.Description,
+	}
+
+	got, err := p.PickIssueFromTracker(ctx, []tracker.Issue{src}, allowedTypes)
+	if err != nil {
+		return nil, fmt.Errorf("tracker issue form: %w", err)
+	}
+	if got == nil {
+		return nil, nil
+	}
+
+	got.Issue, got.RecordID = src, rec.ID
+
+	return got, nil
 }
 
 // getFromTracker fetches issues via t.ListIssues, then either falls back to

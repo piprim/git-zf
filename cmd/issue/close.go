@@ -706,20 +706,27 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 
 	// A tracker-born issue gets the status the operator picks.
 	if existing != nil && existing.TrackerType != "" {
-		issueflow.ApplyTrackerStatus(ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug, deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
+		issueflow.ApplyTrackerStatus(
+			ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug,
+			deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
 	}
 
-	// A record born from the tracker is never closed directly: it follows the
-	// tracker, so that a status that leaves the issue open (Redmine's
-	// "Resolved") is not overridden by a forced close. Any other record is
-	// closed here, and with a mirror the reconcile closes the tracker issue.
-	if mirror != nil && trackerBornRecord(ctx, deps.client, existing) {
+	// A tracker-typed branch may carry no issue ID (started from the live
+	// "assigned to me" listing). Its record, imported by the mirror, follows the
+	// tracker through the reconcile, as does a record born from the tracker: it
+	// is never closed directly, so that a status that leaves the issue open
+	// (Redmine's "Resolved") is not overridden. A repo-born record can carry
+	// the tracker type too (its issue was exported), hence the lookup.
+	if mirror != nil && existing != nil && existing.TrackerType != "" &&
+		(existing.IssueID == "" || trackerBornRecord(ctx, deps.client, existing)) {
 		fetchIssues(ctx, deps.client)
 		reconcileIssues(ctx, deps.client, mirror)
 
 		return
 	}
 
+	// Any other record is closed here, and with a mirror the reconcile closes
+	// the tracker issue.
 	closeRepoIssue(ctx, deps.client, existing, mirror)
 }
 
@@ -727,10 +734,6 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 // the tracker. The tracker type on the branch chain is no hint: a repo-born
 // issue exported to the tracker carries one too.
 func trackerBornRecord(ctx context.Context, client *git.Client, ref *branch.State) bool {
-	if ref == nil || ref.IssueID == "" {
-		return false
-	}
-
 	fetchIssues(ctx, client)
 
 	rec, err := issuepkg.Load(ctx, client, ref.IssueID)
