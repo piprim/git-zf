@@ -260,3 +260,141 @@ func TestRecordIDs(t *testing.T) {
 		}
 	})
 }
+
+func TestFold_Tracker(t *testing.T) {
+	t.Parallel()
+
+	root := op("c0", OpCreate, "2026-10-01T10:00:00Z")
+	root.TrackerType, root.Project, root.TrackerID = "forgejo", "zf", "42"
+
+	plain := op("p0", OpCreate, "2026-10-01T10:00:00Z")
+	plain.Title = "Local"
+
+	link := func(id, number string, parents ...string) Op {
+		o := op(id, OpLinkTracker, "2026-10-01T11:00:00Z", parents...)
+		o.TrackerType, o.Project, o.TrackerID = "forgejo", "zf", number
+
+		return o
+	}
+	seen := func(id, value, status string, parents ...string) Op {
+		o := op(id, OpTrackerState, "2026-10-01T12:00:00Z", parents...)
+		o.Value, o.Status = value, status
+
+		return o
+	}
+
+	t.Run("an import root links the record and marks it born in the tracker", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("c0", []Op{root})
+		want := TrackerLink{Type: "forgejo", Project: "zf", ID: "42", Born: true}
+		if rec.Tracker == nil || *rec.Tracker != want {
+			t.Errorf("Tracker = %+v, want %+v", rec.Tracker, want)
+		}
+	})
+
+	t.Run("a tracker-born record is displayed by its tracker number", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("c0", []Op{root})
+		if got := rec.DisplayID(); got != "42" {
+			t.Errorf("DisplayID = %q, want 42", got)
+		}
+	})
+
+	t.Run("set_title after an import root gives the title", func(t *testing.T) {
+		t.Parallel()
+
+		title := op("c1", OpSetTitle, "2026-10-01T10:01:00Z", "c0")
+		title.Value = "From tracker"
+		if got := Fold("c0", []Op{root, title}).Title; got != "From tracker" {
+			t.Errorf("Title = %q", got)
+		}
+	})
+
+	t.Run("a record without a link has none", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("p0", []Op{plain})
+		if rec.Tracker != nil || rec.TrackerState != "" {
+			t.Errorf("Tracker = %+v, TrackerState = %q", rec.Tracker, rec.TrackerState)
+		}
+	})
+
+	t.Run("link_tracker links a repo-born record and keeps its short hash", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("p0", []Op{plain, link("p1", "57", "p0")})
+		want := TrackerLink{Type: "forgejo", Project: "zf", ID: "57"}
+		if rec.Tracker == nil || *rec.Tracker != want {
+			t.Errorf("Tracker = %+v, want %+v", rec.Tracker, want)
+		}
+		if got := rec.DisplayID(); got != "p0" {
+			t.Errorf("DisplayID = %q, want p0", got)
+		}
+	})
+
+	t.Run("the first link_tracker wins and the loser is recorded", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("p0", []Op{plain, link("p1", "57", "p0"), link("p2", "58", "p1")})
+		if rec.Tracker == nil || rec.Tracker.ID != "57" {
+			t.Errorf("Tracker = %+v, want number 57", rec.Tracker)
+		}
+		if !slices.Equal(rec.DuplicateTrackerIDs, []string{"58"}) {
+			t.Errorf("DuplicateTrackerIDs = %v, want [58]", rec.DuplicateTrackerIDs)
+		}
+	})
+
+	t.Run("a repeated link_tracker for the same number is not a duplicate", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("p0", []Op{plain, link("p1", "57", "p0"), link("p2", "57", "p1")})
+		if len(rec.DuplicateTrackerIDs) != 0 {
+			t.Errorf("DuplicateTrackerIDs = %v, want none", rec.DuplicateTrackerIDs)
+		}
+	})
+
+	t.Run("a link_tracker on a tracker-born record is a duplicate", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("c0", []Op{root, link("c1", "58", "c0")})
+		if rec.Tracker.ID != "42" || !slices.Equal(rec.DuplicateTrackerIDs, []string{"58"}) {
+			t.Errorf("Tracker = %+v, duplicates = %v", rec.Tracker, rec.DuplicateTrackerIDs)
+		}
+	})
+
+	t.Run("a link_tracker without a number is ignored", func(t *testing.T) {
+		t.Parallel()
+
+		if rec := Fold("p0", []Op{plain, link("p1", "", "p0")}); rec.Tracker != nil {
+			t.Errorf("Tracker = %+v, want nil", rec.Tracker)
+		}
+	})
+
+	t.Run("tracker_state records the state seen and the status name", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("c0", []Op{root, seen("c1", StateClosed, "Rejected", "c0")})
+		if rec.TrackerState != StateClosed || rec.TrackerStatus != "Rejected" {
+			t.Errorf("TrackerState = %q, TrackerStatus = %q", rec.TrackerState, rec.TrackerStatus)
+		}
+	})
+
+	t.Run("tracker_state does not change the issue state", func(t *testing.T) {
+		t.Parallel()
+
+		if got := Fold("c0", []Op{root, seen("c1", StateClosed, "", "c0")}).State; got != StateOpen {
+			t.Errorf("State = %q, want %q", got, StateOpen)
+		}
+	})
+
+	t.Run("a tracker_state with an unknown value is ignored", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("c0", []Op{root, seen("c1", "resolved", "Resolved", "c0")})
+		if rec.TrackerState != "" || rec.TrackerStatus != "" {
+			t.Errorf("TrackerState = %q, TrackerStatus = %q", rec.TrackerState, rec.TrackerStatus)
+		}
+	})
+}

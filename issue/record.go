@@ -22,6 +22,8 @@ const (
 	OpRemoveLabel    = "remove_label"
 	OpAddComment     = "add_comment"
 	OpMerge          = "merge"
+	OpLinkTracker    = "link_tracker"
+	OpTrackerState   = "tracker_state"
 )
 
 // Issue states.
@@ -46,6 +48,11 @@ type Op struct {
 	BranchType  string `json:"branch_type,omitempty"` // create
 	Value       string `json:"value,omitempty"`       // set_title, set_description, set_state, add_label, remove_label
 	Body        string `json:"body,omitempty"`        // add_comment
+
+	TrackerType string `json:"tracker_type,omitempty"` // create (imported issue), link_tracker
+	Project     string `json:"project,omitempty"`      // create, link_tracker: the near slug
+	TrackerID   string `json:"tracker_id,omitempty"`   // create, link_tracker: the tracker's issue number
+	Status      string `json:"status,omitempty"`       // tracker_state: the tracker's status name
 
 	ID      string   `json:"-"`
 	Parents []string `json:"-"`
@@ -73,6 +80,16 @@ type Comment struct {
 	Body   string    `json:"body"`
 }
 
+// TrackerLink names the tracker issue a record is mirrored with.
+type TrackerLink struct {
+	Type    string `json:"type"`    // tracker type, e.g. "forgejo"
+	Project string `json:"project"` // near slug
+	ID      string `json:"id"`      // the tracker's issue number
+	// Born is true when the link comes from the create op: the issue was
+	// imported from the tracker.
+	Born bool `json:"born"`
+}
+
 // Record is the current state of an issue: the fold of its op chain.
 type Record struct {
 	ID          string    `json:"id"`
@@ -83,6 +100,16 @@ type Record struct {
 	Labels      []string  `json:"labels"`
 	Comments    []Comment `json:"comments"`
 	CreatedAt   time.Time `json:"created_at"`
+
+	// Tracker is nil for an issue that is not mirrored.
+	Tracker *TrackerLink `json:"tracker"`
+	// TrackerState is the last open/closed the chain saw on the tracker; ""
+	// when it never saw one. TrackerStatus is the tracker's own status name.
+	TrackerState  string `json:"tracker_state"`
+	TrackerStatus string `json:"tracker_status"`
+	// DuplicateTrackerIDs lists the tracker issues named by link_tracker ops
+	// that lost to an earlier link.
+	DuplicateTrackerIDs []string `json:"-"`
 
 	// Warnings lists the commits Load skipped as malformed.
 	Warnings []string `json:"-"`
@@ -97,8 +124,13 @@ func (r *Record) ShortID() string {
 	return r.ID[:shortIDLen]
 }
 
-// DisplayID is the ID shown to users and used in branch names.
+// DisplayID is the ID shown to users and used in branch names: the tracker's
+// number for an issue born in the tracker, the short hash otherwise.
 func (r *Record) DisplayID() string {
+	if r.Tracker != nil && r.Tracker.Born {
+		return r.Tracker.ID
+	}
+
 	return r.ShortID()
 }
 
@@ -118,6 +150,9 @@ func Fold(id string, ops []Op) Record {
 			rec.Title, rec.Description, rec.BranchType = op.Title, op.Description, op.BranchType
 			if op.ID == id {
 				rec.CreatedAt = chain.ParseAt(op.At)
+				if op.TrackerID != "" {
+					rec.Tracker = &TrackerLink{Type: op.TrackerType, Project: op.Project, ID: op.TrackerID, Born: true}
+				}
 			}
 		case OpSetTitle:
 			rec.Title = op.Value
@@ -133,6 +168,18 @@ func Fold(id string, ops []Op) Record {
 			delete(labels, op.Value)
 		case OpAddComment:
 			rec.Comments = append(rec.Comments, Comment{ID: op.ID, Author: op.Author, At: chain.ParseAt(op.At), Body: op.Body})
+		case OpLinkTracker:
+			switch {
+			case op.TrackerID == "":
+			case rec.Tracker == nil:
+				rec.Tracker = &TrackerLink{Type: op.TrackerType, Project: op.Project, ID: op.TrackerID}
+			case rec.Tracker.ID != op.TrackerID && !slices.Contains(rec.DuplicateTrackerIDs, op.TrackerID):
+				rec.DuplicateTrackerIDs = append(rec.DuplicateTrackerIDs, op.TrackerID)
+			}
+		case OpTrackerState:
+			if op.Value == StateOpen || op.Value == StateClosed {
+				rec.TrackerState, rec.TrackerStatus = op.Value, op.Status
+			}
 		}
 	}
 
