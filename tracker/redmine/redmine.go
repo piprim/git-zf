@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/tracker"
@@ -22,6 +23,8 @@ const trackerType = "redmine"
 type status struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
+	//nolint:tagliatelle // Redmine wire format
+	IsClosed bool `json:"is_closed"`
 }
 
 type project struct {
@@ -36,6 +39,8 @@ type issue struct {
 	Description string   `json:"description"`
 	Status      *status  `json:"status"`
 	Project     *project `json:"project"`
+	//nolint:tagliatelle // Redmine wire format
+	CreatedOn time.Time `json:"created_on"`
 }
 
 type issuesResponse struct {
@@ -94,8 +99,14 @@ func (a *redmineAdapter) fetchIssues(ctx context.Context, path, project string) 
 		return nil, fmt.Errorf("fetch redmine issues: %w", err)
 	}
 
-	result := make([]tracker.Issue, 0, len(payload.Issues))
-	for _, iss := range payload.Issues {
+	return toIssues(payload.Issues, project), nil
+}
+
+// toIssues converts Redmine issues. Every issue is reported under project;
+// when project is empty, the name comes from the issue itself.
+func toIssues(issues []issue, project string) []tracker.Issue {
+	result := make([]tracker.Issue, 0, len(issues))
+	for _, iss := range issues {
 		statusName := ""
 		if iss.Status != nil {
 			statusName = iss.Status.Name
@@ -108,10 +119,11 @@ func (a *redmineAdapter) fetchIssues(ctx context.Context, path, project string) 
 			Description: iss.Description,
 			Status:      statusName,
 			Project:     cmp.Or(project, redmineProjectName(iss.Project)),
+			CreatedAt:   iss.CreatedOn,
 		})
 	}
 
-	return result, nil
+	return result
 }
 
 // getJSON GETs path, relative to the tracker URL, and decodes a 200 response
@@ -204,6 +216,13 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 		}
 	}
 
+	return a.setStatusID(ctx, issueID, statusID)
+}
+
+// setStatusID PUTs only the status_id: a minimal payload, because sending
+// every issue field (category_id:0 among them) triggers Redmine validation
+// errors on issues with no category assigned.
+func (a *redmineAdapter) setStatusID(ctx context.Context, issueID string, statusID int) error {
 	type issueUpdate struct {
 		//nolint:tagliatelle // Redmine need it
 		StatusID int `json:"status_id"`
@@ -213,6 +232,116 @@ func (a *redmineAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusN
 	}
 
 	return a.putIssue(ctx, issueID, "status", body{Issue: issueUpdate{StatusID: statusID}})
+}
+
+const projectPageSize = 100
+
+// project returns the single configured project.
+func (a *redmineAdapter) project() (string, error) {
+	if len(a.cfg.Projects) != 1 {
+		return "", fmt.Errorf("redmine: exactly one project must be configured (got %d)", len(a.cfg.Projects))
+	}
+
+	return a.cfg.Projects[0].FarSlug, nil
+}
+
+// ListProjectIssues fetches every open issue of the configured project,
+// whoever it is assigned to, walking offset until total_count.
+func (a *redmineAdapter) ListProjectIssues(ctx context.Context) ([]tracker.Issue, error) {
+	p, err := a.project()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []tracker.Issue
+
+	for offset := 0; ; offset += projectPageSize {
+		path := fmt.Sprintf("/projects/%s/issues.json?status_id=open&limit=%d&offset=%d",
+			url.PathEscape(p), projectPageSize, offset)
+
+		var payload issuesResponse
+		if _, err := a.getJSON(ctx, path, &payload); err != nil {
+			return nil, fmt.Errorf("redmine: list issues of %q: %w", p, err)
+		}
+
+		out = append(out, toIssues(payload.Issues, p)...)
+
+		if len(payload.Issues) == 0 || offset+len(payload.Issues) >= payload.TotalCount {
+			break
+		}
+	}
+
+	return out, nil
+}
+
+// CreateIssue creates an issue in the configured project via POST /issues.json.
+func (a *redmineAdapter) CreateIssue(ctx context.Context, title, description string) (tracker.Issue, error) {
+	p, err := a.project()
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+
+	type newIssue struct {
+		//nolint:tagliatelle // Redmine wire format
+		ProjectID   string `json:"project_id"`
+		Subject     string `json:"subject"`
+		Description string `json:"description"`
+	}
+
+	buf, err := json.Marshal(struct {
+		Issue newIssue `json:"issue"`
+	}{newIssue{ProjectID: p, Subject: title, Description: description}})
+	if err != nil {
+		return tracker.Issue{}, fmt.Errorf("redmine: marshal new issue: %w", err)
+	}
+
+	endpoint := strings.TrimRight(a.cfg.URL, "/") + "/issues.json"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
+	if err != nil {
+		return tracker.Issue{}, fmt.Errorf("redmine: build create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Redmine-API-Key", a.cfg.Token)
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return tracker.Issue{}, fmt.Errorf("redmine: create issue: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusCreated {
+		return tracker.Issue{}, fmt.Errorf("redmine: create issue: unexpected HTTP %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Issue issue `json:"issue"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return tracker.Issue{}, fmt.Errorf("redmine: decode created issue: %w", err)
+	}
+
+	return toIssues([]issue{payload.Issue}, p)[0], nil
+}
+
+// SetIssueOpen closes the issue with the tracker's first closed status, or
+// reopens it with its first status that is not closed: Redmine has no fixed
+// status names.
+func (a *redmineAdapter) SetIssueOpen(ctx context.Context, issueID string, open bool) error {
+	statuses, err := a.issueStatuses(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, s := range statuses {
+		if s.IsClosed != open {
+			return a.setStatusID(ctx, issueID, s.ID)
+		}
+	}
+
+	return fmt.Errorf("redmine: no status with is_closed=%t to set on issue %s", !open, issueID)
 }
 
 // AddComment adds body as a journal note via PUT /issues/{id}.json with
