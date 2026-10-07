@@ -2,7 +2,7 @@
 
 ## Enhancement
 
-- Issue mirror, repo <-> tracker. Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
+- Issue mirror, repo <-> tracker (first version shipped). Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
   - Several projects: project-aware tracker calls, project-qualified slugs, a project picker in `issue new`.
   - Sync of title, description, labels and comments.
   - `issue start` picker reading the mirror instead of the live "assigned to me" listing.

@@ -32,13 +32,15 @@ commit is signed when `commit.gpgsign` is true.
 
 | `type` | Fields | Effect |
 |---|---|---|
-| `create` | `title`, `description`, `branch_type` | First commit of the chain. |
+| `create` | `title`, `description`, `branch_type`; for an issue imported from the tracker also `tracker_type`, `project`, `tracker_id` | First commit of the chain. |
 | `set_title` | `value` | Replaces the title. Written by `git zf issue edit`. |
 | `set_description` | `value` | Replaces the description; no `value` clears it. Written by `git zf issue edit`. |
 | `set_state` | `value`: `open` or `closed` | Opens or closes the issue. |
 | `add_label` | `value` | Adds a label. |
 | `remove_label` | `value` | Removes a label; nothing happens if it is absent. |
 | `add_comment` | `body` | Adds a comment. |
+| `link_tracker` | `tracker_type`, `project`, `tracker_id` | The tracker issue a repo-born issue was created as. The first one wins. |
+| `tracker_state` | `value`: `open` or `closed`, `status` | The last tracker state the chain saw. |
 | `merge` | none | Two-parent commit joining changes made on two clones. |
 
 `v` is the format version, currently 1. `at` is RFC 3339, UTC.
@@ -70,3 +72,51 @@ clone: it adds the fetch refspec to every remote, so that a plain `git fetch`
 brings the issues and `git fetch --prune` does not delete their tracking refs.
 Without it, run `git zf issue sync`. The tracking refs appear in
 `git branch -r` as `<remote>/zf/issues/<id>`.
+
+## Tracker mirror
+
+With `mirror = true` under `[issue-tracker]` and exactly one
+`[[issue-tracker.projects]]` entry, the issues of that tracker project and the
+issues of the repository are one set:
+
+- every open tracker issue is imported as an issue ref;
+- every open repo-born issue is created in the tracker;
+- open/closed travels both ways.
+
+`git zf issue list`, `issue new`, `issue close <id>`, `issue close` (merge)
+and `issue sync` reconcile. `show`, `edit`, `comment` and `label` only read
+the refs: they see what another clone reconciled.
+
+### Identity of an imported issue
+
+The root commit of an imported issue is built from four values only: the
+tracker type, the project's near slug, the tracker's issue number and its
+creation date. Author, committer and dates are fixed and the commit is never
+signed, so two clones importing the same tracker issue write the same commit
+and therefore the same ref. Title and description follow as ordinary ops.
+
+The near slug is part of the identity; the far slug is not. Renaming the
+project in the tracker means editing `far-slug`. Changing `near-slug` imports
+every issue again under new IDs.
+
+### Which side moved
+
+Each reconcile compares the repo state, the tracker state, and the tracker
+state the chain last recorded (`tracker_state`). The side that differs from
+the recorded one moved, and the other follows. With two values, both sides
+moving means they agree.
+
+### Display
+
+An imported issue is shown, and names its branches, by its tracker number. A
+repo-born issue keeps its short hash; `issue list` shows `a1b2c3d (#57)` once
+it is exported. `issue show 57` finds either.
+
+### Limits
+
+- Two clones exporting the same issue at the same moment create two tracker
+  issues. One link wins; the other issue is reported on each reconcile until
+  it is closed in the tracker.
+- The project's open issues are listed in full on each reconcile.
+- Issues already closed in the tracker, or closed in the repository before
+  the mirror was on, are not mirrored.

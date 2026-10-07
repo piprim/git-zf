@@ -107,6 +107,41 @@ When adding an op type, add its constant and its `Fold` case in
 `issue/record.go` with a table case in `TestFold`. Unknown types must keep
 being skipped: an older binary reads refs written by a newer one.
 
+### Testing the tracker mirror
+
+With `[issue-tracker] mirror = true`, the repo issues are mirrored with one
+tracker project (`issue.Mirror`, `issue/mirror.go`). It is tested at four
+levels, on real on-disk repos and the fake tracker:
+
+- `issue/record_test.go` — `TestFold_Tracker`: the link and the tracker state.
+- `git/chain_ref_test.go` — `TestChainRef_FixedRoot`: the deterministic root,
+  pinned by a golden hash.
+- `issue/mirror_test.go` — `Reconcile`: import, export, the eight rows of the
+  state table (`TestReconcile_StateTable`), two clones importing offline.
+- `cmd/issue/mirror_e2e_test.go`, `close_mirror_e2e_test.go` — the commands.
+
+    mise exec -- go test ./issue/... -run "TestReconcile|TestFold_Tracker|TestResolve_TrackerNumber" -v
+    mise exec -- go test ./git/... -run "TestChainRef_FixedRoot" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestMirror|^TestClose_Mirror" -v
+
+The fake tracker is stateful for these calls: `CreateIssue` lists the issue,
+`SetIssueOpen` / `CloseIssue` / `ReopenIssue` move it in and out of the open
+listing. Use `CloseIssue` for "someone closed it in the tracker's UI": it is
+not recorded in `RecordedOpens`.
+
+`importRootTemplate` (`issue/mirror.go`) is frozen: the ID of every imported
+issue is the hash of a commit holding those bytes. Never edit it; if
+`TestChainRef_FixedRoot` fails on the golden hash, the code is wrong. Only
+`issue list` and the commands that create an issue or change its state
+reconcile; a new read-only command must not.
+
+`issue.List` reads every issue with `ReadAllChains` (three git processes) and
+`issue.PushAll` pushes many issues in one `git push` (`PushChainRefs`); a loop
+of `Load` or `Push` over many issues is the thing to avoid.
+
+    mise exec -- go test ./git/... -run "TestPushChainRefs" -v
+    mise exec -- go test ./issue/... -run "TestPushAll|TestList_" -v
+
 ### Testing the branch chains
 
 Tracked branches live in the repository (`refs/zf/branches/<slug>`, one chain
@@ -221,7 +256,7 @@ Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.to
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (4328 symbols, 18080 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (4407 symbols, 18194 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
