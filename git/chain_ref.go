@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const chainOpFile = "op.json"
@@ -79,13 +81,8 @@ func (c *Client) outputStdin(ctx context.Context, stdin []byte, args ...string) 
 	return strings.TrimSpace(string(out)), nil
 }
 
-// writeChainCommit stores payload as op.json in a new commit with the given
-// parents and returns the commit ID. It does not move any ref. The commit is
-// signed when sign is true or when commit.gpgsign is true: `git commit-tree`
-// ignores that setting on its own.
-func (c *Client) writeChainCommit(
-	ctx context.Context, payload []byte, message string, sign bool, parents ...string,
-) (string, error) {
+// chainTree stores payload as op.json and returns the tree holding it.
+func (c *Client) chainTree(ctx context.Context, payload []byte) (string, error) {
 	blob, err := c.outputStdin(ctx, payload, "hash-object", "-w", "--stdin")
 	if err != nil {
 		return "", fmt.Errorf("hash-object: %w", err)
@@ -94,6 +91,21 @@ func (c *Client) writeChainCommit(
 	tree, err := c.outputStdin(ctx, []byte("100644 blob "+blob+"\t"+chainOpFile+"\n"), "mktree")
 	if err != nil {
 		return "", fmt.Errorf("mktree: %w", err)
+	}
+
+	return tree, nil
+}
+
+// writeChainCommit stores payload as op.json in a new commit with the given
+// parents and returns the commit ID. It does not move any ref. The commit is
+// signed when sign is true or when commit.gpgsign is true: `git commit-tree`
+// ignores that setting on its own.
+func (c *Client) writeChainCommit(
+	ctx context.Context, payload []byte, message string, sign bool, parents ...string,
+) (string, error) {
+	tree, err := c.chainTree(ctx, payload)
+	if err != nil {
+		return "", err
 	}
 
 	args := []string{"commit-tree", tree, "-m", message}
@@ -133,6 +145,39 @@ func (c *Client) PublishChainRoot(ctx context.Context, ns ChainRefs, id, commit 
 	}
 
 	return nil
+}
+
+// The author and committer of every fixed chain root.
+const (
+	fixedRootName  = "git-zf"
+	fixedRootEmail = "git-zf@localhost"
+)
+
+// WriteFixedChainRoot writes payload as a root commit whose ID depends only
+// on payload, message and when: the author and committer are fixed, both dated
+// when, and the commit is never signed. Two clones calling it with the same
+// arguments get the same commit. It does not move any ref.
+func (c *Client) WriteFixedChainRoot(
+	ctx context.Context, payload []byte, message string, when time.Time,
+) (string, error) {
+	tree, err := c.chainTree(ctx, payload)
+	if err != nil {
+		return "", err
+	}
+
+	date := fmt.Sprintf("@%d +0000", when.Unix())
+	// A configured i18n.commitEncoding would add an encoding header.
+	cmd := c.gitCmd(ctx, "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-m", message)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME="+fixedRootName, "GIT_AUTHOR_EMAIL="+fixedRootEmail, "GIT_AUTHOR_DATE="+date,
+		"GIT_COMMITTER_NAME="+fixedRootName, "GIT_COMMITTER_EMAIL="+fixedRootEmail, "GIT_COMMITTER_DATE="+date)
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("commit-tree: %w", gitStderr(err))
+	}
+
+	return strings.TrimSpace(string(out)), nil
 }
 
 // AppendChainCommit writes payload as a new commit on top of chain id and

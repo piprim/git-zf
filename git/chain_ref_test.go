@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // originRefs lists the ref names the bare origin has under prefix.
@@ -521,6 +522,70 @@ func TestChainRef_ReadAllChains(t *testing.T) {
 		chains, legacy, err := solo.ReadAllChains(ctx, BranchRefs)
 		if err != nil || len(chains) != 0 || len(legacy) != 0 {
 			t.Errorf("ReadAllChains = %v, %v, %v", chains, legacy, err)
+		}
+	})
+}
+
+func TestChainRef_FixedRoot(t *testing.T) {
+	t.Parallel()
+
+	const (
+		payload = `{"v":1,"type":"create","at":"2026-10-01T10:00:00Z","tracker_type":"forgejo","project":"zf","tracker_id":"42"}`
+		golden  = "619c562f9fa770a8ecd7cdee1f10f4ad168ef053"
+	)
+	when := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	ctx := t.Context()
+
+	a, _ := newDiskRepo(t)
+	b, dirB := newDiskRepo(t)
+
+	// Everything an ordinary commit depends on differs in b.
+	for key, value := range map[string]string{
+		"user.name": "Somebody Else", "user.email": "else@example.org",
+		"commit.gpgsign": "true", "i18n.commitEncoding": "ISO-8859-1",
+	} {
+		if out, err := exec.CommandContext(ctx, "git", "-C", dirB, "config", key, value).CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", key, err, out)
+		}
+	}
+
+	rootA, errA := a.WriteFixedChainRoot(ctx, []byte(payload), "create", when)
+	rootB, errB := b.WriteFixedChainRoot(ctx, []byte(payload), "create", when)
+
+	t.Run("it succeeds in both repositories", func(t *testing.T) {
+		if errA != nil || errB != nil {
+			t.Fatalf("WriteFixedChainRoot: %v / %v", errA, errB)
+		}
+	})
+	t.Run("two repositories with different identities get the same commit", func(t *testing.T) {
+		if rootA != rootB {
+			t.Errorf("roots differ: %s vs %s", rootA, rootB)
+		}
+	})
+	t.Run("the commit ID is the golden hash", func(t *testing.T) {
+		if rootA != golden {
+			t.Errorf("root = %s, want %s", rootA, golden)
+		}
+	})
+	t.Run("the commit is unsigned and has no parent", func(t *testing.T) {
+		out, err := exec.CommandContext(ctx, "git", "-C", dirB, "cat-file", "-p", rootB).CombinedOutput()
+		if err != nil {
+			t.Fatalf("cat-file: %v\n%s", err, out)
+		}
+		if s := string(out); strings.Contains(s, "gpgsig") || strings.Contains(s, "parent ") {
+			t.Errorf("commit =\n%s", s)
+		}
+	})
+	t.Run("another date gives another commit", func(t *testing.T) {
+		other, err := a.WriteFixedChainRoot(ctx, []byte(payload), "create", when.Add(time.Second))
+		if err != nil || other == rootA {
+			t.Errorf("other = %s (%v), want a different commit", other, err)
+		}
+	})
+	t.Run("no ref is created", func(t *testing.T) {
+		tip, err := a.ChainTip(ctx, IssueRefs, rootA)
+		if err != nil || tip != "" {
+			t.Errorf("tip = %q (%v), want none", tip, err)
 		}
 	})
 }
