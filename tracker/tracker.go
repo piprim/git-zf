@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/piprim/git-zf/config"
 )
@@ -20,6 +21,9 @@ type Issue struct {
 	Description string
 	Status      string
 	Project     string
+	// CreatedAt is when the tracker says the issue was created; zero when the
+	// call that built the Issue does not report it.
+	CreatedAt time.Time
 }
 
 // ErrIssueNotFound is returned by IsIssueClosed when the tracker has no record
@@ -41,6 +45,15 @@ type Tracker interface {
 	IsIssueClosed(ctx context.Context, issueID string) (bool, error)
 	// AddComment posts body as a comment on issueID.
 	AddComment(ctx context.Context, issueID, body string) error
+	// ListProjectIssues retrieves every open issue of the single configured
+	// project, whoever it is assigned to. It is the issue mirror's listing.
+	ListProjectIssues(ctx context.Context) ([]Issue, error)
+	// CreateIssue creates an issue in the single configured project and
+	// returns it with the ID and status the tracker gave it.
+	CreateIssue(ctx context.Context, title, description string) (Issue, error)
+	// SetIssueOpen reopens (open) or closes issueID, with whatever status the
+	// tracker uses for that.
+	SetIssueOpen(ctx context.Context, issueID string, open bool) error
 }
 
 var registry = make(map[string]func(config.IssueTrackerConfig) (Tracker, error))

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/tracker"
@@ -504,4 +505,117 @@ func far(slugs ...string) []config.TrackerProject {
 	}
 
 	return out
+}
+
+func TestListProjectIssues(t *testing.T) {
+	t.Parallel()
+
+	a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/a/b/issues" || r.URL.Query().Get("state") != "open" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.String(), http.StatusBadRequest)
+
+			return
+		}
+		if r.URL.Query().Get("page") == "2" {
+			fmt.Fprint(w, `[{"number": 9, "title": "Second page", "state": "open", "created_at": "2026-09-03T08:00:00Z"}]`)
+
+			return
+		}
+		w.Header().Set("Link", `<http://`+r.Host+`/repos/a/b/issues?state=open&page=2>; rel="next"`)
+		fmt.Fprint(w, `[
+			{"number": 7, "title": "Bug", "body": "Steps", "state": "open", "created_at": "2026-09-01T08:00:00Z"},
+			{"number": 8, "title": "A pull request", "state": "open", "pull_request": {"url": "x"}, "created_at": "2026-09-02T08:00:00Z"}
+		]`)
+	})
+
+	got, err := a.ListProjectIssues(t.Context())
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("ListProjectIssues: %v", err)
+		}
+	})
+	t.Run("pull requests are dropped and every page is read", func(t *testing.T) {
+		if len(got) != 2 || got[0].ID != "7" || got[1].ID != "9" {
+			t.Fatalf("issues = %+v", got)
+		}
+	})
+	t.Run("an issue carries its fields and creation date", func(t *testing.T) {
+		want := tracker.Issue{
+			TrackerType: "github", ID: "7", Subject: "Bug", Description: "Steps", Status: "open", Project: "a/b",
+			CreatedAt: time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC),
+		}
+		if len(got) == 0 || !got[0].CreatedAt.Equal(want.CreatedAt) {
+			t.Fatalf("CreatedAt = %v", got)
+		}
+		got[0].CreatedAt = want.CreatedAt
+		if got[0] != want {
+			t.Errorf("issue = %+v, want %+v", got[0], want)
+		}
+	})
+}
+
+func TestCreateIssue(t *testing.T) {
+	t.Parallel()
+
+	var sent struct{ Title, Body string }
+	a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/repos/a/b/issues" {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"number": 57, "title": "Bug", "state": "open", "created_at": "2026-09-01T08:00:00Z"}`)
+	})
+
+	got, err := a.CreateIssue(t.Context(), "Bug", "Steps")
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("CreateIssue: %v", err)
+		}
+	})
+	t.Run("the title and description are sent", func(t *testing.T) {
+		if sent.Title != "Bug" || sent.Body != "Steps" {
+			t.Errorf("sent = %+v", sent)
+		}
+	})
+	t.Run("the created issue's number and status are returned", func(t *testing.T) {
+		if got.ID != "57" || got.Status != "open" {
+			t.Errorf("issue = %+v", got)
+		}
+	})
+}
+
+func TestSetIssueOpen(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		open bool
+		want string
+	}{"closing sends closed": {false, "closed"}, "reopening sends open": {true, "open"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var sent struct{ State string }
+			a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPatch || r.URL.Path != "/repos/a/b/issues/57" {
+					http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+
+					return
+				}
+				_ = json.NewDecoder(r.Body).Decode(&sent)
+				fmt.Fprint(w, `{"number": 57}`)
+			})
+
+			if err := a.SetIssueOpen(t.Context(), "57", tc.open); err != nil {
+				t.Fatalf("SetIssueOpen: %v", err)
+			}
+			if sent.State != tc.want {
+				t.Errorf("state sent = %q, want %q", sent.State, tc.want)
+			}
+		})
+	}
 }

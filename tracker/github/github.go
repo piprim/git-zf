@@ -94,6 +94,82 @@ func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error)
 	return out, nil
 }
 
+// toIssue converts a GitHub issue of project (an "owner/repo").
+func toIssue(iss *gogithub.Issue, project string) tracker.Issue {
+	return tracker.Issue{
+		TrackerType: trackerType,
+		ID:          strconv.Itoa(iss.GetNumber()),
+		Subject:     iss.GetTitle(),
+		Description: iss.GetBody(),
+		Status:      iss.GetState(),
+		Project:     project,
+		CreatedAt:   iss.GetCreatedAt().Time,
+	}
+}
+
+// ListProjectIssues fetches every open issue of the configured repository,
+// whoever it is assigned to, page after page, and drops pull requests.
+func (a *githubAdapter) ListProjectIssues(ctx context.Context) ([]tracker.Issue, error) {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return nil, err
+	}
+
+	opt := &gogithub.IssueListByRepoOptions{
+		State:       statusOpen,
+		ListOptions: gogithub.ListOptions{PerPage: issuesPerPage},
+	}
+
+	var out []tracker.Issue
+
+	for {
+		page, resp, err := a.client.Issues.ListByRepo(ctx, owner, repo, opt)
+		if err != nil {
+			return nil, fmt.Errorf("github: list issues of %s/%s: %w", owner, repo, err)
+		}
+
+		for _, iss := range page {
+			if !iss.IsPullRequest() {
+				out = append(out, toIssue(iss, owner+"/"+repo))
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opt.ListOptions.Page = resp.NextPage
+	}
+
+	return out, nil
+}
+
+// CreateIssue creates an issue in the configured repository.
+func (a *githubAdapter) CreateIssue(ctx context.Context, title, description string) (tracker.Issue, error) {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+
+	iss, _, err := a.client.Issues.Create(ctx, owner, repo,
+		&gogithub.IssueRequest{Title: gogithub.Ptr(title), Body: gogithub.Ptr(description)})
+	if err != nil {
+		return tracker.Issue{}, fmt.Errorf("github: create issue: %w", err)
+	}
+
+	return toIssue(iss, owner+"/"+repo), nil
+}
+
+// SetIssueOpen reopens (open) or closes the issue.
+func (a *githubAdapter) SetIssueOpen(ctx context.Context, issueID string, open bool) error {
+	state := statusClosed
+	if open {
+		state = statusOpen
+	}
+
+	return a.UpdateIssueStatus(ctx, issueID, state)
+}
+
 // ListStatuses returns the static set of GitHub issue states (open, closed).
 func (*githubAdapter) ListStatuses(_ context.Context) ([]string, error) {
 	return []string{statusOpen, statusClosed}, nil
