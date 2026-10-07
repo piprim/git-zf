@@ -70,7 +70,7 @@ func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error)
 			}
 
 			proj := iss.GetRepository().GetFullName()
-			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.Projects, proj) {
+			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.FarSlugs(), proj) {
 				continue
 			}
 
@@ -106,9 +106,9 @@ func (a *githubAdapter) ownerRepo() (owner, repo string, err error) {
 		return "", "", errors.New("github: exactly one project must be configured (got " + strconv.Itoa(len(a.cfg.Projects)) + ")")
 	}
 
-	owner, repo, ok := strings.Cut(a.cfg.Projects[0], "/")
+	owner, repo, ok := strings.Cut(a.cfg.Projects[0].FarSlug, "/")
 	if !ok || owner == "" || repo == "" {
-		return "", "", fmt.Errorf("github: invalid project %q (expected owner/repo)", a.cfg.Projects[0])
+		return "", "", fmt.Errorf("github: invalid project %q (expected owner/repo)", a.cfg.Projects[0].FarSlug)
 	}
 
 	return owner, repo, nil

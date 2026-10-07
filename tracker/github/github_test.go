@@ -59,7 +59,7 @@ func TestNew(t *testing.T) {
 func newTestAdapter(t *testing.T, srv *httptest.Server, projects []string) *githubAdapter {
 	t.Helper()
 
-	a, err := New(config.IssueTrackerConfig{Token: "test", Projects: projects})
+	a, err := New(config.IssueTrackerConfig{Token: "test", Projects: far(projects...)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 	t.Run("returns error when multiple projects are configured", func(t *testing.T) {
 		t.Parallel()
 
-		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: []string{"a/b", "c/d"}})
+		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: far("a/b", "c/d")})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -320,7 +320,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 	t.Run("returns error for a malformed owner/repo project string", func(t *testing.T) {
 		t.Parallel()
 
-		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: []string{"onlyone"}})
+		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: far("onlyone")})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -494,4 +494,14 @@ func TestAddComment(t *testing.T) {
 			t.Error("expected error for non-numeric id")
 		}
 	})
+}
+
+// far builds the projects config from tracker-side names.
+func far(slugs ...string) []config.TrackerProject {
+	out := make([]config.TrackerProject, len(slugs))
+	for i, s := range slugs {
+		out[i] = config.TrackerProject{NearSlug: fmt.Sprintf("p%d", i), FarSlug: s}
+	}
+
+	return out
 }

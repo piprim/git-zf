@@ -400,7 +400,7 @@ func TestListIssues(t *testing.T) {
 		srv := httptest.NewServer(mux)
 		defer srv.Close()
 
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		issues, err := a.ListIssues(t.Context())
 		if err != nil {
@@ -500,7 +500,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 		t.Parallel()
 
 		srv, rec := newPatchServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.UpdateIssueStatus(t.Context(), "42", "closed"); err != nil {
 			t.Fatalf("UpdateIssueStatus: %v", err)
@@ -519,7 +519,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 		t.Parallel()
 
 		srv, rec := newPatchServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.UpdateIssueStatus(t.Context(), "42", "open"); err != nil {
 			t.Fatalf("UpdateIssueStatus: %v", err)
@@ -534,7 +534,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 		t.Parallel()
 
 		srv, rec := newPatchServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.UpdateIssueStatus(t.Context(), "42", "WIP"); err == nil {
 			t.Fatal("expected error for unknown status, got nil")
@@ -564,7 +564,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 		t.Parallel()
 
 		srv, _ := newPatchServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b", "c/d"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b", "c/d")})
 
 		if err := a.UpdateIssueStatus(t.Context(), "42", "closed"); err == nil {
 			t.Error("expected error when Projects has 2+ entries, got nil")
@@ -575,7 +575,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 		t.Parallel()
 
 		srv, _ := newPatchServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"onlyone"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("onlyone")})
 
 		if err := a.UpdateIssueStatus(t.Context(), "42", "closed"); err == nil {
 			t.Error(`expected error when Projects[0] is not "owner/repo", got nil`)
@@ -586,7 +586,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 		t.Parallel()
 
 		srv, rec := newPatchServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.UpdateIssueStatus(t.Context(), "not-a-number", "closed"); err == nil {
 			t.Fatal("expected error for non-integer issue id, got nil")
@@ -608,7 +608,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 		srv := httptest.NewServer(mux)
 		defer srv.Close()
 
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.UpdateIssueStatus(t.Context(), "42", "closed"); err == nil {
 			t.Fatal("expected error on 403, got nil")
@@ -630,7 +630,7 @@ func TestIsIssueClosed(t *testing.T) {
 		srv := httptest.NewServer(mux)
 		t.Cleanup(srv.Close)
 
-		return newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		return newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 	}
 
 	t.Run("returns true for closed issue", func(t *testing.T) {
@@ -758,7 +758,7 @@ func TestAddComment(t *testing.T) {
 		t.Parallel()
 
 		srv, rec := newCommentServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.AddComment(t.Context(), "42", "needs tests"); err != nil {
 			t.Fatalf("AddComment: %v", err)
@@ -780,7 +780,7 @@ func TestAddComment(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 		}))
 		t.Cleanup(srv.Close)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.AddComment(t.Context(), "42", "x"); err == nil {
 			t.Error("expected error on 403, got nil")
@@ -791,7 +791,7 @@ func TestAddComment(t *testing.T) {
 		t.Parallel()
 
 		srv, rec := newCommentServer(t)
-		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: []string{"a/b"}})
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: far("a/b")})
 
 		if err := a.AddComment(t.Context(), "abc", "x"); err == nil {
 			t.Error("expected error for non-numeric id")
@@ -801,4 +801,14 @@ func TestAddComment(t *testing.T) {
 			t.Errorf("server hits = %d, want 0", rec.hits)
 		}
 	})
+}
+
+// far builds the projects config from tracker-side names.
+func far(slugs ...string) []config.TrackerProject {
+	out := make([]config.TrackerProject, len(slugs))
+	for i, s := range slugs {
+		out[i] = config.TrackerProject{NearSlug: fmt.Sprintf("p%d", i), FarSlug: s}
+	}
+
+	return out
 }

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	toml "github.com/pelletier/go-toml"
 	"github.com/piprim/git-zf/internal/gitdir"
@@ -77,13 +79,97 @@ type ReviewConfig struct {
 	RequireSigned bool `json:"require-signed" toml:"require-signed"`
 }
 
+// TrackerProject names one tracker project twice. NearSlug is the stable local
+// name stored in the repository; Load lowercases it. FarSlug is what the
+// tracker calls the project, passed to it as written.
+type TrackerProject struct {
+	NearSlug string `json:"near-slug" toml:"near-slug"`
+	FarSlug  string `json:"far-slug"  toml:"far-slug"`
+}
+
 // IssueTrackerConfig holds connection parameters for one tracker instance.
 // Never log values of this type — Token is a secret.
 type IssueTrackerConfig struct {
-	Type     string   `json:"type"     toml:"type"`
-	URL      string   `json:"url"      toml:"url"`
-	Token    string   `json:"token"    toml:"token"`
-	Projects []string `json:"projects" toml:"projects"`
+	Type   string `json:"type"   toml:"type"`
+	URL    string `json:"url"    toml:"url"`
+	Token  string `json:"token"  toml:"token"`
+	Mirror bool   `json:"mirror" toml:"mirror"`
+
+	Projects []TrackerProject `json:"projects" toml:"projects"`
+}
+
+// FarSlugs returns the tracker-side names of the configured projects.
+func (c IssueTrackerConfig) FarSlugs() []string {
+	out := make([]string, len(c.Projects))
+	for i, p := range c.Projects {
+		out[i] = p.FarSlug
+	}
+
+	return out
+}
+
+var nearSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// normalize lowercases the near slugs and checks the projects and the mirror
+// switch.
+func (c *IssueTrackerConfig) normalize() error {
+	seen := make(map[string]bool, len(c.Projects))
+	for i := range c.Projects {
+		p := &c.Projects[i]
+		p.NearSlug = strings.ToLower(p.NearSlug)
+
+		switch {
+		case !nearSlugRe.MatchString(p.NearSlug):
+			return fmt.Errorf(
+				"issue-tracker.projects: near-slug %q must be letters, digits and dashes, starting with a letter or a digit",
+				p.NearSlug)
+		case p.FarSlug == "":
+			return fmt.Errorf("issue-tracker.projects: project %q has no far-slug", p.NearSlug)
+		case seen[p.NearSlug]:
+			return fmt.Errorf("issue-tracker.projects: near-slug %q is used twice", p.NearSlug)
+		}
+		seen[p.NearSlug] = true
+	}
+
+	if c.Mirror && (c.Type == "" || len(c.Projects) != 1) {
+		return errors.New(
+			"issue-tracker: mirror = true needs a tracker type and exactly one [[issue-tracker.projects]] entry")
+	}
+
+	return nil
+}
+
+const projectsKey = "issue-tracker.projects"
+
+const oldProjectsHelp = `issue-tracker.projects is no longer a list of strings. Write one table per project:
+
+    [[issue-tracker.projects]]
+    near-slug = "myproject"     # stable local name
+    far-slug  = "owner/repo"    # what the tracker calls it`
+
+// unmarshalFile decodes one config file into cfg. The former string form of
+// issue-tracker.projects is an error; an empty array, which older default
+// configs wrote, is dropped: the decoder cannot turn it into a struct slice.
+func unmarshalFile(b []byte, cfg *AppConfig) error {
+	tree, err := toml.LoadBytes(b)
+	if err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+
+	if old, ok := tree.Get(projectsKey).([]any); ok {
+		if len(old) > 0 {
+			return errors.New(oldProjectsHelp)
+		}
+		if err := tree.Delete(projectsKey); err != nil {
+			return fmt.Errorf("drop empty projects: %w", err)
+		}
+	}
+
+	if err := tree.Unmarshal(cfg); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+
+	return nil
 }
 
 // AppConfig is the top-level configuration for the application.
@@ -119,7 +205,7 @@ func Load(paths ...string) (*AppConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read config %s: %w", path, err)
 		}
-		if err := toml.Unmarshal(b, &cfg); err != nil {
+		if err := unmarshalFile(b, &cfg); err != nil {
 			return nil, fmt.Errorf("parse config %s: %w", path, err)
 		}
 
@@ -128,6 +214,10 @@ func Load(paths ...string) (*AppConfig, error) {
 	}
 
 	cfg.ProgName = ProgName
+
+	if err := cfg.IssueTracker.normalize(); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 
 	return &cfg, nil
 }

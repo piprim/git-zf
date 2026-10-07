@@ -69,10 +69,10 @@ base = ""
 remote = ""
 
 [issue-tracker]
-projects = []
 type = ""
 url = ""
 token = ""
+mirror = false
 
 [push]
 propose = true

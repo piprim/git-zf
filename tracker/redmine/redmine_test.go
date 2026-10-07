@@ -146,7 +146,7 @@ func TestListIssues(t *testing.T) {
 			adapter, err := redmine.New(config.IssueTrackerConfig{
 				URL:      srv.URL,
 				Token:    "k",
-				Projects: []string{project},
+				Projects: far(project),
 			})
 			if err != nil {
 				t.Fatalf("New: %v", err)
@@ -182,7 +182,7 @@ func TestListIssues(t *testing.T) {
 		adapter, err := redmine.New(config.IssueTrackerConfig{
 			URL:      srv.URL,
 			Token:    "k",
-			Projects: []string{"cpro"},
+			Projects: far("cpro"),
 		})
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -218,7 +218,7 @@ func TestListIssues(t *testing.T) {
 		adapter, err := redmine.New(config.IssueTrackerConfig{
 			URL:      srv.URL,
 			Token:    "k",
-			Projects: []string{"foo", "bar"},
+			Projects: far("foo", "bar"),
 		})
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -245,7 +245,7 @@ func TestListIssues(t *testing.T) {
 		adapter, err := redmine.New(config.IssueTrackerConfig{
 			URL:      srv.URL,
 			Token:    "k",
-			Projects: []string{"nope"},
+			Projects: far("nope"),
 		})
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -495,4 +495,14 @@ func TestAddComment(t *testing.T) {
 			t.Error("expected error on 422, got nil")
 		}
 	})
+}
+
+// far builds the projects config from tracker-side names.
+func far(slugs ...string) []config.TrackerProject {
+	out := make([]config.TrackerProject, len(slugs))
+	for i, s := range slugs {
+		out[i] = config.TrackerProject{NearSlug: fmt.Sprintf("p%d", i), FarSlug: s}
+	}
+
+	return out
 }

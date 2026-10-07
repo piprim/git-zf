@@ -72,7 +72,7 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 
 	var out []tracker.Issue
 
-	for _, p := range a.cfg.Projects {
+	for _, p := range a.cfg.FarSlugs() {
 		issues, err := a.fetchIssues(ctx, "/projects/"+url.PathEscape(p)+"/issues.json?status_id=open&limit=100", p)
 		if err != nil {
 			return nil, fmt.Errorf("project %q: %w", p, err)

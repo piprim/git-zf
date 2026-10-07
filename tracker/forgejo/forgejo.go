@@ -217,7 +217,7 @@ func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 				proj = iss.Repository.FullName
 			}
 
-			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.Projects, proj) {
+			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.FarSlugs(), proj) {
 				continue
 			}
 
@@ -247,9 +247,9 @@ func (a *forgejoAdapter) ownerRepo() (owner, repo string, err error) {
 		return "", "", fmt.Errorf("forgejo: exactly one project must be configured (got %d)", len(a.cfg.Projects))
 	}
 
-	owner, repo, ok := strings.Cut(a.cfg.Projects[0], "/")
+	owner, repo, ok := strings.Cut(a.cfg.Projects[0].FarSlug, "/")
 	if !ok || owner == "" || repo == "" {
-		return "", "", fmt.Errorf("forgejo: invalid project %q (expected owner/repo)", a.cfg.Projects[0])
+		return "", "", fmt.Errorf("forgejo: invalid project %q (expected owner/repo)", a.cfg.Projects[0].FarSlug)
 	}
 
 	return owner, repo, nil

@@ -113,34 +113,6 @@ required = true
 		}
 	})
 
-	t.Run("reads projects list from a TOML config file", func(t *testing.T) {
-		t.Parallel()
-
-		cfgPath := writeTOML(t, `
-[issue-tracker]
-type = "github"
-url = "https://api.github.com"
-token = "x"
-projects = ["a/b", "c/d"]
-`)
-
-		cfg, err := config.Load(cfgPath)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-
-		want := []string{"a/b", "c/d"}
-		if !slices.Equal(cfg.IssueTracker.Projects, want) {
-			t.Errorf("Projects = %v, want %v", cfg.IssueTracker.Projects, want)
-		}
-
-		t.Run("records the source path in ConfigFile", func(t *testing.T) {
-			if cfg.ConfigFile != cfgPath {
-				t.Errorf("ConfigFile = %q, want %q", cfg.ConfigFile, cfgPath)
-			}
-		})
-	})
-
 	t.Run("merges global and local TOML files, local wins", func(t *testing.T) {
 		t.Parallel()
 
@@ -385,6 +357,137 @@ func TestRepoPath(t *testing.T) {
 
 		if got := config.RepoPath(); got != "" {
 			t.Errorf("RepoPath() = %q, want empty", got)
+		}
+	})
+}
+
+func TestLoadTrackerProjects(t *testing.T) {
+	t.Parallel()
+
+	load := func(t *testing.T, blob string) (*config.AppConfig, error) {
+		t.Helper()
+
+		return config.Load(writeTOML(t, blob))
+	}
+
+	t.Run("reads near and far slugs and lowercases the near slug", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := load(t, `
+[issue-tracker]
+type = "forgejo"
+
+[[issue-tracker.projects]]
+near-slug = "ZF"
+far-slug = "Piprim/Git-ZF"
+`)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		want := []config.TrackerProject{{NearSlug: "zf", FarSlug: "Piprim/Git-ZF"}}
+		if !slices.Equal(cfg.IssueTracker.Projects, want) {
+			t.Errorf("Projects = %+v, want %+v", cfg.IssueTracker.Projects, want)
+		}
+	})
+
+	t.Run("FarSlugs lists the tracker-side names", func(t *testing.T) {
+		t.Parallel()
+
+		c := config.IssueTrackerConfig{Projects: []config.TrackerProject{
+			{NearSlug: "a", FarSlug: "o/a"}, {NearSlug: "b", FarSlug: "o/b"},
+		}}
+		if got := c.FarSlugs(); !slices.Equal(got, []string{"o/a", "o/b"}) {
+			t.Errorf("FarSlugs = %v", got)
+		}
+	})
+
+	t.Run("the old string form is rejected and the message shows the new form", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := load(t, "[issue-tracker]\nprojects = [\"a/b\"]\n")
+		if err == nil || !strings.Contains(err.Error(), "[[issue-tracker.projects]]") {
+			t.Errorf("err = %v, want one naming [[issue-tracker.projects]]", err)
+		}
+	})
+
+	t.Run("an empty projects array is the same as none", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := load(t, "[issue-tracker]\nprojects = []\n")
+		if err != nil || len(cfg.IssueTracker.Projects) != 0 {
+			t.Errorf("err = %v, cfg = %+v", err, cfg)
+		}
+	})
+
+	rejected := map[string]string{
+		"two near slugs differing only by case": `
+[[issue-tracker.projects]]
+near-slug = "zf"
+far-slug = "o/a"
+[[issue-tracker.projects]]
+near-slug = "ZF"
+far-slug = "o/b"
+`,
+		"a near slug with a space": `
+[[issue-tracker.projects]]
+near-slug = "my project"
+far-slug = "o/a"
+`,
+		"an empty near slug": `
+[[issue-tracker.projects]]
+far-slug = "o/a"
+`,
+		"an empty far slug": `
+[[issue-tracker.projects]]
+near-slug = "zf"
+`,
+		"mirror without a project": `
+[issue-tracker]
+type = "forgejo"
+mirror = true
+`,
+		"mirror with two projects": `
+[issue-tracker]
+type = "forgejo"
+mirror = true
+[[issue-tracker.projects]]
+near-slug = "a"
+far-slug = "o/a"
+[[issue-tracker.projects]]
+near-slug = "b"
+far-slug = "o/b"
+`,
+		"mirror without a tracker type": `
+[issue-tracker]
+mirror = true
+[[issue-tracker.projects]]
+near-slug = "a"
+far-slug = "o/a"
+`,
+	}
+	for name, blob := range rejected {
+		t.Run(name+" is rejected", func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := load(t, blob); err == nil {
+				t.Error("Load: want an error, got nil")
+			}
+		})
+	}
+
+	t.Run("mirror with a type and one project loads", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := load(t, `
+[issue-tracker]
+type = "forgejo"
+mirror = true
+[[issue-tracker.projects]]
+near-slug = "zf"
+far-slug = "o/a"
+`)
+		if err != nil || !cfg.IssueTracker.Mirror {
+			t.Errorf("Mirror = %v, err = %v", cfg != nil && cfg.IssueTracker.Mirror, err)
 		}
 	})
 }
