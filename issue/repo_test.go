@@ -427,3 +427,110 @@ func TestSync_RepushesWhenTheRemoteLacksTheIssue(t *testing.T) {
 		}
 	})
 }
+
+func TestPushAll(t *testing.T) {
+	t.Parallel()
+
+	origin := newOrigin(t)
+	a, b := newRepo(t, "alice", origin), newRepo(t, "bob", origin)
+	ctx := t.Context()
+
+	first, err := Create(ctx, a, NewIssue{Title: "First", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	second, err := Create(ctx, a, NewIssue{Title: "Second", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	t.Run("both issues reach the remote in one push", func(t *testing.T) {
+		if err := PushAll(ctx, a, []string{first.ID, second.ID}); err != nil {
+			t.Fatalf("PushAll: %v", err)
+		}
+		if _, err := Fetch(ctx, b); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if records, _, _ := List(ctx, b); len(records) != 2 {
+			t.Errorf("bob has %d issues, want 2", len(records))
+		}
+	})
+
+	t.Run("a rejected push is merged and retried", func(t *testing.T) {
+		if err := Append(ctx, b, first.ID, &Op{Type: OpAddComment, Body: "from bob"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		if err := Push(ctx, b, first.ID); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		for _, id := range []string{first.ID, second.ID} {
+			if err := Append(ctx, a, id, &Op{Type: OpAddComment, Body: "from alice"}); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+		}
+
+		if err := PushAll(ctx, a, []string{first.ID, second.ID}); err != nil {
+			t.Fatalf("PushAll after a divergence: %v", err)
+		}
+		rec, err := Load(ctx, a, first.ID)
+		if err != nil || len(rec.Comments) != 2 {
+			t.Errorf("alice's first issue has %d comments (%v), want both", len(rec.Comments), err)
+		}
+	})
+
+	t.Run("no ids and no remote are no-ops", func(t *testing.T) {
+		alone := newRepo(t, "carol", "")
+		rec, err := Create(ctx, alone, NewIssue{Title: "Alone", BranchType: "fix"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := PushAll(ctx, alone, nil); err != nil {
+			t.Errorf("PushAll(nil) = %v", err)
+		}
+		if err := PushAll(ctx, alone, []string{rec.ID}); err != nil {
+			t.Errorf("PushAll without a remote = %v", err)
+		}
+	})
+}
+
+// Review Focus 6.
+func TestList_SkipsARefThatIsNotARoot(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+
+	good, err := Create(ctx, c, NewIssue{Title: "Good", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := Append(ctx, c, good.ID, &Op{Type: OpAddComment, Body: "second commit"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	tip, err := c.ChainTip(ctx, git.IssueRefs, good.ID)
+	if err != nil {
+		t.Fatalf("ChainTip: %v", err)
+	}
+	// A ref named after a commit that is not its chain's root.
+	if err := c.PublishChainRoot(ctx, git.IssueRefs, tip, tip); err != nil {
+		t.Fatalf("PublishChainRoot: %v", err)
+	}
+
+	records, warnings, err := List(ctx, c)
+
+	t.Run("the good issue is listed", func(t *testing.T) {
+		if err != nil || len(records) != 1 || records[0].ID != good.ID {
+			t.Errorf("records = %+v, err = %v", records, err)
+		}
+	})
+	t.Run("the bad ref is a warning naming it", func(t *testing.T) {
+		if len(warnings) != 1 || !strings.Contains(warnings[0], tip) {
+			t.Errorf("warnings = %v", warnings)
+		}
+	})
+	t.Run("Load refuses the bad ref", func(t *testing.T) {
+		if _, err := Load(ctx, c, tip); !errors.Is(err, git.ErrIssueRefCorrupt) {
+			t.Errorf("Load = %v, want ErrIssueRefCorrupt", err)
+		}
+	})
+}

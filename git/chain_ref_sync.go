@@ -251,6 +251,52 @@ func (c *Client) PushChainRef(ctx context.Context, ns ChainRefs, id string) erro
 	return nil
 }
 
+// PushChainRefs pushes the refs of chains ids in one git push, fast-forward
+// only like PushChainRef, then moves their tracking refs in one update-ref.
+// A rejected ref fails the call; the other refs may have gone through, and the
+// next push reports them up to date. No-op without a remote or without ids.
+func (c *Client) PushChainRefs(ctx context.Context, ns ChainRefs, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	remote, err := c.Remote()
+	if err != nil {
+		return fmt.Errorf("resolve remote: %w", err)
+	}
+	if remote == "" {
+		return nil
+	}
+
+	tips, err := c.chainTips(ctx, ns.prefix())
+	if err != nil {
+		return err
+	}
+
+	args := []string{"push", "--quiet", remote}
+	var updates strings.Builder
+	for _, id := range ids {
+		tip, ok := tips[id]
+		if !ok || !tip.commit {
+			return fmt.Errorf("%s: %w", id, ErrIssueNotFound)
+		}
+
+		ref := ns.prefix() + id
+		args = append(args, ref+":"+ref)
+		fmt.Fprintf(&updates, "update %s%s %s\n", ns.trackingPrefix(remote), id, tip.sha)
+	}
+
+	if err := c.runInteractive(ctx, c.root, args...); err != nil {
+		return fmt.Errorf("push %d %s refs: %w", len(ids), ns.name, err)
+	}
+
+	if _, err := c.outputStdin(ctx, []byte(updates.String()), "update-ref", "--stdin"); err != nil {
+		return fmt.Errorf("update tracking refs: %w", err)
+	}
+
+	return nil
+}
+
 // ConfigureChainFetch adds the fetch refspecs of the chain families to the
 // configuration of every remote, unless already present, and returns the
 // remotes' names (empty when there is none). Git prunes by refspec: without

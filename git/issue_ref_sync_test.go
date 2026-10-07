@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -239,6 +240,62 @@ func TestIssueRef_RemoteWithoutIssueRefs(t *testing.T) {
 		ids, err := client.ListChainIDs(ctx, IssueRefs)
 		if err != nil || len(ids) != 0 {
 			t.Errorf("ListChainIDs = %v, %v", ids, err)
+		}
+	})
+}
+
+func TestPushChainRefs(t *testing.T) {
+	t.Parallel()
+
+	alice, _, originDir := newDiskRepoWithOrigin(t)
+	ctx := t.Context()
+
+	var ids []string
+	for i := range 3 {
+		root, err := alice.WriteChainRoot(ctx, []byte(fmt.Sprintf(`{"type":"create","n":%d}`, i)), "create", false)
+		if err != nil {
+			t.Fatalf("WriteChainRoot: %v", err)
+		}
+		if err := alice.PublishChainRoot(ctx, IssueRefs, root, root); err != nil {
+			t.Fatalf("PublishChainRoot: %v", err)
+		}
+		ids = append(ids, root)
+	}
+
+	t.Run("no ids is a no-op", func(t *testing.T) {
+		if err := alice.PushChainRefs(ctx, IssueRefs, nil); err != nil {
+			t.Errorf("PushChainRefs(nil) = %v", err)
+		}
+	})
+
+	err := alice.PushChainRefs(ctx, IssueRefs, ids)
+
+	t.Run("one push sends every ref", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("PushChainRefs: %v", err)
+		}
+		if got := originRefs(t, originDir, "refs/zf/issues/"); len(got) != 3 {
+			t.Errorf("origin has %d issue refs, want 3: %v", len(got), got)
+		}
+	})
+	t.Run("the tracking refs are moved", func(t *testing.T) {
+		for _, id := range ids {
+			if pushed, err := alice.ChainRefPushed(ctx, IssueRefs, id); err != nil || !pushed {
+				t.Errorf("ChainRefPushed(%s) = %v, %v", id, pushed, err)
+			}
+		}
+	})
+	t.Run("an unknown id is an error", func(t *testing.T) {
+		if err := alice.PushChainRefs(ctx, IssueRefs, []string{"0000000000000000000000000000000000000000"}); err == nil {
+			t.Error("PushChainRefs: want an error, got nil")
+		}
+	})
+	t.Run("a ref that moved on the remote is rejected", func(t *testing.T) {
+		// Point origin's first ref at another chain's commit: alice's tip is
+		// no longer a fast-forward of it.
+		mustGit(t, originDir, "update-ref", "refs/zf/issues/"+ids[0], ids[1])
+		if err := alice.PushChainRefs(ctx, IssueRefs, ids[:2]); err == nil {
+			t.Error("PushChainRefs: want a rejection, got nil")
 		}
 	})
 }
