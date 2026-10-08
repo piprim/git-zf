@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/piprim/git-zf/branch"
@@ -126,7 +127,18 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 	return nil
 }
 
+// buildRows lists the issue rows matching status, as the TUI's status tab
+// does (see issuepkg.Row.MatchesStatus); "" keeps every row.
 func buildRows(ctx context.Context, infra issueListInfra, status string) ([]issuepkg.Row, error) {
+	rows, err := buildAllRows(ctx, infra)
+	if err != nil || status == "" {
+		return rows, err
+	}
+
+	return slices.DeleteFunc(rows, func(r issuepkg.Row) bool { return !r.MatchesStatus(status) }), nil
+}
+
+func buildAllRows(ctx context.Context, infra issueListInfra) ([]issuepkg.Row, error) {
 	if infra.tracker != nil && infra.mirror == nil {
 		rows, err := buildFromTracker(ctx, infra)
 		if err == nil {
@@ -136,22 +148,19 @@ func buildRows(ctx context.Context, infra issueListInfra, status string) ([]issu
 		fmt.Fprintf(infra.stderr, "warning: tracker unavailable, falling back to the repository: %v\n", err)
 	}
 
-	rows, err := buildFromBranches(ctx, infra.client, status)
+	rows, err := buildFromBranches(ctx, infra.client)
 	if err != nil {
 		return rows, err
 	}
 
-	return mergeRepoIssues(ctx, infra, rows, status)
+	return mergeRepoIssues(ctx, infra, rows)
 }
 
 // mergeRepoIssues enriches the branch rows with the issues stored in the
 // repository: a row whose issue has a record gets its title, labels and state, and
 // every record without a branch row is appended, so the backlog shows up
-// before anyone starts a branch. status filters the appended rows on the
-// issue state ("open" / "closed"; anything else keeps all).
-func mergeRepoIssues(
-	ctx context.Context, infra issueListInfra, rows []issuepkg.Row, status string,
-) ([]issuepkg.Row, error) {
+// before anyone starts a branch.
+func mergeRepoIssues(ctx context.Context, infra issueListInfra, rows []issuepkg.Row) ([]issuepkg.Row, error) {
 	fetchIssues(ctx, infra.client)
 	reconcileIssues(ctx, infra.client, infra.mirror)
 
@@ -184,9 +193,6 @@ func mergeRepoIssues(
 	for i := range records {
 		rec := &records[i]
 		if started[rec.ID] {
-			continue
-		}
-		if (status == issuepkg.StateOpen || status == issuepkg.StateClosed) && rec.State != status {
 			continue
 		}
 		out = append(out, issuepkg.Row{
@@ -254,8 +260,8 @@ func buildFromTracker(ctx context.Context, infra issueListInfra) ([]issuepkg.Row
 	return rows, nil
 }
 
-func buildFromBranches(ctx context.Context, c *git.Client, status string) ([]issuepkg.Row, error) {
-	branches, err := branch.ListRows(ctx, c, toBranchStatus(status))
+func buildFromBranches(ctx context.Context, c *git.Client) ([]issuepkg.Row, error) {
+	branches, err := branch.ListRows(ctx, c, branch.StatusAll)
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
@@ -271,17 +277,6 @@ func buildFromBranches(ctx context.Context, c *git.Client, status string) ([]iss
 	}
 
 	return rows, nil
-}
-
-func toBranchStatus(s string) string {
-	switch s {
-	case "open":
-		return branch.StatusInProgress
-	case "closed":
-		return branch.StatusMerged
-	default:
-		return branch.StatusAll
-	}
 }
 
 func normalizeRows(rows []issuepkg.Row) []issuepkg.Row {

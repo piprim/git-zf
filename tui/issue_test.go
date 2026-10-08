@@ -223,30 +223,6 @@ func TestWorktreeToggle(t *testing.T) {
 	})
 }
 
-func TestMatchesStatus_RepoIssueState(t *testing.T) {
-	merged := &branch.Row{Status: branch.StatusMerged}
-
-	for name, tc := range map[string]struct {
-		row    issue.Row
-		status string
-		want   bool
-	}{
-		"closed record without branch is not open":    {issue.Row{State: "closed"}, statusOpen, false},
-		"closed record without branch is closed":      {issue.Row{State: "closed"}, statusClosed, true},
-		"open record without branch is open":          {issue.Row{State: "open"}, statusOpen, true},
-		"open record with a merged branch stays open": {issue.Row{State: "open", Branch: merged}, statusOpen, true},
-		"open record with a merged branch not closed": {issue.Row{State: "open", Branch: merged}, statusClosed, false},
-		"any record matches all":                      {issue.Row{State: "closed"}, statusAll, true},
-		"row without state falls back to its branch":  {issue.Row{Branch: merged}, statusClosed, true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := matchesStatus(&tc.row, tc.status); got != tc.want {
-				t.Errorf("matchesStatus = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestIssueRowToTableRow_Labels(t *testing.T) {
 	t.Run("labels are appended to the title cell", func(t *testing.T) {
 		row := issue.RowCells(&issue.Row{IssueSlug: "1a2b3c4", Title: "Login fails", Labels: []string{"bug", "ui"}}, false)

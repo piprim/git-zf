@@ -25,6 +25,29 @@ type Row struct {
 	TrackerID string `json:"tracker_id"`
 }
 
+// MatchesStatus reports whether r belongs under status ("open", "closed" or
+// "all"; anything else counts as "open"). A row backed by a repo issue (State
+// set) follows the issue's own state; any other row falls back to its branch
+// status.
+func (r *Row) MatchesStatus(status string) bool {
+	switch status {
+	case "all":
+		return true
+	case StateClosed:
+		if r.State != "" {
+			return r.State == StateClosed
+		}
+
+		return r.Branch != nil && r.Branch.Status == branch.StatusMerged
+	default:
+		if r.State != "" {
+			return r.State == StateOpen
+		}
+
+		return r.Branch == nil || r.Branch.Status == branch.StatusInProgress
+	}
+}
+
 // BranchFieldOrEmpty returns fn(b) or "∅" when b is nil.
 func BranchFieldOrEmpty(b *branch.Row, fn func(*branch.Row) string) string {
 	if b == nil {

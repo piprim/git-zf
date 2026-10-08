@@ -217,28 +217,6 @@ func buildIssueTableColumns(rows []issue.Row) []btable.Column {
 	)
 }
 
-// matchesStatus reports whether r belongs under the status tab. A row backed
-// by a repo issue (State set) follows the issue's own state; any other row
-// falls back to its branch status.
-func matchesStatus(r *issue.Row, status string) bool {
-	switch status {
-	case statusAll:
-		return true
-	case statusClosed:
-		if r.State != "" {
-			return r.State == statusClosed
-		}
-
-		return r.Branch != nil && r.Branch.Status == branch.StatusMerged
-	default: // "open" and anything else
-		if r.State != "" {
-			return r.State == statusOpen
-		}
-
-		return r.Branch == nil || r.Branch.Status == branch.StatusInProgress
-	}
-}
-
 // applyFilters builds the bubbletea table rows, keeping only those matching
 // status, project, and free-text search. includeProject controls whether the
 // Project cell is emitted (must match the table's column count).
@@ -248,7 +226,7 @@ func applyFilters(rows []issue.Row, status, text, project string, includeProject
 
 	for i := range rows {
 		r := &rows[i]
-		if !matchesStatus(r, status) {
+		if !r.MatchesStatus(status) {
 			continue
 		}
 

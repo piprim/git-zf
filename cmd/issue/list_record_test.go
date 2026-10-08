@@ -170,3 +170,62 @@ func TestBuildRows_StartedIssueShowsEditedTitle(t *testing.T) {
 		}
 	})
 }
+
+// --status filters --stdout and --json on the issue state, as the TUI tab
+// does, not on the branch status.
+func TestBuildRows_StatusFollowsIssueState(t *testing.T) {
+	t.Parallel()
+
+	rig := newRecordRig(t, "alice", "")
+	ctx := t.Context()
+
+	reopened, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Reopened", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	branchtest.Seed(t, rig.client,
+		branch.Op{Branch: reopened.ShortID() + "@feat@reopened", Title: "Reopened", IssueID: reopened.ID}, branch.StatusMerged)
+
+	closed, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Closed", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	branchtest.Seed(t, rig.client,
+		branch.Op{Branch: closed.ShortID() + "@fix@closed", Title: "Closed", IssueID: closed.ID}, branch.StatusInProgress)
+	if err := issuepkg.Append(ctx, rig.client, closed.ID, &issuepkg.Op{Type: issuepkg.OpSetState, Value: issuepkg.StateClosed}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	slugs := func(t *testing.T, status string) []string {
+		t.Helper()
+
+		rows, err := buildRows(ctx, issueListInfra{stderr: &bytes.Buffer{}, client: rig.client}, status)
+		if err != nil {
+			t.Fatalf("buildRows: %v", err)
+		}
+		out := make([]string, len(rows))
+		for i, r := range rows {
+			out[i] = r.IssueSlug
+		}
+
+		return out
+	}
+
+	t.Run("open lists the open issue with a merged branch only", func(t *testing.T) {
+		if got := slugs(t, "open"); !slices.Equal(got, []string{reopened.ShortID()}) {
+			t.Errorf("open = %v, want [%s]", got, reopened.ShortID())
+		}
+	})
+
+	t.Run("closed lists the closed issue with an in-progress branch only", func(t *testing.T) {
+		if got := slugs(t, "closed"); !slices.Equal(got, []string{closed.ShortID()}) {
+			t.Errorf("closed = %v, want [%s]", got, closed.ShortID())
+		}
+	})
+
+	t.Run("all lists both", func(t *testing.T) {
+		if got := slugs(t, "all"); len(got) != 2 {
+			t.Errorf("all = %v, want 2 rows", got)
+		}
+	})
+}
