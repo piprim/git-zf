@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os/exec"
 	"slices"
 	"strings"
 )
@@ -14,6 +15,37 @@ import (
 // one an older git-zf merged a foreign chain into, and it is left out instead
 // of being merged in.
 var ErrForeignChain = errors.New("remote chain does not have its ID as its only root")
+
+// ErrRemoteDown is returned by a fetch or push that was not run: an earlier
+// one of the process died on the remote. See remoteCmd.
+var ErrRemoteDown = errors.New("remote failed earlier in this run, not retried")
+
+// remoteCmd runs a fetch or push, interactively unless silent (git's output
+// goes to the user's terminal). Once one dies (exit 128: no network, no such
+// repository, refused key), every later one of the process returns that
+// error wrapped in ErrRemoteDown without running git: a command fetches and
+// pushes several chain families and retries a push after a fetch, and git's
+// error block was printed once already. A rejected push (exit 1) is not a
+// dead remote.
+func (c *Client) remoteCmd(ctx context.Context, silent bool, args ...string) error {
+	if c.remoteDown != nil {
+		return c.remoteDown
+	}
+
+	var err error
+	if silent {
+		err = c.gitCmd(ctx, args...).Run()
+	} else {
+		err = c.runInteractive(ctx, c.root, args...)
+	}
+
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 128 {
+		c.remoteDown = fmt.Errorf("%w: %w", ErrRemoteDown, err)
+	}
+
+	return err
+}
 
 // chainTip is what one ref under a chain prefix points at.
 type chainTip struct {
@@ -60,16 +92,7 @@ func (c *Client) FetchChainRefs(ctx context.Context, ns ChainRefs, silent bool) 
 	}
 
 	args := []string{"fetch", "--quiet", "--prune", remote, ns.FetchRefspec(remote)}
-
-	if silent {
-		if err := c.gitCmd(ctx, args...).Run(); err != nil {
-			return fmt.Errorf("fetch %s refs: %w", ns.name, err)
-		}
-
-		return nil
-	}
-
-	if err := c.runInteractive(ctx, c.root, args...); err != nil {
+	if err := c.remoteCmd(ctx, silent, args...); err != nil {
 		return fmt.Errorf("fetch %s refs: %w", ns.name, err)
 	}
 
@@ -352,7 +375,7 @@ func (c *Client) PushChainRef(ctx context.Context, ns ChainRefs, id string) erro
 		return fmt.Errorf("%s: %w", id, ErrIssueNotFound)
 	}
 
-	if err := c.runInteractive(ctx, c.root, "push", "--quiet", remote, ref+":"+ref); err != nil {
+	if err := c.remoteCmd(ctx, false, "push", "--quiet", remote, ref+":"+ref); err != nil {
 		return fmt.Errorf("push %s ref %s: %w", ns.name, id, err)
 	}
 
@@ -403,7 +426,7 @@ func (c *Client) PushChainRefs(ctx context.Context, ns ChainRefs, ids []string) 
 		fmt.Fprintf(&updates, "update %s%s %s\n", ns.trackingPrefix(remote), id, tip.sha)
 	}
 
-	if err := c.runInteractive(ctx, c.root, args...); err != nil {
+	if err := c.remoteCmd(ctx, false, args...); err != nil {
 		return fmt.Errorf("push %d %s refs: %w", len(seen), ns.name, err)
 	}
 

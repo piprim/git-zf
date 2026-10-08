@@ -105,8 +105,9 @@ func List(ctx context.Context, c *git.Client) (states []State, warnings []string
 
 	if len(legacy) > 0 {
 		warnings = append(warnings, fmt.Sprintf(
-			"WARN: %d branch ref(s) in the old blob format are ignored (%s): "+
-				"run `git zf issue track` on each branch still in progress; see docs/branch-refs.md",
+			"WARN: %d ref(s) under refs/zf/branches/ in the old blob format are ignored (%s): "+
+				"check out each branch still in progress and run `git zf issue track`; "+
+				"drop the others with `git update-ref -d refs/zf/branches/<id>` (see docs/branch-refs.md)",
 			len(legacy), strings.Join(legacy, ", ")))
 	}
 

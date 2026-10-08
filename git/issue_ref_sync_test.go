@@ -511,3 +511,91 @@ func TestIssueRef_ForeignChainMergedByOlderClone(t *testing.T) {
 		}
 	})
 }
+
+func TestRemoteDown(t *testing.T) {
+	t.Parallel()
+
+	alice, cloneDir, originDir := newDiskRepoWithOrigin(t)
+	ctx := t.Context()
+
+	id, err := alice.CreateIssueRef(ctx, []byte(`{"type":"create"}`), "create")
+	if err != nil {
+		t.Fatalf("CreateIssueRef: %v", err)
+	}
+
+	// The remote dies (exit 128), then comes back: a process does not retry.
+	mustGit(t, cloneDir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+	first := alice.FetchChainRefs(ctx, IssueRefs, true)
+	mustGit(t, cloneDir, "remote", "set-url", "origin", originDir)
+
+	t.Run("the first failure is git's", func(t *testing.T) {
+		if first == nil || errors.Is(first, ErrRemoteDown) {
+			t.Fatalf("FetchChainRefs = %v, want git's error", first)
+		}
+	})
+	t.Run("a later fetch does not run git", func(t *testing.T) {
+		if err := alice.FetchChainRefs(ctx, IssueRefs, false); !errors.Is(err, ErrRemoteDown) {
+			t.Errorf("FetchChainRefs = %v, want ErrRemoteDown", err)
+		}
+		if err := alice.Fetch(ctx); !errors.Is(err, ErrRemoteDown) {
+			t.Errorf("Fetch = %v, want ErrRemoteDown", err)
+		}
+	})
+	t.Run("a later push does not run git", func(t *testing.T) {
+		if err := alice.PushChainRef(ctx, IssueRefs, id); !errors.Is(err, ErrRemoteDown) {
+			t.Errorf("PushChainRef = %v, want ErrRemoteDown", err)
+		}
+		if err := alice.PushChainRefs(ctx, IssueRefs, []string{id}); !errors.Is(err, ErrRemoteDown) {
+			t.Errorf("PushChainRefs = %v, want ErrRemoteDown", err)
+		}
+		if got := originRefs(t, originDir, "refs/zf/issues/"); len(got) != 0 {
+			t.Errorf("origin has %v, want nothing pushed", got)
+		}
+	})
+	t.Run("a new process tries again", func(t *testing.T) {
+		fresh, err := NewClientAt(nil, cloneDir)
+		if err != nil {
+			t.Fatalf("NewClientAt: %v", err)
+		}
+		if err := fresh.PushChainRef(ctx, IssueRefs, id); err != nil {
+			t.Errorf("PushChainRef = %v", err)
+		}
+	})
+}
+
+func TestRemoteDown_rejectedPushIsNotDown(t *testing.T) {
+	t.Parallel()
+
+	alice, _, originDir := newDiskRepoWithOrigin(t)
+	bob, _ := cloneOf(t, originDir, "bob")
+	ctx := t.Context()
+
+	id, err := alice.CreateIssueRef(ctx, []byte(`{"type":"create"}`), "create")
+	if err != nil {
+		t.Fatalf("CreateIssueRef: %v", err)
+	}
+	if err := alice.PushChainRef(ctx, IssueRefs, id); err != nil {
+		t.Fatalf("PushChainRef: %v", err)
+	}
+	if err := bob.FetchChains(ctx, IssueRefs, []byte(`{"type":"merge"}`), true); err != nil {
+		t.Fatalf("bob FetchChains: %v", err)
+	}
+	for _, c := range []*Client{alice, bob} {
+		if _, err := c.AppendChainCommit(ctx, IssueRefs, id, []byte(`{"type":"comment"}`), "comment", false); err != nil {
+			t.Fatalf("AppendChainRef: %v", err)
+		}
+	}
+	if err := bob.PushChainRef(ctx, IssueRefs, id); err != nil {
+		t.Fatalf("bob PushChainRef: %v", err)
+	}
+
+	rejected := alice.PushChainRef(ctx, IssueRefs, id)
+	if rejected == nil || errors.Is(rejected, ErrRemoteDown) {
+		t.Fatalf("PushChainRef = %v, want a rejection", rejected)
+	}
+	t.Run("the fetch after a rejection runs", func(t *testing.T) {
+		if err := alice.FetchChainRefs(ctx, IssueRefs, true); err != nil {
+			t.Errorf("FetchChainRefs = %v", err)
+		}
+	})
+}

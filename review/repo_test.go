@@ -383,6 +383,13 @@ func TestSync_EdgeCases(t *testing.T) {
 			t.Fatal("Push succeeded with the remote gone")
 		}
 
+		// Back online: a new command, so a new client (a client that saw
+		// the remote die does not retry it).
+		fresh, err := git.NewClientAt(nil, devDir)
+		if err != nil {
+			t.Fatalf("NewClientAt: %v", err)
+		}
+		dev = fresh
 		local := runGit(t, devDir, "rev-parse", "refs/zf/reviews/42")
 		if err := Sync(ctx, dev); err != nil {
 			t.Fatalf("Sync: %v", err)

@@ -41,6 +41,7 @@ type Client struct {
 	io             *pkg.IO
 	remote         string
 	remoteResolved bool
+	remoteDown     error // the first fetch or push that died; see remoteCmd
 }
 
 // NewClient opens the git repository that contains the current directory.

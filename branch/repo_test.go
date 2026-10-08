@@ -228,7 +228,7 @@ func TestListAndLegacy(t *testing.T) {
 		if err != nil || len(warnings) != 1 {
 			t.Fatalf("List = %v, %v", warnings, err)
 		}
-		for _, want := range []string{"2 branch ref(s)", "old1", "old2", "git zf issue track"} {
+		for _, want := range []string{"2 ref(s) under refs/zf/branches/", "old1", "old2", "git zf issue track", "git update-ref -d refs/zf/branches/<id>"} {
 			if !strings.Contains(warnings[0], want) {
 				t.Errorf("warning lacks %q: %s", want, warnings[0])
 			}
@@ -386,6 +386,12 @@ func TestTwoClones_SameLegacyBlob(t *testing.T) {
 		mustStart(t, bob, "42", Op{Branch: feat, BranchType: "feat"})
 		runGit(t, bobDir, "remote", "set-url", "origin", url)
 
+		// Back online: a new command, so a new client (a client that saw
+		// the remote die does not retry it).
+		bob, err := git.NewClientAt(nil, bobDir)
+		if err != nil {
+			t.Fatalf("NewClientAt: %v", err)
+		}
 		if err := Sync(ctx, bob); err != nil {
 			t.Fatalf("bob Sync: %v", err)
 		}

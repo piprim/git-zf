@@ -201,9 +201,7 @@ func (c *Client) Fetch(ctx context.Context) error {
 		return nil
 	}
 
-	root := c.root
-
-	if err := c.runInteractive(ctx, root, "fetch", remote); err != nil {
+	if err := c.remoteCmd(ctx, false, "fetch", remote); err != nil {
 		return fmt.Errorf("fetch %s: %w", remote, err)
 	}
 
