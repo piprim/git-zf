@@ -15,7 +15,8 @@ func (i Issue) getSyncCmd() *cobra.Command {
 		Use:   "sync",
 		Short: "Fetch, merge and push the issues stored in the repository",
 		Long: `Fetch refs/zf/issues/* from the remote, merge issues that were changed on
-both sides, and push the issues the remote does not have yet. Without a remote
+both sides, push back an issue whose chain the remote replaced by an unrelated
+one, and push the issues the remote does not have yet. Without a remote
 there is nothing to do. With issue-tracker.mirror on, it then mirrors the
 issues with the tracker project: imports, exports, and open/closed both ways.`,
 		Args: cobra.NoArgs,
@@ -44,6 +45,9 @@ func runSync(ctx context.Context, client *git.Client, m *issuepkg.Mirror) error 
 	}
 
 	fmt.Fprintf(client.IO().Out, "Issues synced: %d merged, %d pushed.\n", res.Merged, res.Pushed)
+	if res.Repaired > 0 {
+		fmt.Fprintf(client.IO().Out, "Repaired %d issue(s) the remote held an unrelated chain for.\n", res.Repaired)
+	}
 
 	if m != nil {
 		mr := reconcileIssues(ctx, client, m)

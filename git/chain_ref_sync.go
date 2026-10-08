@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// ErrForeignChain is returned by ReconcileChainRefs when the remote's chain
+// under an ID does not have that ID as its only root: it is another chain, or
+// one an older git-zf merged a foreign chain into, and it is left out instead
+// of being merged in.
+var ErrForeignChain = errors.New("remote chain does not have its ID as its only root")
+
 // chainTip is what one ref under a chain prefix points at.
 type chainTip struct {
 	sha    string
@@ -75,7 +81,11 @@ func (c *Client) FetchChainRefs(ctx context.Context, ns ChainRefs, silent bool) 
 // fast-forwarded, and a diverged one gets a two-parent commit carrying
 // mergePayload as its op.json. A local ref that is ahead is left alone. A
 // tracking ref that is not a commit (written by an older git-zf) is skipped; a
-// local ref that is not a commit is replaced by the remote chain. Returns the
+// local ref that is not a commit is replaced by the remote chain. In a family
+// whose IDs are root commits, a tracking ref whose chain does not have its ID
+// as its only root (a foreign chain force-pushed under that name, or merged
+// into it by an older git-zf) is skipped, the
+// other chains are reconciled, and an ErrForeignChain is returned. Returns the
 // number of merge commits written. No-op without a remote.
 func (c *Client) ReconcileChainRefs(ctx context.Context, ns ChainRefs, mergePayload []byte) (int, error) {
 	remote, err := c.Remote()
@@ -98,12 +108,18 @@ func (c *Client) ReconcileChainRefs(ctx context.Context, ns ChainRefs, mergePayl
 	}
 
 	merged := 0
+	var foreign []error
 	for _, id := range slices.Sorted(maps.Keys(tracked)) {
 		if !tracked[id].commit {
 			continue
 		}
 
 		didMerge, err := c.reconcileChainRef(ctx, ns, id, local[id], tracked[id].sha, mergePayload)
+		if errors.Is(err, ErrForeignChain) {
+			foreign = append(foreign, fmt.Errorf("%s %s: %w", ns.name, id, err))
+
+			continue
+		}
 		if err != nil {
 			return merged, fmt.Errorf("reconcile %s %s: %w", ns.name, id, err)
 		}
@@ -112,7 +128,7 @@ func (c *Client) ReconcileChainRefs(ctx context.Context, ns ChainRefs, mergePayl
 		}
 	}
 
-	return merged, nil
+	return merged, errors.Join(foreign...)
 }
 
 // reconcileChainRef reconciles one chain. local is the current tip of its
@@ -121,6 +137,20 @@ func (c *Client) reconcileChainRef(
 	ctx context.Context, ns ChainRefs, id string, local chainTip, remoteTip string, mergePayload []byte,
 ) (bool, error) {
 	ref := ns.prefix() + id
+
+	if local.sha == remoteTip {
+		return false, nil
+	}
+
+	if ns.idIsRoot {
+		roots, err := c.chainRoots(ctx, remoteTip)
+		if err != nil {
+			return false, err
+		}
+		if !slices.Equal(roots, []string{id}) {
+			return false, ErrForeignChain
+		}
+	}
 
 	switch {
 	case local.sha == "":
@@ -131,8 +161,6 @@ func (c *Client) reconcileChainRef(
 		_, err := c.output(ctx, "update-ref", ref, remoteTip, local.sha)
 
 		return false, err
-	case local.sha == remoteTip:
-		return false, nil
 	}
 
 	// IsAncestor(a, b) reports whether a is an ancestor of b.
@@ -158,6 +186,90 @@ func (c *Client) reconcileChainRef(
 	_, err = c.output(ctx, "update-ref", ref, commit, local.sha)
 
 	return err == nil, err
+}
+
+// chainRoots returns the root commits of the chain ending at tip.
+func (c *Client) chainRoots(ctx context.Context, tip string) ([]string, error) {
+	out, err := c.output(ctx, "rev-list", "--max-parents=0", tip)
+	if err != nil {
+		return nil, err
+	}
+
+	return strings.Fields(out), nil
+}
+
+// RepairForeignChainRefs pushes back, over the remote's, every local chain of
+// a family whose IDs are root commits when the remote holds a foreign chain
+// under that ID, one without that root at all, and the local one has it as
+// its only root. The push is leased on the foreign tip last fetched: a ref
+// that moved since is refused, never overwritten. Returns the repaired IDs.
+//
+// A foreign chain without a local one is left for a clone that has it. A
+// remote chain an older git-zf merged a foreign chain into is not repaired:
+// it also holds ops of the real chain, which pushing over it would drop; it
+// takes a fix by hand. No-op without a remote or for other families.
+func (c *Client) RepairForeignChainRefs(ctx context.Context, ns ChainRefs) ([]string, error) {
+	if !ns.idIsRoot {
+		return nil, nil
+	}
+
+	remote, err := c.Remote()
+	if err != nil {
+		return nil, fmt.Errorf("resolve remote: %w", err)
+	}
+	if remote == "" {
+		return nil, nil
+	}
+
+	tracked, err := c.chainTips(ctx, ns.trackingPrefix(remote))
+	if err != nil {
+		return nil, err
+	}
+	local, err := c.chainTips(ctx, ns.prefix())
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		ids     []string
+		args    = []string{"push", "--quiet", remote}
+		updates strings.Builder
+	)
+	for _, id := range slices.Sorted(maps.Keys(tracked)) {
+		theirs, ours := tracked[id], local[id]
+		if !theirs.commit || !ours.commit || theirs.sha == ours.sha {
+			continue
+		}
+		theirRoots, err := c.chainRoots(ctx, theirs.sha)
+		if err != nil {
+			return nil, err
+		}
+		ourRoots, err := c.chainRoots(ctx, ours.sha)
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains(theirRoots, id) || !slices.Equal(ourRoots, []string{id}) {
+			continue
+		}
+
+		ref := ns.prefix() + id
+		ids = append(ids, id)
+		// No "+" on the refspec: it would override the lease.
+		args = append(args, "--force-with-lease="+ref+":"+theirs.sha, ref+":"+ref)
+		fmt.Fprintf(&updates, "update %s%s %s\n", ns.trackingPrefix(remote), id, ours.sha)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	if err := c.runInteractive(ctx, c.root, args...); err != nil {
+		return nil, fmt.Errorf("push %d %s refs over foreign chains: %w", len(ids), ns.name, err)
+	}
+	if _, err := c.outputStdin(ctx, []byte(updates.String()), "update-ref", "--stdin"); err != nil {
+		return nil, fmt.Errorf("update tracking refs: %w", err)
+	}
+
+	return ids, nil
 }
 
 // ChainRefPushed reports whether the remote already has the local tip of

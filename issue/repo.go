@@ -280,12 +280,15 @@ func PushAll(ctx context.Context, c *git.Client, ids []string) error {
 		return nil
 	}
 
-	if _, err := Fetch(ctx, c); err != nil {
-		return errors.Join(firstErr, err)
+	// A foreign chain on the remote does not stop the retry: the other
+	// issues were reconciled.
+	_, fetchErr := Fetch(ctx, c)
+	if fetchErr != nil && !errors.Is(fetchErr, git.ErrForeignChain) {
+		return errors.Join(firstErr, fetchErr)
 	}
 
 	if err := c.PushChainRefs(ctx, git.IssueRefs, ids); err != nil {
-		return fmt.Errorf("after merge: %w", err)
+		return errors.Join(fmt.Errorf("after merge: %w", err), fetchErr)
 	}
 
 	return nil
@@ -293,21 +296,32 @@ func PushAll(ctx context.Context, c *git.Client, ids []string) error {
 
 // SyncResult summarizes one Sync.
 type SyncResult struct {
-	Merged int      // diverged chains merged
-	Pushed int      // issues pushed
-	Failed []string // one line per issue that could not be pushed
+	Merged   int      // diverged chains merged
+	Repaired int      // local chains pushed back over a foreign one
+	Pushed   int      // issues pushed
+	Failed   []string // one line per issue that could not be pushed
 }
 
-// Sync fetches and reconciles every issue, then pushes the ones the remote
-// does not have yet. No-op without a remote.
+// Sync fetches and reconciles every issue, pushes back the local chain of an
+// issue the remote holds a foreign chain for (git.ErrForeignChain), then
+// pushes the ones the remote does not have yet. No-op without a remote.
 func Sync(ctx context.Context, c *git.Client) (SyncResult, error) {
 	var res SyncResult
 
 	merged, err := Fetch(ctx, c)
-	if err != nil {
+	if err != nil && !errors.Is(err, git.ErrForeignChain) {
 		return res, err
 	}
 	res.Merged = merged
+
+	if err != nil {
+		repaired, err := c.RepairForeignChainRefs(ctx, git.IssueRefs)
+		if err != nil {
+			// Not fatal: the push of those issues fails below, and says why.
+			res.Failed = append(res.Failed, fmt.Sprintf("repair: %v", err))
+		}
+		res.Repaired = len(repaired)
+	}
 
 	ids, err := c.ListChainIDs(ctx, git.IssueRefs)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -303,6 +304,210 @@ func TestPushChainRefs(t *testing.T) {
 		mustGit(t, originDir, "update-ref", "refs/zf/issues/"+ids[0], ids[1])
 		if err := alice.PushChainRefs(ctx, IssueRefs, ids[:2]); err == nil {
 			t.Error("PushChainRefs: want a rejection, got nil")
+		}
+	})
+}
+
+// A chain force-pushed under an issue ID it does not have as a root is not
+// merged in: an issue's chain always has its ID as its root.
+func TestIssueRef_ReconcileSkipsForeignChain(t *testing.T) {
+	t.Parallel()
+
+	alice, _, originDir := newDiskRepoWithOrigin(t)
+	bob, _ := cloneOf(t, originDir, "bob")
+	carol, carolDir := cloneOf(t, originDir, "carol")
+	dave, _ := cloneOf(t, originDir, "dave")
+	ctx := t.Context()
+	merge := []byte(`{"type":"merge"}`)
+
+	id, err := alice.CreateIssueRef(ctx, []byte(`{"type":"create"}`), "create")
+	if err != nil {
+		t.Fatalf("CreateIssueRef: %v", err)
+	}
+	if err := alice.PushChainRef(ctx, IssueRefs, id); err != nil {
+		t.Fatalf("PushChainRef: %v", err)
+	}
+	if err := bob.FetchChainRefs(ctx, IssueRefs, false); err != nil {
+		t.Fatalf("bob fetch: %v", err)
+	}
+	if _, err := bob.ReconcileChainRefs(ctx, IssueRefs, merge); err != nil {
+		t.Fatalf("bob reconcile: %v", err)
+	}
+
+	foreign, err := carol.CreateIssueRef(ctx, []byte(`{"type":"create","by":"carol"}`), "create")
+	if err != nil {
+		t.Fatalf("carol CreateIssueRef: %v", err)
+	}
+	mustGit(t, carolDir, "push", "-q", "--force", "origin", "refs/zf/issues/"+foreign+":refs/zf/issues/"+id)
+
+	// A legitimate issue pushed alongside: the foreign chain must not block it.
+	other, err := alice.CreateIssueRef(ctx, []byte(`{"type":"create","n":2}`), "create")
+	if err != nil {
+		t.Fatalf("CreateIssueRef: %v", err)
+	}
+	if err := alice.PushChainRef(ctx, IssueRefs, other); err != nil {
+		t.Fatalf("PushChainRef: %v", err)
+	}
+
+	for name, c := range map[string]*Client{"a clone with the issue": bob, "a clone without it": dave} {
+		t.Run(name+" leaves the foreign chain out", func(t *testing.T) {
+			if err := c.FetchChainRefs(ctx, IssueRefs, false); err != nil {
+				t.Fatalf("fetch: %v", err)
+			}
+			before, _ := c.ChainTip(ctx, IssueRefs, id)
+
+			merged, err := c.ReconcileChainRefs(ctx, IssueRefs, merge)
+			if !errors.Is(err, ErrForeignChain) || merged != 0 {
+				t.Fatalf("ReconcileChainRefs = %d, %v; want 0, ErrForeignChain", merged, err)
+			}
+			if tip, _ := c.ChainTip(ctx, IssueRefs, id); tip != before {
+				t.Errorf("tip = %q, want %q (unchanged)", tip, before)
+			}
+			if tip, _ := c.ChainTip(ctx, IssueRefs, other); tip != other {
+				t.Errorf("other issue tip = %q, want %q", tip, other)
+			}
+		})
+	}
+}
+
+func TestIssueRef_RepairForeignChain(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	merge := []byte(`{"type":"merge"}`)
+
+	// setup pushes an issue from alice, then has carol force-push a foreign
+	// chain over it on the origin, and fetches it into alice.
+	setup := func(t *testing.T) (alice, carol *Client, carolDir, id, foreign string) {
+		t.Helper()
+
+		alice, _, originDir := newDiskRepoWithOrigin(t)
+		carol, carolDir = cloneOf(t, originDir, "carol")
+
+		id, err := alice.CreateIssueRef(ctx, []byte(`{"type":"create"}`), "create")
+		if err != nil {
+			t.Fatalf("CreateIssueRef: %v", err)
+		}
+		if err := alice.PushChainRef(ctx, IssueRefs, id); err != nil {
+			t.Fatalf("PushChainRef: %v", err)
+		}
+		foreign, err = carol.CreateIssueRef(ctx, []byte(`{"type":"create","by":"carol"}`), "create")
+		if err != nil {
+			t.Fatalf("carol CreateIssueRef: %v", err)
+		}
+		mustGit(t, carolDir, "push", "-q", "--force", "origin", "refs/zf/issues/"+foreign+":refs/zf/issues/"+id)
+
+		if err := alice.FetchChainRefs(ctx, IssueRefs, false); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if _, err := alice.ReconcileChainRefs(ctx, IssueRefs, merge); !errors.Is(err, ErrForeignChain) {
+			t.Fatalf("ReconcileChainRefs err = %v, want ErrForeignChain", err)
+		}
+
+		return alice, carol, carolDir, id, foreign
+	}
+
+	t.Run("the local chain is pushed back and marked pushed", func(t *testing.T) {
+		alice, _, _, id, _ := setup(t)
+
+		ids, err := alice.RepairForeignChainRefs(ctx, IssueRefs)
+		if err != nil || len(ids) != 1 || ids[0] != id {
+			t.Fatalf("RepairForeignChainRefs = %v, %v; want [%s]", ids, err, id)
+		}
+		if pushed, _ := alice.ChainRefPushed(ctx, IssueRefs, id); !pushed {
+			t.Error("issue not marked pushed")
+		}
+		if _, err := alice.ReconcileChainRefs(ctx, IssueRefs, merge); err != nil {
+			t.Errorf("reconcile after repair: %v", err)
+		}
+	})
+
+	t.Run("a remote ref that moved since the fetch is not overwritten", func(t *testing.T) {
+		alice, carol, carolDir, id, foreign := setup(t)
+
+		moved, err := carol.output(ctx, "commit-tree", "-p", foreign, "-m", "moved", foreign+"^{tree}")
+		if err != nil {
+			t.Fatalf("commit-tree: %v", err)
+		}
+		mustGit(t, carolDir, "push", "-q", "--force", "origin", moved+":refs/zf/issues/"+id)
+
+		if _, err := alice.RepairForeignChainRefs(ctx, IssueRefs); err == nil {
+			t.Fatal("expected the leased push to be refused")
+		}
+		if got, _ := carol.output(ctx, "ls-remote", "origin", "refs/zf/issues/"+id); !strings.HasPrefix(got, moved) {
+			t.Errorf("origin ref = %q, want %s", got, moved)
+		}
+	})
+
+	t.Run("other families are never repaired", func(t *testing.T) {
+		alice, _, _, _, _ := setup(t)
+
+		if ids, err := alice.RepairForeignChainRefs(ctx, ReviewRefs); err != nil || ids != nil {
+			t.Errorf("RepairForeignChainRefs(reviews) = %v, %v", ids, err)
+		}
+	})
+}
+
+// A clone on an older git-zf, which does not check the roots, merges a foreign
+// chain into an issue and pushes the result: the real root is still in it, but
+// not alone. It is neither merged in nor pushed over.
+func TestIssueRef_ForeignChainMergedByOlderClone(t *testing.T) {
+	t.Parallel()
+
+	alice, _, originDir := newDiskRepoWithOrigin(t)
+	bob, _ := cloneOf(t, originDir, "bob")
+	carol, carolDir := cloneOf(t, originDir, "carol")
+	ctx := t.Context()
+	merge := []byte(`{"type":"merge"}`)
+
+	id, err := alice.CreateIssueRef(ctx, []byte(`{"type":"create"}`), "create")
+	if err != nil {
+		t.Fatalf("CreateIssueRef: %v", err)
+	}
+	if err := alice.PushChainRef(ctx, IssueRefs, id); err != nil {
+		t.Fatalf("PushChainRef: %v", err)
+	}
+	for _, c := range []*Client{bob, carol} {
+		if err := c.FetchChainRefs(ctx, IssueRefs, false); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if _, err := c.ReconcileChainRefs(ctx, IssueRefs, merge); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+
+	// Carol's older git-zf: a merge of the issue with an unrelated chain,
+	// pushed as a fast-forward.
+	foreign, err := carol.CreateIssueRef(ctx, []byte(`{"type":"create","by":"carol"}`), "create")
+	if err != nil {
+		t.Fatalf("carol CreateIssueRef: %v", err)
+	}
+	mixed, err := carol.writeChainCommit(ctx, merge, "merge", false, id, foreign)
+	if err != nil {
+		t.Fatalf("writeChainCommit: %v", err)
+	}
+	mustGit(t, carolDir, "push", "-q", "origin", mixed+":refs/zf/issues/"+id)
+
+	if err := bob.FetchChainRefs(ctx, IssueRefs, false); err != nil {
+		t.Fatalf("bob fetch: %v", err)
+	}
+	merged, reconcileErr := bob.ReconcileChainRefs(ctx, IssueRefs, merge)
+
+	t.Run("reconcile refuses the chain with two roots", func(t *testing.T) {
+		if !errors.Is(reconcileErr, ErrForeignChain) || merged != 0 {
+			t.Errorf("ReconcileChainRefs = %d, %v; want 0, ErrForeignChain", merged, reconcileErr)
+		}
+		if tip, _ := bob.ChainTip(ctx, IssueRefs, id); tip != id {
+			t.Errorf("bob tip = %q, want %q (unchanged)", tip, id)
+		}
+	})
+
+	t.Run("repair leaves it for a fix by hand", func(t *testing.T) {
+		if ids, err := bob.RepairForeignChainRefs(ctx, IssueRefs); err != nil || ids != nil {
+			t.Errorf("RepairForeignChainRefs = %v, %v; want nothing", ids, err)
+		}
+		if got, _ := carol.output(ctx, "ls-remote", "origin", "refs/zf/issues/"+id); !strings.HasPrefix(got, mixed) {
+			t.Errorf("origin ref = %q, want %s", got, mixed)
 		}
 	})
 }

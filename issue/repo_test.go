@@ -534,3 +534,81 @@ func TestList_SkipsARefThatIsNotARoot(t *testing.T) {
 		}
 	})
 }
+
+// A foreign chain force-pushed under an issue's ID is not merged in: Sync
+// pushes the local chain back over it, and syncs the other issues.
+func TestSync_ForeignChainOnTheRemote(t *testing.T) {
+	t.Parallel()
+
+	origin := newOrigin(t)
+	alice := newRepo(t, "alice", origin)
+	bob := newRepo(t, "bob", origin)
+	ctx := t.Context()
+
+	victim, err := Create(ctx, alice, NewIssue{Title: "Victim", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	intruder, err := Create(ctx, alice, NewIssue{Title: "Intruder", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := PushAll(ctx, alice, []string{victim.ID, intruder.ID}); err != nil {
+		t.Fatalf("PushAll: %v", err)
+	}
+	ref := "refs/zf/issues/" + victim.ID
+	runGit(t, origin, "update-ref", ref, intruder.ID)
+
+	if err := Append(ctx, alice, victim.ID, &Op{Type: OpAddComment, Body: "offline"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	other, err := Create(ctx, alice, NewIssue{Title: "Other", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	t.Run("a clone without the issue cannot repair it and syncs the rest", func(t *testing.T) {
+		res, err := Sync(ctx, bob)
+		if err != nil || res.Repaired != 0 || len(res.Failed) != 0 {
+			t.Errorf("Sync = %+v, %v; want nothing repaired, nothing failed", res, err)
+		}
+		if tip, _ := bob.ChainTip(ctx, git.IssueRefs, victim.ID); tip != "" {
+			t.Errorf("bob took the foreign chain: tip = %q", tip)
+		}
+	})
+
+	res, err := Sync(ctx, alice)
+
+	t.Run("sync repairs the issue and pushes the other one", func(t *testing.T) {
+		if err != nil || res.Repaired != 1 || res.Pushed != 1 || res.Merged != 0 || len(res.Failed) != 0 {
+			t.Errorf("Sync = %+v, %v; want 1 repaired, 1 pushed", res, err)
+		}
+		if pushed, _ := alice.ChainRefPushed(ctx, git.IssueRefs, other.ID); !pushed {
+			t.Error("other issue not pushed")
+		}
+	})
+
+	t.Run("the remote holds the local chain again", func(t *testing.T) {
+		tip, _ := alice.ChainTip(ctx, git.IssueRefs, victim.ID)
+		if got := runGit(t, origin, "rev-parse", ref); got != tip {
+			t.Errorf("origin %s = %q, want %q", ref, got, tip)
+		}
+	})
+
+	t.Run("the local issue keeps its own history only", func(t *testing.T) {
+		got, err := Load(ctx, alice, victim.ID)
+		if err != nil || got.Title != "Victim" || len(got.Comments) != 1 {
+			t.Errorf("Load = %+v, %v", got, err)
+		}
+	})
+
+	t.Run("the other clone then fetches the repaired issue", func(t *testing.T) {
+		if _, err := Fetch(ctx, bob); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		got, err := Load(ctx, bob, victim.ID)
+		if err != nil || got.Title != "Victim" || len(got.Comments) != 1 {
+			t.Errorf("Load = %+v, %v", got, err)
+		}
+	})
+}
