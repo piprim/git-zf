@@ -13,7 +13,6 @@
   No menu entry or picker. The command takes exactly one name and is not in the git zf branch menu. A picker over in-progress branches is a small addition
 
 ### Deferred minors
-- git zf -d issue new skips the form, because the debug flag counts as a flag.
 - issue list --status with --stdout or --json filters by branch status, while the interactive table follows the issue state.
 - Offline output is noisy: git's error block can print three times for one command.
 - Reconcile does not check that both chains share a root, so a force-pushed foreign chain would be merged in. Worth fixing before Plan 2.

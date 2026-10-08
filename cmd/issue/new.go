@@ -33,7 +33,11 @@ Passing any flag skips the form.`,
 	f.StringArrayVar(&in.Labels, "label", nil, "label to add (repeatable)")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		return i.newRunE(cmd, in, cmd.Flags().NFlag() == 0)
+		// Only this command's flags count: NFlag also counts the inherited
+		// --debug.
+		passed := slices.ContainsFunc([]string{"title", "type", "description", "label"}, cmd.Flags().Changed)
+
+		return i.newRunE(cmd, in, !passed)
 	}
 
 	return cmd
