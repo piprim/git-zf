@@ -216,12 +216,15 @@ context:
   The chosen or default project goes into the `create` op. The
   `recordPrompter.NewIssue` method takes the project list; empty means no
   select.
-- **`issue start`** (and `branch new`). When the mirror is on and the config
-  lists more projects than the records span, the flow reconciles first, so
-  the second project's issues are imported and the flag flips before any
-  branch is named. A pick from the live listing then names its branch with
-  the qualified display ID when `Qualified` says so, built from the issue's
-  near slug (`Issue.Project`) and number, and the chain stores the project. A pick from a repo record uses `rec.DisplayID(qualify)` and
+- **`issue start`** (and `branch new`). A pick from the live listing names
+  its branch with the qualified display ID when `Qualified` says so, built
+  from the issue's near slug (`Issue.Project`) and number, and the chain
+  stores the project. With a mirror over several projects, a pick from a
+  project no record is linked to yet reconciles first: the import flips the
+  flag before the branch is named. That runs once per new project, at its
+  first start, and never for a project with nothing to pick; a pick from a
+  repo record never triggers it, the record being linked already. With one
+  project, or the mirror off, `issue start` never reconciles. A pick from a repo record uses `rec.DisplayID(qualify)` and
   `rec.Tracker.Project`. An issue typed in the start form gets the default
   project, no picker (a one-line follow-up if wanted).
 - **`issue list`.** Record rows carry the near slug as `Row.Project`, so the
