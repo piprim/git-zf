@@ -615,3 +615,32 @@ func TestSync_ForeignChainOnTheRemote(t *testing.T) {
 		}
 	})
 }
+
+func TestCreate_TwiceWithinASecond(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+	in := NewIssue{Title: "Login fails", BranchType: "fix"}
+
+	first, err := Create(ctx, c, in)
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	second, err := Create(ctx, c, in)
+
+	t.Run("the second identical issue is created", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("second Create: %v", err)
+		}
+		if second.ID == first.ID {
+			t.Errorf("both issues got ID %s", first.ID)
+		}
+	})
+	t.Run("both are listed", func(t *testing.T) {
+		records, _, err := List(ctx, c)
+		if err != nil || len(records) != 2 {
+			t.Errorf("List: %d records, err = %v", len(records), err)
+		}
+	})
+}

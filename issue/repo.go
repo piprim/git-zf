@@ -18,10 +18,13 @@ import (
 const minPrefixLen = 4
 
 // marshalOp fills the fields every op written by this clone shares (V, At,
-// Author) and returns the op.json bytes.
+// Author) and returns the op.json bytes. At keeps its nanoseconds: the ID of
+// an issue is the hash of its create op, and two issues created with the same
+// title in the same second would otherwise be one. RFC 3339 parsing accepts
+// the fraction, so an older binary reads it.
 func marshalOp(ctx context.Context, c *git.Client, op *Op) ([]byte, error) {
 	author, _ := c.ConfigUser(ctx)
-	op.V, op.At, op.Author = OpVersion, time.Now().UTC().Format(time.RFC3339), author
+	op.V, op.At, op.Author = OpVersion, time.Now().UTC().Format(time.RFC3339Nano), author
 
 	payload, err := json.Marshal(op)
 	if err != nil {
