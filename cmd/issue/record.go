@@ -118,15 +118,11 @@ func printWarnings(w io.Writer, warnings []string) {
 }
 
 // fetchIssues refreshes the local issue refs from the remote. A failure
-// (offline, auth) is a warning: every command then works on local data.
+// (offline, auth) is a warning: every command then works on local data. A
+// remote ref that is not an issue chain is left out without a word here:
+// `issue sync` names it and the way out, once, when asked.
 func fetchIssues(ctx context.Context, client *git.Client) {
-	_, err := issuepkg.Fetch(ctx, client)
-	switch {
-	case errors.Is(err, git.ErrForeignChain):
-		fmt.Fprintf(client.IO().Err,
-			"warning: %v\n(`git zf issue sync` on a clone that has the issue repairs the remote, "+
-				"unless an older git-zf merged the foreign chain in: that takes a fix by hand)\n", err)
-	case err != nil:
+	if _, err := issuepkg.Fetch(ctx, client); err != nil && !errors.Is(err, git.ErrForeignChain) {
 		fmt.Fprintf(client.IO().Err, "warning: could not fetch issues, using local data: %v\n", err)
 	}
 }

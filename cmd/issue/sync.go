@@ -55,6 +55,9 @@ func runSync(ctx context.Context, client *git.Client, m *issuepkg.Mirror) error 
 			mr.Imported, mr.Exported, mr.Pulled, mr.Pushed)
 	}
 
+	for _, line := range res.LeftOut {
+		fmt.Fprintf(client.IO().Err, "WARN: left out %s\n", line)
+	}
 	for _, line := range res.Failed {
 		fmt.Fprintf(client.IO().Err, "WARN: not pushed: %s\n", line)
 	}

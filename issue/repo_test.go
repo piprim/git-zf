@@ -572,6 +572,9 @@ func TestSync_ForeignChainOnTheRemote(t *testing.T) {
 		if err != nil || res.Repaired != 0 || len(res.Failed) != 0 {
 			t.Errorf("Sync = %+v, %v; want nothing repaired, nothing failed", res, err)
 		}
+		if len(res.LeftOut) != 1 || !strings.Contains(res.LeftOut[0], victim.ID) {
+			t.Errorf("LeftOut = %v, want the victim's ref", res.LeftOut)
+		}
 		if tip, _ := bob.ChainTip(ctx, git.IssueRefs, victim.ID); tip != "" {
 			t.Errorf("bob took the foreign chain: tip = %q", tip)
 		}

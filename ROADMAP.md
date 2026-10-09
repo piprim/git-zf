@@ -13,10 +13,6 @@
   No menu entry or picker. The command takes exactly one name and is not in the git zf branch menu. A picker over in-progress branches is a small addition
 
 ### Deferred minors
-- issue list --status with --stdout or --json filters by branch status, while the interactive table follows the issue state.
-- Offline output is noisy: git's error block can print three times for one command.
-- Reconcile does not check that both chains share a root, so a force-pushed foreign chain would be merged in. Worth fixing.
-- Junk refs on the remote under refs/zf/issues/ are imported and warn on every command.
 - Titles and comments from the remote reach the terminal unsanitized, as tracker titles already do.
 - Two identical issue new calls within one second collide, and the second fails with a raw git error.
 - docs/issue-refs.md says every issue command fetches the refs; issue new does not.

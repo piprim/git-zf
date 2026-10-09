@@ -169,7 +169,9 @@ func List(ctx context.Context, c *git.Client) (records []Record, warnings []stri
 	for _, id := range ids {
 		rec, w, ok := foldCommits(id, chains[id])
 		if !ok {
-			warnings = append(warnings, fmt.Sprintf("WARN: skipping issue ref %s: %v", id, git.ErrIssueRefCorrupt))
+			warnings = append(warnings, fmt.Sprintf(
+				"WARN: skipping issue ref %s: %v; drop it with `git update-ref -d refs/zf/issues/%s`",
+				id, git.ErrIssueRefCorrupt, id))
 
 			continue
 		}
@@ -300,6 +302,7 @@ type SyncResult struct {
 	Repaired int      // local chains pushed back over a foreign one
 	Pushed   int      // issues pushed
 	Failed   []string // one line per issue that could not be pushed
+	LeftOut  []string // one line per remote ref that is not an issue chain, with the way out
 }
 
 // Sync fetches and reconciles every issue, pushes back the local chain of an
@@ -315,12 +318,13 @@ func Sync(ctx context.Context, c *git.Client) (SyncResult, error) {
 	res.Merged = merged
 
 	if err != nil {
-		repaired, err := c.RepairForeignChainRefs(ctx, git.IssueRefs)
+		repaired, leftOut, err := c.RepairForeignChainRefs(ctx, git.IssueRefs)
 		if err != nil {
 			// Not fatal: the push of those issues fails below, and says why.
 			res.Failed = append(res.Failed, fmt.Sprintf("repair: %v", err))
 		}
 		res.Repaired = len(repaired)
+		res.LeftOut = leftOut
 	}
 
 	ids, err := c.ListChainIDs(ctx, git.IssueRefs)

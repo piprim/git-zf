@@ -225,74 +225,94 @@ func (c *Client) chainRoots(ctx context.Context, tip string) ([]string, error) {
 // a family whose IDs are root commits when the remote holds a foreign chain
 // under that ID, one without that root at all, and the local one has it as
 // its only root. The push is leased on the foreign tip last fetched: a ref
-// that moved since is refused, never overwritten. Returns the repaired IDs.
+// that moved since is refused, never overwritten. Returns the repaired IDs,
+// then one line per foreign chain left on the remote, with the way out.
 //
-// A foreign chain without a local one is left for a clone that has it. A
-// remote chain an older git-zf merged a foreign chain into is not repaired:
-// it also holds ops of the real chain, which pushing over it would drop; it
-// takes a fix by hand. No-op without a remote or for other families.
-func (c *Client) RepairForeignChainRefs(ctx context.Context, ns ChainRefs) ([]string, error) {
+// A foreign chain without a local one is left for a clone that has it; when
+// no clone has it, it is junk to delete by hand. A remote chain an older
+// git-zf merged a foreign chain into is not repaired: it also holds ops of
+// the real chain, which pushing over it would drop; it takes a fix by hand.
+// No-op without a remote or for other families.
+func (c *Client) RepairForeignChainRefs(ctx context.Context, ns ChainRefs) (repaired, leftOut []string, err error) {
 	if !ns.idIsRoot {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	remote, err := c.Remote()
 	if err != nil {
-		return nil, fmt.Errorf("resolve remote: %w", err)
+		return nil, nil, fmt.Errorf("resolve remote: %w", err)
 	}
 	if remote == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	tracked, err := c.chainTips(ctx, ns.trackingPrefix(remote))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	local, err := c.chainTips(ctx, ns.prefix())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var (
-		ids     []string
 		args    = []string{"push", "--quiet", remote}
 		updates strings.Builder
 	)
 	for _, id := range slices.Sorted(maps.Keys(tracked)) {
 		theirs, ours := tracked[id], local[id]
-		if !theirs.commit || !ours.commit || theirs.sha == ours.sha {
+		if !theirs.commit || theirs.sha == ours.sha {
 			continue
 		}
 		theirRoots, err := c.chainRoots(ctx, theirs.sha)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		ref := ns.prefix() + id
+		switch {
+		case slices.Equal(theirRoots, []string{id}):
+			continue
+		case slices.Contains(theirRoots, id):
+			leftOut = append(leftOut, fmt.Sprintf(
+				"%s: the remote chain merges another one into the issue; fix it by hand", ref))
+
+			continue
+		case !ours.commit:
+			leftOut = append(leftOut, fmt.Sprintf(
+				"%s: not the chain of that issue; a clone that has the issue repairs it with "+
+					"`git zf issue sync`, and if none has, it is junk: `git push %s --delete %s`",
+				ref, remote, ref))
+
+			continue
 		}
 		ourRoots, err := c.chainRoots(ctx, ours.sha)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if slices.Contains(theirRoots, id) || !slices.Equal(ourRoots, []string{id}) {
+		if !slices.Equal(ourRoots, []string{id}) {
+			leftOut = append(leftOut, fmt.Sprintf(
+				"%s: not the chain of that issue, and neither is the local one; drop both by hand", ref))
+
 			continue
 		}
 
-		ref := ns.prefix() + id
-		ids = append(ids, id)
+		repaired = append(repaired, id)
 		// No "+" on the refspec: it would override the lease.
 		args = append(args, "--force-with-lease="+ref+":"+theirs.sha, ref+":"+ref)
 		fmt.Fprintf(&updates, "update %s%s %s\n", ns.trackingPrefix(remote), id, ours.sha)
 	}
-	if len(ids) == 0 {
-		return nil, nil
+	if len(repaired) == 0 {
+		return nil, leftOut, nil
 	}
 
 	if err := c.runInteractive(ctx, c.root, args...); err != nil {
-		return nil, fmt.Errorf("push %d %s refs over foreign chains: %w", len(ids), ns.name, err)
+		return nil, leftOut, fmt.Errorf("push %d %s refs over foreign chains: %w", len(repaired), ns.name, err)
 	}
 	if _, err := c.outputStdin(ctx, []byte(updates.String()), "update-ref", "--stdin"); err != nil {
-		return nil, fmt.Errorf("update tracking refs: %w", err)
+		return nil, leftOut, fmt.Errorf("update tracking refs: %w", err)
 	}
 
-	return ids, nil
+	return repaired, leftOut, nil
 }
 
 // ChainRefPushed reports whether the remote already has the local tip of

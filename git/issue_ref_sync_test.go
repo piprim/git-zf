@@ -410,9 +410,9 @@ func TestIssueRef_RepairForeignChain(t *testing.T) {
 	t.Run("the local chain is pushed back and marked pushed", func(t *testing.T) {
 		alice, _, _, id, _ := setup(t)
 
-		ids, err := alice.RepairForeignChainRefs(ctx, IssueRefs)
-		if err != nil || len(ids) != 1 || ids[0] != id {
-			t.Fatalf("RepairForeignChainRefs = %v, %v; want [%s]", ids, err, id)
+		ids, leftOut, err := alice.RepairForeignChainRefs(ctx, IssueRefs)
+		if err != nil || len(ids) != 1 || ids[0] != id || leftOut != nil {
+			t.Fatalf("RepairForeignChainRefs = %v, %v, %v; want [%s]", ids, leftOut, err, id)
 		}
 		if pushed, _ := alice.ChainRefPushed(ctx, IssueRefs, id); !pushed {
 			t.Error("issue not marked pushed")
@@ -431,7 +431,7 @@ func TestIssueRef_RepairForeignChain(t *testing.T) {
 		}
 		mustGit(t, carolDir, "push", "-q", "--force", "origin", moved+":refs/zf/issues/"+id)
 
-		if _, err := alice.RepairForeignChainRefs(ctx, IssueRefs); err == nil {
+		if _, _, err := alice.RepairForeignChainRefs(ctx, IssueRefs); err == nil {
 			t.Fatal("expected the leased push to be refused")
 		}
 		if got, _ := carol.output(ctx, "ls-remote", "origin", "refs/zf/issues/"+id); !strings.HasPrefix(got, moved) {
@@ -442,8 +442,24 @@ func TestIssueRef_RepairForeignChain(t *testing.T) {
 	t.Run("other families are never repaired", func(t *testing.T) {
 		alice, _, _, _, _ := setup(t)
 
-		if ids, err := alice.RepairForeignChainRefs(ctx, ReviewRefs); err != nil || ids != nil {
+		if ids, _, err := alice.RepairForeignChainRefs(ctx, ReviewRefs); err != nil || ids != nil {
 			t.Errorf("RepairForeignChainRefs(reviews) = %v, %v", ids, err)
+		}
+	})
+
+	t.Run("a foreign chain the clone has no issue for is left out, named as junk", func(t *testing.T) {
+		alice, _, carolDir, _, foreign := setup(t)
+		mustGit(t, carolDir, "push", "-q", "origin", "refs/zf/issues/"+foreign+":refs/zf/issues/junk")
+		if err := alice.FetchChainRefs(ctx, IssueRefs, true); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+
+		_, leftOut, err := alice.RepairForeignChainRefs(ctx, IssueRefs)
+		if err != nil || len(leftOut) != 1 {
+			t.Fatalf("RepairForeignChainRefs leftOut = %v, %v; want one line", leftOut, err)
+		}
+		if !strings.Contains(leftOut[0], "git push origin --delete refs/zf/issues/junk") {
+			t.Errorf("leftOut = %q, want the delete command", leftOut[0])
 		}
 	})
 }
@@ -502,9 +518,10 @@ func TestIssueRef_ForeignChainMergedByOlderClone(t *testing.T) {
 		}
 	})
 
-	t.Run("repair leaves it for a fix by hand", func(t *testing.T) {
-		if ids, err := bob.RepairForeignChainRefs(ctx, IssueRefs); err != nil || ids != nil {
-			t.Errorf("RepairForeignChainRefs = %v, %v; want nothing", ids, err)
+	t.Run("repair leaves it for a fix by hand, and says so", func(t *testing.T) {
+		ids, leftOut, err := bob.RepairForeignChainRefs(ctx, IssueRefs)
+		if err != nil || ids != nil || len(leftOut) != 1 || !strings.Contains(leftOut[0], "by hand") {
+			t.Errorf("RepairForeignChainRefs = %v, %v, %v; want nothing repaired, one line", ids, leftOut, err)
 		}
 		if got, _ := carol.output(ctx, "ls-remote", "origin", "refs/zf/issues/"+id); !strings.HasPrefix(got, mixed) {
 			t.Errorf("origin ref = %q, want %s", got, mixed)
