@@ -214,6 +214,26 @@ func TestDecodeOp(t *testing.T) {
 		}
 	})
 
+	t.Run("control characters are dropped from the text fields", func(t *testing.T) {
+		t.Parallel()
+
+		got, _ := DecodeOp("abc", nil, []byte(`{"v":1,"type":"create","at":"2026-10-01T10:00:00Z",`+
+			`"author":"me\u001b[31m","title":"Login\nfails\u001b[0m","description":"a\r\n\tb\u0007"}`))
+		if got.Author != "me[31m" || got.Title != "Login fails[0m" || got.Description != "a\n\tb" {
+			t.Errorf("got %+v", got)
+		}
+	})
+
+	t.Run("a set_description keeps its newlines, any other value is one line", func(t *testing.T) {
+		t.Parallel()
+
+		desc, _ := DecodeOp("abc", nil, []byte(`{"v":1,"type":"set_description","at":"2026-10-01T10:00:00Z","value":"a\nb"}`))
+		title, _ := DecodeOp("abc", nil, []byte(`{"v":1,"type":"set_title","at":"2026-10-01T10:00:00Z","value":"a\nb"}`))
+		if desc.Value != "a\nb" || title.Value != "a b" {
+			t.Errorf("set_description %q, set_title %q", desc.Value, title.Value)
+		}
+	})
+
 	for name, payload := range map[string]string{
 		"invalid JSON":    `{not json`,
 		"unknown version": `{"v":99,"type":"create"}`,

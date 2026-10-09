@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/piprim/git-zf/internal/chain"
+	"github.com/piprim/git-zf/internal/text"
 )
 
 // OpVersion is the op.json schema version this binary writes and understands.
@@ -52,13 +53,15 @@ type Op struct {
 // DecodeOp builds the Op of commit id from its op.json payload. ok is false
 // when the payload is missing, is not valid JSON or has an unknown version; the
 // returned Op then has an empty Type, so Fold ignores it while its ID and
-// Parents still keep the chain connected.
+// Parents still keep the chain connected. The text fields are cleaned of
+// control characters: the chain may come from another clone.
 func DecodeOp(id string, parents []string, payload []byte) (op Op, ok bool) {
 	if err := json.Unmarshal(payload, &op); err != nil || op.V != OpVersion {
 		return Op{ID: id, Parents: parents}, false
 	}
 
 	op.ID, op.Parents = id, parents
+	op.Author, op.Comment = text.Line(op.Author), text.Clean(op.Comment)
 
 	return op, true
 }

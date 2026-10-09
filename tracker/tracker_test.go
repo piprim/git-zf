@@ -17,6 +17,33 @@ func (s *stubTracker) UpdateIssueStatus(_ context.Context, _, _ string) error  {
 func (s *stubTracker) AddComment(_ context.Context, _, _ string) error         { return nil }
 func (s *stubTracker) IsIssueClosed(_ context.Context, _ string) (bool, error) { return false, nil }
 
+func TestIssueClean(t *testing.T) {
+	got := tracker.Issue{
+		ID: "7", Subject: "Fix\x1b[31m\nlogin", Description: "a\r\n\tb", Status: "open\x07", Project: "o/r",
+	}.Clean()
+
+	t.Run("the subject is one line without escapes", func(t *testing.T) {
+		if got.Subject != "Fix[31m login" {
+			t.Errorf("Subject = %q", got.Subject)
+		}
+	})
+	t.Run("the description keeps newlines and tabs", func(t *testing.T) {
+		if got.Description != "a\n\tb" {
+			t.Errorf("Description = %q", got.Description)
+		}
+	})
+	t.Run("the status loses its control character", func(t *testing.T) {
+		if got.Status != "open" {
+			t.Errorf("Status = %q", got.Status)
+		}
+	})
+	t.Run("the other fields are untouched", func(t *testing.T) {
+		if got.ID != "7" || got.Project != "o/r" {
+			t.Errorf("got %+v", got)
+		}
+	})
+}
+
 func TestNew(t *testing.T) {
 	// Register is init-time only and not synchronised, so this test stays
 	// sequential: the first subtest registers, the second reads.

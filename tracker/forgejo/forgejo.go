@@ -256,7 +256,7 @@ func (a *forgejoAdapter) toIssue(iss *issue, project string) tracker.Issue {
 		Status:      iss.State,
 		Project:     project,
 		CreatedAt:   iss.CreatedAt,
-	}
+	}.Clean()
 }
 
 // projectIssuesPath returns "/repos/{owner}/{repo}/issues" and the project name.

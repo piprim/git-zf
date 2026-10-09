@@ -534,14 +534,15 @@ func TestReconcile_ExportFailureIsAWarning(t *testing.T) {
 func TestReconcile_AwkwardTrackerInput(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a title with quotes, a newline and non-ASCII text is imported unchanged", func(t *testing.T) {
+	t.Run("a title with quotes and non-ASCII text is imported unchanged, its newline read as a space", func(t *testing.T) {
 		t.Parallel()
 
 		const title = "Le \"login\" échoue\nsur 日本語 {\"v\":2}"
+		const want = "Le \"login\" échoue sur 日本語 {\"v\":2}"
 		c := newRepo(t, "alice", "")
 		mustReconcile(t, newTestMirror(&fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", title)}}), c)
-		if got := onlyRecord(t, c).Title; got != title {
-			t.Errorf("Title = %q, want %q", got, title)
+		if got := onlyRecord(t, c).Title; got != want {
+			t.Errorf("Title = %q, want %q", got, want)
 		}
 	})
 

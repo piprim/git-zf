@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/internal/text"
 )
 
 // Issue is the tracker-agnostic wire shape of a work item: every field is a
@@ -24,6 +25,16 @@ type Issue struct {
 	// CreatedAt is when the tracker says the issue was created; zero when the
 	// call that built the Issue does not report it.
 	CreatedAt time.Time
+}
+
+// Clean returns i with the control characters dropped from what the tracker
+// sent, so that a title or a status reaching the terminal cannot carry an
+// escape sequence. Every adapter returns Issues through it.
+func (i Issue) Clean() Issue {
+	i.Subject, i.Status, i.Project = text.Line(i.Subject), text.Line(i.Status), text.Line(i.Project)
+	i.Description = text.Clean(i.Description)
+
+	return i
 }
 
 // ErrIssueNotFound is returned by IsIssueClosed when the tracker has no record

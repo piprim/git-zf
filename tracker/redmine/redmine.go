@@ -120,7 +120,7 @@ func toIssues(issues []issue, project string) []tracker.Issue {
 			Status:      statusName,
 			Project:     cmp.Or(project, redmineProjectName(iss.Project)),
 			CreatedAt:   iss.CreatedOn,
-		})
+		}.Clean())
 	}
 
 	return result

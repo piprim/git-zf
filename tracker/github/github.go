@@ -97,7 +97,7 @@ func toIssue(iss *gogithub.Issue, project string) tracker.Issue {
 		Status:      iss.GetState(),
 		Project:     project,
 		CreatedAt:   iss.GetCreatedAt().Time,
-	}
+	}.Clean()
 }
 
 // ListProjectIssues fetches every open issue of the configured repository,
