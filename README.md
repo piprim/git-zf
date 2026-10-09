@@ -76,7 +76,7 @@ $ git zf issue sync             # fetch, merge and push the repository issues
 
 Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
-**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured. Otherwise the list is the issues stored in the repository plus the tracked branches. Columns: Issue ID · [Project] · Title · Branch · Local Status · Issue Status · Created. Labels follow the title in brackets. `∅` means no branch started yet; `N.A.` means the row has neither a tracker nor a repository issue.
+**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured. Otherwise the list is the issues stored in the repository plus the tracked branches. Columns: Issue ID · [Project] · Title · Branch · Local Status · Issue Status · Created. Labels follow the title in brackets. Created is the issue's creation date, or its branch's for a row with no issue behind it. `∅` means no branch started yet; `N.A.` means the row has neither a tracker nor a repository issue.
 
 In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycles the status filter (Open → Closed → All), **`p`** opens the project picker, **`q`** quits. Flags: `--status open|closed|all`, `--stdout` (plain table), `--json`.
 

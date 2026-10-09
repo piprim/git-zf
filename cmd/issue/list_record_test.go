@@ -66,6 +66,14 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		}
 	})
 
+	t.Run("a repo issue without a branch has its creation date", func(t *testing.T) {
+		rows := bySlug(t, "")
+		row := rows[backlog.ShortID()]
+		if row.Branch != nil || !row.CreatedAt.Equal(backlog.CreatedAt) || issuepkg.CreatedCell(&row) == "∅" {
+			t.Errorf("row = %+v", row)
+		}
+	})
+
 	t.Run("a branch joins its issue on the full ID, whatever its slug", func(t *testing.T) {
 		rows := bySlug(t, "")
 		row, ok := rows["other-slug"]

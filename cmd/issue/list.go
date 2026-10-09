@@ -195,7 +195,7 @@ func mergeRepoIssues(ctx context.Context, infra issueListInfra, rows []issuepkg.
 		// follows `issue edit`.
 		out[i].Title = rec.Title
 		out[i].Labels, out[i].State, out[i].TrackerStatus = rec.Labels, rec.State, trackerStatusOf(rec)
-		out[i].TrackerID = exportedNumber(rec)
+		out[i].TrackerID, out[i].CreatedAt = exportedNumber(rec), rec.CreatedAt
 	}
 
 	for i := range records {
@@ -206,7 +206,7 @@ func mergeRepoIssues(ctx context.Context, infra issueListInfra, rows []issuepkg.
 		out = append(out, issuepkg.Row{
 			IssueSlug: rec.DisplayID(), Title: rec.Title,
 			Labels: rec.Labels, State: rec.State, TrackerStatus: trackerStatusOf(rec),
-			TrackerID: exportedNumber(rec),
+			TrackerID: exportedNumber(rec), CreatedAt: rec.CreatedAt,
 		})
 	}
 
@@ -258,6 +258,7 @@ func buildFromTracker(ctx context.Context, infra issueListInfra) ([]issuepkg.Row
 			Title:         iss.Subject,
 			Project:       iss.Project,
 			TrackerStatus: &status,
+			CreatedAt:     iss.CreatedAt,
 		}
 		if b, ok := branchMap[iss.ID]; ok {
 			row.Branch = &b

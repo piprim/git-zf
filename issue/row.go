@@ -3,6 +3,7 @@ package issue
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/piprim/git-zf/branch"
 )
@@ -23,6 +24,9 @@ type Row struct {
 	// TrackerID is the tracker's number for a repo-born issue that was
 	// exported; "" otherwise (a tracker-born issue has it as IssueSlug).
 	TrackerID string `json:"tracker_id"`
+	// CreatedAt is when the issue was created, from its record or the
+	// tracker; zero when neither says (the row then shows its branch's date).
+	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
 // MatchesStatus reports whether r belongs under status ("open", "closed" or
@@ -78,6 +82,20 @@ func TitleWithLabels(r *Row) string {
 	return r.Title + " [" + strings.Join(r.Labels, ", ") + "]"
 }
 
+// CreatedCell is the creation date of r: the issue's, or its branch's for a
+// row whose issue has none, or "∅".
+func CreatedCell(r *Row) string {
+	created := r.CreatedAt
+	if created.IsZero() && r.Branch != nil {
+		created = r.Branch.CreatedAt
+	}
+	if created.IsZero() {
+		return "∅"
+	}
+
+	return created.Format("2006-01-02")
+}
+
 // RowCells returns r's table cells in display order: issue ID, project (only
 // when includeProject is set), title, branch, branch status, tracker status,
 // creation date.
@@ -96,7 +114,7 @@ func RowCells(r *Row, includeProject bool) []string {
 		BranchFieldOrEmpty(r.Branch, func(b *branch.Row) string { return b.BranchName }),
 		BranchFieldOrEmpty(r.Branch, func(b *branch.Row) string { return b.Status }),
 		TrackerStatusOrNA(r.TrackerStatus),
-		BranchFieldOrEmpty(r.Branch, func(b *branch.Row) string { return b.CreatedAt.Format("2006-01-02") }),
+		CreatedCell(r),
 	)
 }
 

@@ -2,9 +2,32 @@ package issue
 
 import (
 	"testing"
+	"time"
 
 	"github.com/piprim/git-zf/branch"
 )
+
+func TestCreatedCell(t *testing.T) {
+	issueDate := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	branchDate := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	b := &branch.Row{CreatedAt: branchDate}
+
+	for name, tc := range map[string]struct {
+		row  Row
+		want string
+	}{
+		"issue without a branch shows its own date":    {Row{CreatedAt: issueDate}, "2026-10-01"},
+		"issue with a branch shows its own date":       {Row{CreatedAt: issueDate, Branch: b}, "2026-10-01"},
+		"row without an issue date shows the branch's": {Row{Branch: b}, "2026-10-05"},
+		"row with neither shows the empty marker":      {Row{}, "∅"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := CreatedCell(&tc.row); got != tc.want {
+				t.Errorf("CreatedCell = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestMatchesStatus_RepoIssueState(t *testing.T) {
 	merged := &branch.Row{Status: branch.StatusMerged}
