@@ -161,6 +161,7 @@ func apply(st *State, op *Op) {
 // Row is one tracked branch with its issue: what commands list and pick from.
 type Row struct {
 	IssueSlug  string    `json:"issue_slug"`
+	IssueID    string    `json:"-"` // full ID of the repo issue, "" when there is none
 	Title      string    `json:"title"`
 	BranchName string    `json:"branch_name"`
 	Type       string    `json:"type"`
@@ -180,7 +181,7 @@ func Rows(states []State, status string) []Row {
 				continue
 			}
 			rows = append(rows, Row{
-				IssueSlug: st.Slug, Title: cmp.Or(st.Title, TitleFromName(e.Name), st.Slug),
+				IssueSlug: st.Slug, IssueID: st.IssueID, Title: cmp.Or(st.Title, TitleFromName(e.Name), st.Slug),
 				BranchName: e.Name, Type: e.Type, Status: e.Status, CreatedAt: e.CreatedAt, Author: e.Author,
 			})
 		}

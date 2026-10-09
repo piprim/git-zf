@@ -43,7 +43,9 @@ commit is signed when `commit.gpgsign` is true.
 | `tracker_state` | `value`: `open` or `closed`, `status` | The last tracker state the chain saw. |
 | `merge` | none | Two-parent commit joining changes made on two clones. |
 
-`v` is the format version, currently 1. `at` is RFC 3339, UTC.
+`v` is the format version, currently 1. `at` is RFC 3339, UTC, with a
+fraction of a second: the ID of an issue is the hash of its `create` op, and
+two issues created in the same second must not share one.
 
 ## Reading an issue
 
@@ -52,6 +54,11 @@ parents; commits with no order between them (made on two clones before either
 synced) are applied by `at`, then by commit ID. The last `set_title`, `set_description` and
 `set_state` win, labels form a set, comments accumulate. An op of an unknown type or version is
 skipped, so an older git-zf reads refs written by a newer one.
+
+The chain keeps the text as written, but git-zf drops the control characters
+when it reads it: a title, a label, an author or a status loses them and reads
+a newline or a tab as a space; a description or a comment keeps only those two.
+On such a chain, `git show <commit>:op.json` and `git zf issue show` differ.
 
 ## Sharing
 
@@ -64,8 +71,12 @@ then for each issue:
 - both changed: a `merge` commit with both tips as parents is written.
 
 Pushes are plain fast-forward pushes, never forced, so a push cannot discard
-someone else's ops. Every command that writes an op pushes it right away; when
-the push fails the op stays local and goes out with the next sync.
+someone else's ops. Every command that reads or extends an existing issue
+(`list`, `show`, `edit`, `comment`, `label`, `close`) fetches the refs first;
+`issue new` writes a fresh chain, which has nothing to merge, and fetches only
+with the tracker mirror on, before its reconcile. Every command that writes an
+op pushes it right away; when the push fails the op stays local and goes out
+with the next sync.
 
 A plain `git clone` does not bring these refs. Run `git zf init` once per
 clone: it adds the fetch refspec to every remote, so that a plain `git fetch`

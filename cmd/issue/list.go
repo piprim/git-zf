@@ -170,15 +170,23 @@ func mergeRepoIssues(ctx context.Context, infra issueListInfra, rows []issuepkg.
 	}
 	printWarnings(infra.stderr, warnings)
 
+	// A branch names its issue by the full ID in its start op. A branch
+	// started before that op carried one, or seeded by hand, falls back to
+	// its slug, which is the display ID the branch was named after.
+	byID := make(map[string]*issuepkg.Record, len(records))
 	byDisplayID := make(map[string]*issuepkg.Record, len(records))
 	for i := range records {
+		byID[records[i].ID] = &records[i]
 		byDisplayID[records[i].DisplayID()] = &records[i]
 	}
 
 	out := rows
 	started := make(map[string]bool, len(out))
 	for i := range out {
-		rec, ok := byDisplayID[out[i].IssueSlug]
+		rec, ok := byID[out[i].Branch.IssueID]
+		if !ok {
+			rec, ok = byDisplayID[out[i].IssueSlug]
+		}
 		if !ok {
 			continue
 		}
@@ -285,6 +293,9 @@ func normalizeRows(rows []issuepkg.Row) []issuepkg.Row {
 		if r.TrackerStatus == nil {
 			na := "N.A."
 			r.TrackerStatus = &na
+		}
+		if r.Labels == nil {
+			r.Labels = []string{}
 		}
 		out[i] = r
 	}

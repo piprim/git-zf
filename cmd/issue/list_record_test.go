@@ -38,6 +38,9 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 	branchtest.Seed(t, rig.client,
 		branch.Op{Branch: started.ShortID() + "@feat@started", Title: "Started"}, branch.StatusInProgress)
 	branchtest.Seed(t, rig.client, branch.Op{Branch: "JIRA-7@feat@legacy", Title: "Legacy"}, branch.StatusInProgress)
+	// A branch whose slug is not the issue's display ID, tied to it by the full ID.
+	branchtest.Seed(t, rig.client,
+		branch.Op{Branch: "other-slug@fix@renamed", Title: "Renamed", IssueID: done.ID}, branch.StatusMerged)
 
 	infra := issueListInfra{stderr: &bytes.Buffer{}, client: rig.client}
 
@@ -60,6 +63,17 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		rows := bySlug(t, "")
 		if len(rows) != 4 {
 			t.Fatalf("want 4 rows, got %d: %+v", len(rows), rows)
+		}
+	})
+
+	t.Run("a branch joins its issue on the full ID, whatever its slug", func(t *testing.T) {
+		rows := bySlug(t, "")
+		row, ok := rows["other-slug"]
+		if !ok || row.Title != "Done" || row.State != issuepkg.StateClosed {
+			t.Errorf("row = %+v", row)
+		}
+		if _, ok := rows[done.ShortID()]; ok {
+			t.Errorf("the joined issue is listed a second time: %+v", rows)
 		}
 	})
 
@@ -89,7 +103,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("status open hides the closed repo issue", func(t *testing.T) {
 		rows := bySlug(t, "open")
-		if _, ok := rows[done.ShortID()]; ok {
+		if _, ok := rows["other-slug"]; ok {
 			t.Errorf("closed issue listed under open: %+v", rows)
 		}
 		if _, ok := rows[backlog.ShortID()]; !ok {
@@ -99,7 +113,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("status closed lists the closed repo issue and not the backlog", func(t *testing.T) {
 		rows := bySlug(t, "closed")
-		if _, ok := rows[done.ShortID()]; !ok {
+		if _, ok := rows["other-slug"]; !ok {
 			t.Errorf("closed issue missing: %+v", rows)
 		}
 		if _, ok := rows[backlog.ShortID()]; ok {
@@ -123,6 +137,16 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 			}
 		}
 		if !found {
+			t.Errorf("json = %s", buf.String())
+		}
+	})
+
+	t.Run("json output has an empty label list, never null, for a row without a repo issue", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+			t.Fatalf("runList: %v", err)
+		}
+		if strings.Contains(buf.String(), `"labels":null`) {
 			t.Errorf("json = %s", buf.String())
 		}
 	})
