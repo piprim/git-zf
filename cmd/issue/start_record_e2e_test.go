@@ -452,6 +452,51 @@ func TestRunIssueStart_RecordsBranchInTheFlowRepo(t *testing.T) {
 // An issue imported by the mirror has no branch type. Started from the repo
 // picker, it asks the type with the tracker form and gets the branch a live
 // tracker listing would have created.
+// A record exported to the tracker names its branch by its tracker number,
+// like an imported one; the chain still names the record.
+func TestRunIssueStart_ExportedRecordIsNamedByItsNumber(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	ctx := t.Context()
+
+	created, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Exported", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m := &issuepkg.Mirror{Tracker: &fake.Tracker{}, Type: "fake", Project: "zf"}
+	if _, err := m.Reconcile(ctx, rig.client); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	exported, err := issuepkg.Load(ctx, rig.client, created.ID)
+	if err != nil || exported.Tracker == nil {
+		t.Fatalf("Load: %+v, %v", exported, err)
+	}
+
+	prompter := &scriptedStartPrompter{IssueFromRepo: &exported, ConfirmBranch: true}
+
+	runErr := issueflow.RunIssueStart(ctx, rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil {
+			t.Fatalf("RunIssueStart: %v", runErr)
+		}
+	})
+	t.Run("the branch is named after the tracker number", func(t *testing.T) {
+		const want = "1@feat@exported"
+		exists, err := rig.client.BranchExists(want)
+		if err != nil || !exists {
+			t.Errorf("branch %q exists = %v (%v)", want, exists, err)
+		}
+	})
+	t.Run("the chain under the number records the full record ID", func(t *testing.T) {
+		ref, err := branch.Load(ctx, rig.client, "1")
+		if err != nil || ref == nil || ref.IssueID != created.ID {
+			t.Errorf("ref = %+v, %v", ref, err)
+		}
+	})
+}
+
 func TestRunIssueStart_ImportedRecordStartsAsTrackerIssue(t *testing.T) {
 	t.Parallel()
 

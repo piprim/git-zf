@@ -117,6 +117,11 @@ func TestMirror_NewCreatesTheTrackerIssue(t *testing.T) {
 			t.Errorf("tracker = %+v", rec.Tracker)
 		}
 	})
+	t.Run("the issue is announced by its tracker number", func(t *testing.T) {
+		if want := "Created issue 1: Local bug"; !strings.Contains(rig.stdout.String(), want) {
+			t.Errorf("stdout = %q, want %q in it", rig.stdout.String(), want)
+		}
+	})
 }
 
 // Two clones, one tracker: alice's reconcile exports a shared record; bob,
@@ -231,12 +236,12 @@ func TestMirror_ListReadsTheRepository(t *testing.T) {
 			t.Errorf("row = %+v (found %v)", row, ok)
 		}
 	})
-	t.Run("the repo-born issue shows its short hash and its new tracker number", func(t *testing.T) {
-		row, ok := bySlug[local.ShortID()]
-		if !ok || row.TrackerID != "1" {
+	t.Run("the exported issue is keyed by its new tracker number", func(t *testing.T) {
+		row, ok := bySlug["1"]
+		if !ok || row.TrackerID != "1" || row.Title != local.Title {
 			t.Errorf("row = %+v (found %v)", row, ok)
 		}
-		if cell := issuepkg.RowCells(&row, false)[0]; cell != local.ShortID()+" (#1)" {
+		if cell := issuepkg.RowCells(&row, false)[0]; cell != "1" {
 			t.Errorf("ID cell = %q", cell)
 		}
 	})

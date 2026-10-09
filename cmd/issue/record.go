@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -262,15 +263,18 @@ func runCloseByID(ctx context.Context, client *git.Client, query string, m *issu
 	}
 
 	// The branch chain is keyed by the display ID, like the join of `issue
-	// list`. A chain that cannot be read stops the close: its branches may be
-	// in progress.
-	st, err := branch.Load(ctx, client, rec.DisplayID())
-	if err != nil {
-		return fmt.Errorf("read the branches of issue %s: %w", rec.DisplayID(), err)
-	}
-
+	// list`; a branch started before the record was exported sits under its
+	// short hash. A chain that cannot be read stops the close: its branches
+	// may be in progress.
 	var inProgress []string
-	if st != nil {
+	for _, slug := range slices.Compact([]string{rec.DisplayID(), rec.ShortID()}) {
+		st, err := branch.Load(ctx, client, slug)
+		if err != nil {
+			return fmt.Errorf("read the branches of issue %s: %w", rec.DisplayID(), err)
+		}
+		if st == nil {
+			continue
+		}
 		for i := range st.Entries {
 			if st.Entries[i].Status == branch.StatusInProgress {
 				inProgress = append(inProgress, st.Entries[i].Name)

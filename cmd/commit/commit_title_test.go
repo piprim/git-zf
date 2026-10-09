@@ -13,10 +13,14 @@ import (
 	"github.com/piprim/git-zf/internal/pkg"
 )
 
-func TestIssueTitle(t *testing.T) {
+// The chain lookup behind the hint: the title comes from the branch chain,
+// and whatever cannot be read only leaves the hint as the branch name says.
+func TestIssueHintFromClient_ChainLookup(t *testing.T) {
 	// Not parallel: on-disk repo; each subtest builds its own dir.
 
-	newClient := func(t *testing.T) *git.Client {
+	const name = "ABC-1@feat@add-oauth-login"
+
+	newClient := func(t *testing.T, checkout string) *git.Client {
 		t.Helper()
 
 		dir := t.TempDir()
@@ -24,6 +28,8 @@ func TestIssueTitle(t *testing.T) {
 		mustRun(t, dir, "config", "user.email", "t@t.test")
 		mustRun(t, dir, "config", "user.name", "T")
 		mustRun(t, dir, "config", "commit.gpgsign", "false")
+		mustRun(t, dir, "commit", "-q", "--allow-empty", "-m", "chore: init")
+		mustRun(t, dir, "checkout", "-q", "-b", checkout)
 
 		client, err := git.NewClientAt(&pkg.IO{}, dir)
 		if err != nil {
@@ -33,30 +39,32 @@ func TestIssueTitle(t *testing.T) {
 		return client
 	}
 
-	t.Run("returns the recorded title for a known slug", func(t *testing.T) {
-		c := newClient(t)
-		branchtest.Seed(t, c,
-			branch.Op{Branch: "ABC-1@feat@add-oauth-login", Title: "Add OAuth login"}, branch.StatusInProgress)
+	t.Run("the recorded title of a known slug fills the subject", func(t *testing.T) {
+		c := newClient(t, name)
+		branchtest.Seed(t, c, branch.Op{Branch: name, Title: "Add OAuth login"}, branch.StatusInProgress)
 
-		if got := issueTitle(t.Context(), c, "ABC-1"); got != "Add OAuth login" {
-			t.Errorf("issueTitle(ABC-1) = %q, want %q", got, "Add OAuth login")
+		hint := issueHintFromClient(t.Context(), c)
+		if hint.IssueID != "ABC-1" || hint.IssueSubject != "Add OAuth login" {
+			t.Errorf("hint = %+v", hint)
 		}
 	})
 
-	t.Run("returns empty for an issue that is not tracked", func(t *testing.T) {
-		if got := issueTitle(t.Context(), newClient(t), "NOPE-9"); got != "" {
-			t.Errorf("issueTitle(NOPE-9) = %q, want empty", got)
+	t.Run("an issue that is not tracked keeps the slug and no title", func(t *testing.T) {
+		hint := issueHintFromClient(t.Context(), newClient(t, "NOPE-9@feat@x"))
+		if hint.IssueID != "NOPE-9" || hint.IssueSubject != "" {
+			t.Errorf("hint = %+v", hint)
 		}
 	})
 
-	t.Run("returns empty for an empty slug", func(t *testing.T) {
-		if got := issueTitle(t.Context(), newClient(t), ""); got != "" {
-			t.Errorf(`issueTitle("") = %q, want empty`, got)
+	t.Run("a branch without an issue gives no lookup and no hint", func(t *testing.T) {
+		hint := issueHintFromClient(t.Context(), newClient(t, "plain"))
+		if hint.IssueID != "" || hint.IssueSubject != "" {
+			t.Errorf("hint = %+v", hint)
 		}
 	})
 
-	t.Run("returns empty when the lookup fails", func(t *testing.T) {
-		c := newClient(t)
+	t.Run("a chain that cannot be read keeps the slug and no title", func(t *testing.T) {
+		c := newClient(t, name)
 		// A ref in the old blob format cannot be loaded.
 		dir := c.WorkingTreeRoot()
 		if err := os.WriteFile(filepath.Join(dir, "old.json"), []byte(`{"issue_slug":"ABC-1"}`), 0o644); err != nil {
@@ -68,8 +76,9 @@ func TestIssueTitle(t *testing.T) {
 		}
 		mustRun(t, dir, "update-ref", "refs/zf/branches/ABC-1", strings.TrimSpace(string(blob)))
 
-		if got := issueTitle(t.Context(), c, "ABC-1"); got != "" {
-			t.Errorf("issueTitle on a legacy ref = %q, want empty", got)
+		hint := issueHintFromClient(t.Context(), c)
+		if hint.IssueID != "ABC-1" || hint.IssueSubject != "" {
+			t.Errorf("hint on a legacy ref = %+v", hint)
 		}
 	})
 }

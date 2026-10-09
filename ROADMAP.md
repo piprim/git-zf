@@ -1,17 +1,27 @@
 # Roadmap
 
+## Bug
+
+- `git zf issue new` create an issue entry #11 in the bug tracker (Forgejo).
+- `git zf issue start` create the branch edcac55@test@e2e-boot-snapshot-from-bungen-dump instead of 11@test@e2e-boot-snapshot-from-bungen-dump
+- coding…
+- `git zf issue commit` pre-fill the form with `scoppe: edcac55` and `Footer: Refs #edcac55`
+
+Should be at least `Footer: Refs #11`! Don't know for scoppe…
+
+
 ## Enhancement
 
-- Issue mirror, repo <-> tracker (first version shipped). Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
-  - Several projects: project-aware tracker calls, project-qualified slugs, a project picker in `issue new`.
-  - Sync of title, description, labels and comments.
-  - `issue start` picker reading the mirror instead of the live "assigned to me" listing.
-  - A warning from the reconcile when two records link the same tracker number (one clone exported while another imported the new issue before fetching).
-- In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine'. Comes after the issue mirror.
-- AI assistant. See https://github.com/rshdhere/vibecheck
-- git zf branch close <branch-name>
+1. Issue mirror, repo <-> tracker (first version shipped). Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
+  a. Several projects: project-aware tracker calls, project-qualified slugs, a project picker in `issue new`.
+  b. Sync of title, description, labels and comments.
+  c. `issue start` picker reading the mirror instead of the live "assigned to me" listing.
+  d. A warning from the reconcile when two records link the same tracker number (one clone exported while another imported the new issue before fetching).
+2. In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine'. Comes after the issue mirror.
+3. AI assistant. See https://github.com/rshdhere/vibecheck
+4. git zf branch close <branch-name>
   No menu entry or picker. The command takes exactly one name and is not in the git zf branch menu. A picker over in-progress branches is a small addition
-
+5. `git zf issue new` should propose to start the issue now (yes/no).
 ## To be discuss
 
 Add the trackers for “Under development”, “To be reviewed/tested”, “Under review”, “Test/review” to the redimne conf to automate the code review workflow.

@@ -12,6 +12,7 @@ import (
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
@@ -76,7 +77,7 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 	defaults := flags
 	defaults.Authors = authors
 
-	hint := issueHintFromClient(client)
+	hint := issueHintFromClient(cmd.Context(), client)
 
 	history, err := commitpkg.OpenHistory(client)
 	if err != nil {
@@ -88,8 +89,6 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 			return err
 		}
 	}
-
-	hint.IssueSubject = issueTitle(cmd.Context(), client, hint.IssueID)
 
 	prefill := hint.Prefill(c.appConfig.CommitMessage)
 
@@ -166,9 +165,37 @@ func resolveCommitMergeParent(
 
 // issueHintFromClient detects whether the current branch is an issue branch
 // (feature "<id>@<type>@<slug>" or review "<id>@review") and returns the
-// corresponding IssueHint. All other cases (detached HEAD, non-issue branch
-// name) collapse to the zero value, leaving the form unchanged.
-func issueHintFromClient(c *git.Client) commitpkg.IssueHint {
+// corresponding IssueHint, with the issue title its branch chain records. A
+// branch named after a repo issue's short hash refers, once the issue is
+// mirrored with the tracker, to the tracker's number: that is what the
+// tracker links a "Refs #" to. All other cases (detached HEAD, non-issue
+// branch name) collapse to the zero value, leaving the form unchanged; a
+// chain that cannot be read only skips the title and the number, and must
+// never block a commit.
+func issueHintFromClient(ctx context.Context, c *git.Client) commitpkg.IssueHint {
+	hint := hintFromBranchName(c)
+	if hint.IssueID == "" {
+		return hint
+	}
+
+	st, err := branch.Load(ctx, c, hint.IssueID)
+	if err != nil || st == nil {
+		slog.Debug("could not look up the issue's branch chain", "slug", hint.IssueID, "error", err)
+
+		return hint
+	}
+
+	hint.IssueSubject = st.Title
+	if n := issue.TrackerNumber(ctx, c, st.IssueID); n != "" {
+		hint.IssueID = n
+	}
+
+	return hint
+}
+
+// hintFromBranchName reads the issue slug and the branch type off the name of
+// the current branch.
+func hintFromBranchName(c *git.Client) commitpkg.IssueHint {
 	name, err := c.CurrentBranch()
 	if err != nil {
 		return commitpkg.IssueHint{}
@@ -187,22 +214,4 @@ func issueHintFromClient(c *git.Client) commitpkg.IssueHint {
 	}
 
 	return commitpkg.IssueHint{IssueID: b.IssueID(), BranchType: b.Type()}
-}
-
-// issueTitle returns the issue title recorded on slug's branch chain, or ""
-// when slug is empty, the issue is not tracked, or the lookup fails: a missing
-// title only skips the body prefill and must never block a commit.
-func issueTitle(ctx context.Context, c *git.Client, slug string) string {
-	if slug == "" {
-		return ""
-	}
-
-	st, err := branch.Load(ctx, c, slug)
-	if err != nil || st == nil {
-		slog.Debug("could not look up issue title", "slug", slug, "error", err)
-
-		return ""
-	}
-
-	return st.Title
 }

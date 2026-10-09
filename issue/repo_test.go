@@ -644,3 +644,43 @@ func TestCreate_TwiceWithinASecond(t *testing.T) {
 		}
 	})
 }
+
+func TestTrackerNumber(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+
+	local, err := Create(ctx, c, NewIssue{Title: "Local", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	linked, err := Create(ctx, c, NewIssue{Title: "Linked", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := Append(ctx, c, linked.ID, &Op{Type: OpLinkTracker, TrackerType: "fake", Project: "zf", TrackerID: "11"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	t.Run("an empty ID gives nothing", func(t *testing.T) {
+		if got := TrackerNumber(ctx, c, ""); got != "" {
+			t.Errorf("TrackerNumber = %q, want empty", got)
+		}
+	})
+	t.Run("an unlinked record gives nothing", func(t *testing.T) {
+		if got := TrackerNumber(ctx, c, local.ID); got != "" {
+			t.Errorf("TrackerNumber = %q, want empty", got)
+		}
+	})
+	t.Run("a linked record gives its tracker number", func(t *testing.T) {
+		if got := TrackerNumber(ctx, c, linked.ID); got != "11" {
+			t.Errorf("TrackerNumber = %q, want 11", got)
+		}
+	})
+	t.Run("an unreadable ID gives nothing", func(t *testing.T) {
+		if got := TrackerNumber(ctx, c, strings.Repeat("f", 40)); got != "" {
+			t.Errorf("TrackerNumber = %q, want empty", got)
+		}
+	})
+}

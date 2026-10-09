@@ -356,3 +356,20 @@ func Sync(ctx context.Context, c *git.Client) (SyncResult, error) {
 
 	return res, nil
 }
+
+// TrackerNumber returns the number of the tracker issue the record id is
+// mirrored with, or "" when id is empty, the record cannot be read, or it is
+// not mirrored. A commit message refers to an issue by that number, not by
+// the short hash a branch may be named after.
+func TrackerNumber(ctx context.Context, c *git.Client, id string) string {
+	if id == "" {
+		return ""
+	}
+
+	rec, err := Load(ctx, c, id)
+	if err != nil || rec.Tracker == nil {
+		return ""
+	}
+
+	return rec.Tracker.ID
+}

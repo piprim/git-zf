@@ -413,3 +413,6 @@ Each gets a roadmap entry:
   (`List` over `ReadAllChains`) and pushes the records it changed in one
   `git push` (`PushAll`, `git.PushChainRefs`), instead of two or three
   processes per issue and one push per record.
+- 2026-10-10: an exported record is displayed, and names its branches, by its
+  tracker number like a born one; see
+  `2026-10-10-exported-issue-branch-name-design.md`.

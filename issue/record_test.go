@@ -341,7 +341,7 @@ func TestFold_Tracker(t *testing.T) {
 		}
 	})
 
-	t.Run("link_tracker links a repo-born record and keeps its short hash", func(t *testing.T) {
+	t.Run("link_tracker links a repo-born record", func(t *testing.T) {
 		t.Parallel()
 
 		rec := Fold("p0", []Op{plain, link("p1", "57", "p0")})
@@ -349,8 +349,14 @@ func TestFold_Tracker(t *testing.T) {
 		if rec.Tracker == nil || *rec.Tracker != want {
 			t.Errorf("Tracker = %+v, want %+v", rec.Tracker, want)
 		}
-		if got := rec.DisplayID(); got != "p0" {
-			t.Errorf("DisplayID = %q, want p0", got)
+	})
+
+	t.Run("an exported record is displayed by its tracker number too", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("p0", []Op{plain, link("p1", "57", "p0")})
+		if got := rec.DisplayID(); got != "57" {
+			t.Errorf("DisplayID = %q, want 57", got)
 		}
 	})
 

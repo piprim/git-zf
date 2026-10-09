@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -284,10 +285,12 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	// The issue-flavored commit-message prefill is the one thing the shared
-	// engine cannot know: it is built from this issue's slug/type/title.
+	// engine cannot know: it is built from this issue's slug/type/title. A
+	// repo issue mirrored with the tracker is referred to by its tracker
+	// number, not by the short hash the branch is named after.
 	prefill := func(s commit.MergeStrategy, sourceTip, targetTip git.Hash) map[string]any {
 		return commit.IssueHint{
-			IssueID:      picked.IssueSlug,
+			IssueID:      cmp.Or(issuepkg.TrackerNumber(ctx, deps.client, picked.IssueID), picked.IssueSlug),
 			BranchType:   picked.Type,
 			IssueSubject: picked.Title,
 			Closing:      &commit.IssueCloseInfo{FromHash: sourceTip, ToHash: targetTip, Strategy: s},

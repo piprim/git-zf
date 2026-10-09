@@ -437,6 +437,24 @@ func TestRunCloseByID(t *testing.T) {
 		}
 	})
 
+	t.Run("a branch started under the short hash before the export is refused too", func(t *testing.T) {
+		early := create(t, "Early")
+		name := early.ShortID() + "@feat@early"
+		branchtest.Seed(t, rig.client, branch.Op{Branch: name, Title: early.Title, IssueID: early.ID}, branch.StatusInProgress)
+		link := &issuepkg.Op{Type: issuepkg.OpLinkTracker, TrackerType: "fake", Project: "zf", TrackerID: "11"}
+		if err := issuepkg.Append(ctx, rig.client, early.ID, link); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+
+		err := runCloseByID(ctx, rig.client, "11", nil)
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("err = %v", err)
+		}
+		if got := state(t, early.ID); got != issuepkg.StateOpen {
+			t.Errorf("State = %q, want %q", got, issuepkg.StateOpen)
+		}
+	})
+
 	t.Run("an issue whose only branch was abandoned is closed", func(t *testing.T) {
 		dropped := create(t, "Abandoned")
 		name := dropped.ShortID() + "@feat@abandoned"

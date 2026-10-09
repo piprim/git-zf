@@ -138,7 +138,7 @@ func (r *Record) ShortID() string {
 // DisplayID is the ID shown to users and used in branch names: the tracker's
 // number for an issue born in the tracker, the short hash otherwise.
 func (r *Record) DisplayID() string {
-	if r.Tracker != nil && r.Tracker.Born {
+	if r.Tracker != nil {
 		return r.Tracker.ID
 	}
 

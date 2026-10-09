@@ -5,7 +5,10 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/branch/branchtest"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/issue"
 )
 
 const (
@@ -58,7 +61,7 @@ func TestIssueHintFromClient(t *testing.T) {
 			t.Fatalf("NewClientAt: %v", err)
 		}
 
-		hint := issueHintFromClient(client)
+		hint := issueHintFromClient(t.Context(), client)
 		if hint.IssueID != testIssueID {
 			t.Errorf("IssueID = %q, want %q", hint.IssueID, testIssueID)
 		}
@@ -79,7 +82,7 @@ func TestIssueHintFromClient(t *testing.T) {
 			t.Fatalf("NewClientAt: %v", err)
 		}
 
-		hint := issueHintFromClient(client)
+		hint := issueHintFromClient(t.Context(), client)
 		if hint.IssueID != testIssueID {
 			t.Errorf("IssueID = %q, want %q", hint.IssueID, testIssueID)
 		}
@@ -100,7 +103,7 @@ func TestIssueHintFromClient(t *testing.T) {
 			t.Fatalf("NewClientAt: %v", err)
 		}
 
-		hint := issueHintFromClient(client)
+		hint := issueHintFromClient(t.Context(), client)
 		if hint.IssueID != "" || hint.BranchType != "" {
 			t.Errorf("expected zero IssueHint on master, got %+v", hint)
 		}
@@ -121,9 +124,48 @@ func TestIssueHintFromClient(t *testing.T) {
 			t.Fatalf("NewClientAt: %v", err)
 		}
 
-		hint := issueHintFromClient(client)
+		hint := issueHintFromClient(t.Context(), client)
 		if hint.IssueID != "" || hint.BranchType != "" {
 			t.Errorf("expected zero IssueHint when HEAD unreadable, got %+v", hint)
+		}
+	})
+}
+
+// A branch named after a repo issue's short hash refers, once the issue is
+// mirrored with the tracker, to the tracker's number: that is what the
+// tracker links a "Refs #" to.
+func TestIssueHintFromClient_MirroredRepoIssue(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	initRepoOnDisk(t, dir)
+	client, err := git.NewClientAt(nil, dir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+	ctx := t.Context()
+
+	rec, err := issue.Create(ctx, client, issue.NewIssue{Title: "Boot snapshot", BranchType: "test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := issue.Append(ctx, client, rec.ID, &issue.Op{Type: issue.OpLinkTracker, TrackerType: "fake", Project: "zf", TrackerID: "11"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	name := rec.ShortID() + "@test@boot-snapshot"
+	branchtest.Seed(t, client, branch.Op{Branch: name, Title: "Boot snapshot", IssueID: rec.ID}, branch.StatusInProgress)
+	gitCheckoutNewBranch(t, ctx, dir, name)
+
+	hint := issueHintFromClient(ctx, client)
+
+	t.Run("the hint refers to the tracker number, not the short hash", func(t *testing.T) {
+		if hint.IssueID != "11" {
+			t.Errorf("IssueID = %q, want 11", hint.IssueID)
+		}
+	})
+	t.Run("the branch type and the issue title come along", func(t *testing.T) {
+		if hint.BranchType != "test" || hint.IssueSubject != "Boot snapshot" {
+			t.Errorf("hint = %+v", hint)
 		}
 	})
 }

@@ -29,6 +29,23 @@ func TestCreatedCell(t *testing.T) {
 	}
 }
 
+func TestRowCells_ID(t *testing.T) {
+	for name, tc := range map[string]struct {
+		row  Row
+		want string
+	}{
+		"a slug equal to the number stands alone":   {Row{IssueSlug: "11", TrackerID: "11"}, "11"},
+		"a slug differing from the number shows it": {Row{IssueSlug: "edcac55", TrackerID: "11"}, "edcac55 (#11)"},
+		"no number shows the slug":                  {Row{IssueSlug: "edcac55"}, "edcac55"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := RowCells(&tc.row, false)[0]; got != tc.want {
+				t.Errorf("ID cell = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMatchesStatus_RepoIssueState(t *testing.T) {
 	merged := &branch.Row{Status: branch.StatusMerged}
 

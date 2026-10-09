@@ -2,6 +2,7 @@ package issue
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,6 +210,49 @@ func TestClose_Mirror_RepoBornClosesTheTrackerIssue(t *testing.T) {
 	t.Run("the status picker ran and its empty answer set nothing", func(t *testing.T) {
 		if prompter.TrackerStatusCalls != 1 || len(rig.tracker.RecordedUpdates) != 0 {
 			t.Errorf("picker calls = %d, updates = %+v", prompter.TrackerStatusCalls, rig.tracker.RecordedUpdates)
+		}
+	})
+}
+
+// The close commit of a repo-born issue exported to the tracker refers to
+// the tracker's number, not to the slug the branch is named after.
+func TestClose_Mirror_RepoBornCloseCommitRefersToTheTrackerNumber(t *testing.T) {
+	t.Parallel()
+
+	rig := newCloseRig(t)
+	ctx := t.Context()
+	m := mirrorOn(rig)
+	rig.cfg.CommitMessage.Items = []config.CommitItem{{Name: "subject", Required: true}, {Name: "footer"}}
+
+	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Add thing", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := m.Reconcile(ctx, rig.client); err != nil { // exports it as tracker issue 1
+		t.Fatalf("Reconcile: %v", err)
+	}
+	branchtest.Amend(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing", IssueID: rec.ID})
+
+	picked := rig.pickedBranchRow()
+	picked.IssueID = rec.ID // what a row read from the chain carries
+	prompter := &scriptedPrompter{
+		Branch:       picked,
+		Strategy:     commitpkg.MergeStrategySquash,
+		Confirm:      true,
+		Message:      []byte("feat(thing): close\n"),
+		DeleteBranch: true,
+	}
+	runErr := runClose(ctx, rig.deps(), prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil {
+			t.Fatalf("runClose: %v", runErr)
+		}
+	})
+	t.Run("the footer closes the tracker issue by its number", func(t *testing.T) {
+		got, _ := prompter.CapturedPrefill["footer"].(string)
+		if !strings.HasPrefix(got, "Closes #1 - Squash ") {
+			t.Errorf("prefill[footer] = %q, want \"Closes #1 - Squash <sha> into <sha>.\"", got)
 		}
 	})
 }

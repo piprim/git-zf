@@ -21,8 +21,9 @@ type Row struct {
 	// repo issue and its status is derived from the branch.
 	Labels []string `json:"labels"`
 	State  string   `json:"state"`
-	// TrackerID is the tracker's number for a repo-born issue that was
-	// exported; "" otherwise (a tracker-born issue has it as IssueSlug).
+	// TrackerID is the number of the tracker issue a linked record is
+	// mirrored with; "" for an unlinked record. The ID cell shows it beside
+	// the slug only when they differ: a branch started before the export.
 	TrackerID string `json:"tracker_id"`
 	// CreatedAt is when the issue was created, from its record or the
 	// tracker; zero when neither says (the row then shows its branch's date).
@@ -101,7 +102,7 @@ func CreatedCell(r *Row) string {
 // creation date.
 func RowCells(r *Row, includeProject bool) []string {
 	id := r.IssueSlug
-	if r.TrackerID != "" {
+	if r.TrackerID != "" && r.TrackerID != r.IssueSlug {
 		id += " (#" + r.TrackerID + ")"
 	}
 	cells := []string{id}

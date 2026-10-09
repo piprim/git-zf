@@ -213,9 +213,9 @@ func TestReconcile_Export(t *testing.T) {
 			t.Errorf("res = %+v, creates = %+v", res, ft.RecordedCreates)
 		}
 	})
-	t.Run("the record is linked and keeps its short hash", func(t *testing.T) {
+	t.Run("the record is linked and displays its number", func(t *testing.T) {
 		want := TrackerLink{Type: "fake", Project: "zf", ID: "1"}
-		if rec.Tracker == nil || *rec.Tracker != want || rec.DisplayID() != rec.ShortID() {
+		if rec.Tracker == nil || *rec.Tracker != want || rec.DisplayID() != "1" {
 			t.Errorf("tracker = %+v, display = %q", rec.Tracker, rec.DisplayID())
 		}
 	})

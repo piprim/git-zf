@@ -99,6 +99,12 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 		fetchIssues(ctx, client)
 	}
 	reconcileIssues(ctx, client, m)
+	// The reconcile may have linked the record: name it by its number.
+	if m != nil {
+		if linked, err := issuepkg.Load(ctx, client, rec.ID); err == nil {
+			rec = linked
+		}
+	}
 	fmt.Fprintf(client.IO().Out, "Created issue %s: %s\n", rec.DisplayID(), rec.Title)
 
 	return nil
