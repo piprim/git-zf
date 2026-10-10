@@ -277,6 +277,8 @@ git zf completion bash > ~/.local/share/bash-completion/completions/git-zf   # u
 source ~/.bashrc
 ```
 
+The script completes `git-zf …` and, through git's own completion, `git zf …`; for the latter the file must be named `git-zf`, as above, so that git finds it.
+
 See the [Cobra shell-completion guide](https://cobra.dev/docs/how-to-guides/shell-completion/) for zsh, fish and PowerShell.
 
 ## Configuration

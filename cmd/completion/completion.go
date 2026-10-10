@@ -3,11 +3,30 @@ package completion
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/spf13/cobra"
 )
+
+// gitBridge completes `git zf …`. Git's completion calls _git_zf for the
+// subcommand; the function rewrites the command line to `git-zf …` and hands
+// it to cobra's function. Only the words are rewritten: the line is rebuilt
+// from them, so a cursor in the middle of the line completes as if at its end.
+const gitBridge = `
+# Completion of "git zf …" through git's own completion, which calls _git_zf.
+_git_zf()
+{
+    local i=1
+    while [[ $i -lt ${#COMP_WORDS[@]} && ${COMP_WORDS[i]} != zf ]]; do ((i++)); done
+    [[ $i -lt ${#COMP_WORDS[@]} ]] || i=1 # an alias of zf: assume "git <alias> …"
+    local COMP_CWORD=$((COMP_CWORD - i))
+    local COMP_WORDS=("git-zf" "${COMP_WORDS[@]:i+1}")
+    local COMP_LINE="${COMP_WORDS[*]}"
+    local COMP_POINT=${#COMP_LINE}
+    __start_git-zf
+}
+`
 
 // Cmd returns the `completion` cobra command.
 func Cmd() *cobra.Command {
@@ -26,15 +45,18 @@ PowerShell: PS> yourprogram completion powershell | Out-String | Invoke-Expressi
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			shell := args[0]
+			out := cmd.OutOrStdout()
 			switch shell {
 			case "bash":
-				err = cmd.Root().GenBashCompletion(os.Stdout)
+				if err = cmd.Root().GenBashCompletion(out); err == nil {
+					_, err = io.WriteString(out, gitBridge)
+				}
 			case "zsh":
-				err = cmd.Root().GenZshCompletion(os.Stdout)
+				err = cmd.Root().GenZshCompletion(out)
 			case "fish":
-				err = cmd.Root().GenFishCompletion(os.Stdout, true)
+				err = cmd.Root().GenFishCompletion(out, true)
 			case "powershell":
-				err = cmd.Root().GenPowerShellCompletionWithDesc(os.Stdout)
+				err = cmd.Root().GenPowerShellCompletionWithDesc(out)
 			default:
 				err = errors.New("shell not supported")
 			}
