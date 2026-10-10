@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/piprim/git-zf/commit"
@@ -234,6 +235,50 @@ func TestRun_Rebase(t *testing.T) {
 	})
 	t.Run("master fast-forwarded to the rebased commit", func(t *testing.T) {
 		if got := rig.headSubject(t, "master"); got != "chore: rebase feature into master" {
+			t.Fatalf("master HEAD subject = %q", got)
+		}
+	})
+}
+
+// The rebased commit is built on origin/master, so a local master with
+// unpushed commits could never fast-forward to it: the run refuses before
+// any commit is created and names the cause, instead of leaving a stray
+// commit on the feature branch and blaming a divergence a pull cannot fix.
+func TestRun_Rebase_LocalTargetAheadOfRemoteRefuses(t *testing.T) {
+	rig := newEngineRig(t)
+	origin := t.TempDir()
+	gitRun(t, origin, "init", "-q", "--bare")
+	gitRun(t, rig.dir, "remote", "add", "origin", origin)
+	gitRun(t, rig.dir, "push", "-q", "origin", "master", "feature")
+	writeFile(t, rig.dir, "local.txt", "unpushed\n")
+	gitRun(t, rig.dir, "add", "local.txt")
+	gitRun(t, rig.dir, "commit", "-m", "docs: unpushed on master")
+	prompter := &scriptedMergePrompter{
+		Strategy: commit.MergeStrategyRebase,
+		Confirm:  true,
+		Message:  []byte("chore: rebase feature into master\n"),
+	}
+
+	res, err := Run(t.Context(), rig.client,
+		Params{Source: "feature", Target: "master"}, prompter, plainPrefill)
+
+	t.Run("the run fails naming the unpushed commits", func(t *testing.T) {
+		if err == nil || !strings.Contains(err.Error(), "origin/master") || !strings.Contains(err.Error(), "git push") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("nothing is deferred", func(t *testing.T) {
+		if res.FastForwardDeferred {
+			t.Fatal("unexpected FastForwardDeferred")
+		}
+	})
+	t.Run("no commit is created on the feature branch", func(t *testing.T) {
+		if got := rig.headSubject(t, "feature"); got != "feat: feature work" {
+			t.Fatalf("feature HEAD subject = %q", got)
+		}
+	})
+	t.Run("master keeps its unpushed commit", func(t *testing.T) {
+		if got := rig.headSubject(t, "master"); got != "docs: unpushed on master" {
 			t.Fatalf("master HEAD subject = %q", got)
 		}
 	})

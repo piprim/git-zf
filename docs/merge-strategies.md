@@ -86,14 +86,22 @@ restored atomically and `Rolled back: feature branch "<name>" restored to
 error and the rollback error are surfaced so the operator knows the repo is in
 a half-state and why.
 
-The *post-commit* failure mode is different. If the commit landed on the
-feature branch but `git merge --ff-only` refuses (local `<base>` has diverged
-from the remote), the commit is **not** rolled back — it already exists as a
-clean, valid commit on the feature branch. Instead:
+The rebased commit sits on `<remote>/<base>`, so a local `<base>` holding
+commits the remote lacks (unpushed work) could never fast-forward to it. That
+case is refused *before* anything is committed:
 
 ```
-Commit created on "<feature>" but local <base> has diverged from <remote>/<base>.
-Run `git pull --ff-only` on <base>, then `git merge --ff-only <feature>` to land it.
+local <base> has commits that <remote>/<base> lacks: `git push <remote> <base>` first,
+or the rebased commit cannot land on <base>
+```
+
+The *post-commit* failure mode is rarer: the remote moved between the fetch
+and the fast-forward. The commit is **not** rolled back — it already exists as
+a clean, valid commit on the feature branch. Instead:
+
+```
+Commit created on "<feature>" but local <base> could not fast-forward to it: <git error>
+Bring <base> level with <remote>/<base>, then run `git merge --ff-only <feature>` on <base> to land it.
 ```
 
 The branch record and the tracker are not updated, the delete-branch prompt is skipped,

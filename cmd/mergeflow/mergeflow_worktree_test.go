@@ -331,17 +331,11 @@ func TestRun_Worktree_Rebase_DirtySourceWorktreeAborts(t *testing.T) {
 	rig.assertWorktreeIntact(t)
 }
 
-// Spec Part 4: the fast-forward-deferred path with the source in a worktree.
-//
-// Constructing it deterministically needs a remote. With no remote, MergeRebase
-// merges LOCAL master into the source, so after the commit local master is
-// always an ancestor of the source and the post-commit `merge --ff-only` can
-// only fail if master moves between the preflight and the fast-forward — not
-// reachable from outside the engine. With a remote, MergeRebase merges (and
-// soft-resets onto) origin/master instead, so making LOCAL master carry a
-// commit that origin/master does not have leaves master off the source's
-// ancestry and the fast-forward is refused after the commit has landed.
-func TestRun_Worktree_Rebase_FastForwardDeferred(t *testing.T) {
+// With a remote, MergeRebase merges (and soft-resets onto) origin/master, so
+// a LOCAL master carrying a commit origin/master lacks could never fast-forward
+// to the rebased commit. The run refuses before any commit is made, on the
+// worktree path too, and the feature branch in the worktree is untouched.
+func TestRun_Worktree_Rebase_LocalTargetAheadOfRemoteRefuses(t *testing.T) {
 	rig := newWorktreeRig(t)
 
 	bare := filepath.Join(t.TempDir(), "origin.git")
@@ -373,18 +367,18 @@ func TestRun_Worktree_Rebase_FastForwardDeferred(t *testing.T) {
 	res, err := Run(t.Context(), client,
 		Params{Source: "feature", Target: "master", SourceClient: src}, prompter, plainPrefill)
 
-	t.Run("no error: the deferral is a Result flag, not a failure", func(t *testing.T) {
-		if err != nil {
-			t.Fatalf("Run: %v", err)
+	t.Run("the run fails naming the push to make", func(t *testing.T) {
+		if err == nil || !strings.Contains(err.Error(), "git push origin master") {
+			t.Fatalf("err = %v", err)
 		}
 	})
-	t.Run("fast-forward deferred", func(t *testing.T) {
-		if !res.FastForwardDeferred {
-			t.Fatal("FastForwardDeferred = false, want true")
+	t.Run("nothing is deferred", func(t *testing.T) {
+		if res.FastForwardDeferred {
+			t.Fatal("FastForwardDeferred = true, want false")
 		}
 	})
-	t.Run("the commit landed on feature in the worktree", func(t *testing.T) {
-		if got := gitOut(t, rig.wtDir, "log", "-1", "--format=%s", "feature"); got != "chore: rebase feature into master" {
+	t.Run("no commit landed on feature in the worktree", func(t *testing.T) {
+		if got := gitOut(t, rig.wtDir, "log", "-1", "--format=%s", "feature"); got != "feat: feature work" {
 			t.Fatalf("feature HEAD subject = %q", got)
 		}
 	})
@@ -393,14 +387,4 @@ func TestRun_Worktree_Rebase_FastForwardDeferred(t *testing.T) {
 			t.Fatalf("master HEAD subject = %q", got)
 		}
 	})
-	t.Run("recovery instructions printed", func(t *testing.T) {
-		stderr, ok := client.IO().Err.(interface{ String() string })
-		if !ok {
-			t.Fatal("stderr is not a buffer")
-		}
-		if !strings.Contains(stderr.String(), "merge --ff-only") {
-			t.Fatalf("stderr = %q, want the recovery hint", stderr.String())
-		}
-	})
-	rig.assertWorktreeIntact(t)
 }

@@ -97,6 +97,22 @@ func (r *run) rebase(ctx context.Context) (err error) {
 		}
 	}
 
+	// The rebased commit sits on the remote base, so a local target holding
+	// commits the remote lacks could never fast-forward to it: refuse before
+	// anything is committed.
+	if plan.remoteName != "" {
+		pushed, err := r.client.IsAncestor(ctx, r.target, plan.remoteBase)
+		if err != nil {
+			return fmt.Errorf("ancestor check: %w", err)
+		}
+
+		if !pushed {
+			return fmt.Errorf("local %s has commits that %s lacks: `git push %s %s` first, "+
+				"or the rebased commit cannot land on %s",
+				r.target, plan.remoteBase, plan.remoteName, r.target, r.target)
+		}
+	}
+
 	// MergeRebase checks out the source itself; on a worktree client that is
 	// a no-op because the worktree already has it checked out.
 	if err := r.src.MergeRebase(ctx, r.source, r.target); err != nil {
@@ -135,10 +151,10 @@ func (r *run) rebase(ctx context.Context) (err error) {
 
 	if ffErr := r.client.FastForwardOnly(ctx, r.source, r.target); ffErr != nil {
 		fmt.Fprintf(r.client.IO().Err,
-			"Commit created on %q but local %s has diverged from %s.\n"+
-				"Run `git pull --ff-only` on %s, then `git merge --ff-only %s` to land it.\n",
-			r.source, r.target, plan.remoteBase,
-			r.target, r.source)
+			"Commit created on %q but local %s could not fast-forward to it: %v\n"+
+				"Bring %s level with %s, then run `git merge --ff-only %s` on %s to land it.\n",
+			r.source, r.target, ffErr,
+			r.target, plan.remoteBase, r.source, r.target)
 
 		return errFastForwardDeferred
 	}

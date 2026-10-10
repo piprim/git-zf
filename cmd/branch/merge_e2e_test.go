@@ -499,13 +499,14 @@ func TestRunMerge_ProposesPush(t *testing.T) {
 	})
 }
 
-func TestRunMerge_RemoteOnlyRebase_FFDeferred_KeepsMaterialized(t *testing.T) {
+// A local master with commits origin/master lacks cannot fast-forward to the
+// rebased commit: the merge refuses before committing and, the source having
+// been materialized for nothing, removes it again.
+func TestRunMerge_RemoteOnlyRebase_LocalMasterAheadRefuses(t *testing.T) {
 	rig := newMergeRig(t)
 	rig.addOrigin(t) // origin/master = init
 	// spike is based on origin/master and lives only on origin.
 	rig.addOriginOnlyBranch(t, "spike", "origin/master")
-	// Local master gains a commit NOT on origin/master, so the post-rebase
-	// fast-forward of local master cannot land → FastForwardDeferred.
 	mergeWrite(t, rig.dir, "local.txt", "local\n")
 	rig.git(t, "add", "local.txt")
 	rig.git(t, "commit", "-m", "chore: local-only master commit")
@@ -520,22 +521,17 @@ func TestRunMerge_RemoteOnlyRebase_FFDeferred_KeepsMaterialized(t *testing.T) {
 
 	err := runMerge(t.Context(), rig.deps(declinePush), p)
 
-	t.Run("no error (FF-deferred is a clean exit)", func(t *testing.T) {
-		if err != nil {
-			t.Fatalf("runMerge: %v", err)
+	t.Run("the merge fails naming the push to make", func(t *testing.T) {
+		if err == nil || !strings.Contains(err.Error(), "git push origin master") {
+			t.Fatalf("err = %v", err)
 		}
 	})
-	t.Run("reports the manual fast-forward", func(t *testing.T) {
-		if got := rig.stdout.String(); !strings.Contains(got, "fast-forward") {
-			t.Fatalf("stdout = %q, want a fast-forward hint", got)
+	t.Run("the materialized branch is rolled back", func(t *testing.T) {
+		if rig.branchExists(t, "spike") {
+			t.Fatal("spike still exists; a refused merge must remove the materialized branch")
 		}
 	})
-	t.Run("materialized branch survives with its rebased commits", func(t *testing.T) {
-		if !rig.branchExists(t, "spike") {
-			t.Fatal("spike was deleted; FF-deferred must NOT roll back the materialized branch")
-		}
-	})
-	t.Run("local master not advanced (fast-forward deferred)", func(t *testing.T) {
+	t.Run("local master is unchanged", func(t *testing.T) {
 		if got := rig.headSubject(t, "master"); got != "chore: local-only master commit" {
 			t.Fatalf("master HEAD = %q, want it unchanged", got)
 		}
