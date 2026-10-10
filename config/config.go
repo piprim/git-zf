@@ -79,12 +79,12 @@ type ReviewConfig struct {
 	RequireSigned bool `json:"require-signed" toml:"require-signed"`
 }
 
-// TrackerProject names one tracker project twice. NearSlug is the stable local
-// name stored in the repository; Load lowercases it. FarSlug is what the
+// TrackerProject names one tracker project twice. Name is the stable local
+// name stored in the repository; Load lowercases it. ID is what the
 // tracker calls the project, passed to it as written.
 type TrackerProject struct {
-	NearSlug string `json:"near-slug" toml:"near-slug"`
-	FarSlug  string `json:"far-slug"  toml:"far-slug"`
+	Name string `json:"name" toml:"name"`
+	ID   string `json:"id"  toml:"id"`
 }
 
 // IssueTrackerConfig holds connection parameters for one tracker instance.
@@ -98,38 +98,38 @@ type IssueTrackerConfig struct {
 	Projects []TrackerProject `json:"projects" toml:"projects"`
 }
 
-// FarSlugs returns the tracker-side names of the configured projects.
-func (c *IssueTrackerConfig) FarSlugs() []string {
+// IDs returns the tracker-side names of the configured projects.
+func (c *IssueTrackerConfig) IDs() []string {
 	out := make([]string, len(c.Projects))
 	for i, p := range c.Projects {
-		out[i] = p.FarSlug
+		out[i] = p.ID
 	}
 
 	return out
 }
 
-var nearSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// normalize lowercases the near slugs and checks the projects and the mirror
+// normalize lowercases the names and checks the projects and the mirror
 // switch.
 func (c *IssueTrackerConfig) normalize() error {
 	seen := make(map[string]bool, len(c.Projects))
 	for i := range c.Projects {
 		p := &c.Projects[i]
-		p.NearSlug = strings.ToLower(p.NearSlug)
+		p.Name = strings.ToLower(p.Name)
 
 		switch {
-		case !nearSlugRe.MatchString(p.NearSlug):
+		case !nameRe.MatchString(p.Name):
 			return fmt.Errorf(
-				"issue-tracker.projects: near-slug %q must be letters, digits and dashes, "+
+				"issue-tracker.projects: name %q must be letters, digits and dashes, "+
 					"starting with a letter or a digit",
-				p.NearSlug)
-		case p.FarSlug == "":
-			return fmt.Errorf("issue-tracker.projects: project %q has no far-slug", p.NearSlug)
-		case seen[p.NearSlug]:
-			return fmt.Errorf("issue-tracker.projects: near-slug %q is used twice", p.NearSlug)
+				p.Name)
+		case p.ID == "":
+			return fmt.Errorf("issue-tracker.projects: project %q has no id", p.Name)
+		case seen[p.Name]:
+			return fmt.Errorf("issue-tracker.projects: name %q is used twice", p.Name)
 		}
-		seen[p.NearSlug] = true
+		seen[p.Name] = true
 	}
 
 	if c.Mirror && (c.Type == "" || len(c.Projects) != 1) {
@@ -145,8 +145,8 @@ const projectsKey = "issue-tracker.projects"
 const oldProjectsHelp = `issue-tracker.projects is no longer a list of strings. Write one table per project:
 
     [[issue-tracker.projects]]
-    near-slug = "myproject"     # stable local name
-    far-slug  = "owner/repo"    # what the tracker calls it`
+    name = "myproject"          # stable local name
+    id   = "owner/repo"         # what the tracker calls it`
 
 // unmarshalFile decodes one config file into cfg. The former string form of
 // issue-tracker.projects is an error; an empty array, which older default

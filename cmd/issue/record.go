@@ -145,7 +145,7 @@ func mirrorOf(cfg *config.AppConfig, t tracker.Tracker) *issuepkg.Mirror {
 		return nil
 	}
 
-	return &issuepkg.Mirror{Tracker: t, Type: tc.Type, Project: tc.Projects[0].NearSlug}
+	return &issuepkg.Mirror{Tracker: t, Type: tc.Type, Project: tc.Projects[0].Name}
 }
 
 // openMirror builds the tracker and returns the issue mirror, or nil when the

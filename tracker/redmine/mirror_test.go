@@ -21,7 +21,7 @@ func newMirrorAdapter(t *testing.T, handler http.HandlerFunc) *redmineAdapter {
 
 	a, err := New(config.IssueTrackerConfig{
 		URL: srv.URL, Token: "test-key",
-		Projects: []config.TrackerProject{{NearSlug: "cpro", FarSlug: "cpro"}},
+		Projects: []config.TrackerProject{{Name: "cpro", ID: "cpro"}},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -150,7 +150,7 @@ func TestCreateIssue_Errors(t *testing.T) {
 
 	for name, projects := range map[string][]config.TrackerProject{
 		"no project":   nil,
-		"two projects": {{NearSlug: "a", FarSlug: "a"}, {NearSlug: "b", FarSlug: "b"}},
+		"two projects": {{Name: "a", ID: "a"}, {Name: "b", ID: "b"}},
 	} {
 		t.Run(name+" is refused by the project calls", func(t *testing.T) {
 			t.Parallel()

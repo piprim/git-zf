@@ -77,7 +77,7 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 
 	var out []tracker.Issue
 
-	for _, p := range a.cfg.FarSlugs() {
+	for _, p := range a.cfg.IDs() {
 		issues, err := a.fetchIssues(ctx, "/projects/"+url.PathEscape(p)+"/issues.json?status_id=open&limit=100", p)
 		if err != nil {
 			return nil, fmt.Errorf("project %q: %w", p, err)
@@ -242,7 +242,7 @@ func (a *redmineAdapter) project() (string, error) {
 		return "", fmt.Errorf("redmine: exactly one project must be configured (got %d)", len(a.cfg.Projects))
 	}
 
-	return a.cfg.Projects[0].FarSlug, nil
+	return a.cfg.Projects[0].ID, nil
 }
 
 // ListProjectIssues fetches every open issue of the configured project,

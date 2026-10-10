@@ -51,7 +51,7 @@ type Op struct {
 	Body        string `json:"body,omitempty"`        // add_comment
 
 	TrackerType string `json:"tracker_type,omitempty"` // create (imported issue), link_tracker
-	Project     string `json:"project,omitempty"`      // create, link_tracker: the near slug
+	Project     string `json:"project,omitempty"`      // create, link_tracker: the configured project name
 	TrackerID   string `json:"tracker_id,omitempty"`   // create, link_tracker: the tracker's issue number
 	Status      string `json:"status,omitempty"`       // tracker_state: the tracker's status name
 
@@ -94,7 +94,7 @@ type Comment struct {
 // TrackerLink names the tracker issue a record is mirrored with.
 type TrackerLink struct {
 	Type    string `json:"type"`    // tracker type, e.g. "forgejo"
-	Project string `json:"project"` // near slug
+	Project string `json:"project"` // the configured project name
 	ID      string `json:"id"`      // the tracker's issue number
 	// Born is true when the link comes from the create op: the issue was
 	// imported from the tracker.

@@ -370,7 +370,7 @@ func TestLoadTrackerProjects(t *testing.T) {
 		return config.Load(writeTOML(t, blob))
 	}
 
-	t.Run("reads near and far slugs and lowercases the near slug", func(t *testing.T) {
+	t.Run("reads name and ID and lowercases the name", func(t *testing.T) {
 		t.Parallel()
 
 		cfg, err := load(t, `
@@ -378,26 +378,26 @@ func TestLoadTrackerProjects(t *testing.T) {
 type = "forgejo"
 
 [[issue-tracker.projects]]
-near-slug = "ZF"
-far-slug = "Piprim/Git-ZF"
+name = "ZF"
+id = "Piprim/Git-ZF"
 `)
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		want := []config.TrackerProject{{NearSlug: "zf", FarSlug: "Piprim/Git-ZF"}}
+		want := []config.TrackerProject{{Name: "zf", ID: "Piprim/Git-ZF"}}
 		if !slices.Equal(cfg.IssueTracker.Projects, want) {
 			t.Errorf("Projects = %+v, want %+v", cfg.IssueTracker.Projects, want)
 		}
 	})
 
-	t.Run("FarSlugs lists the tracker-side names", func(t *testing.T) {
+	t.Run("IDs lists the tracker-side names", func(t *testing.T) {
 		t.Parallel()
 
 		c := config.IssueTrackerConfig{Projects: []config.TrackerProject{
-			{NearSlug: "a", FarSlug: "o/a"}, {NearSlug: "b", FarSlug: "o/b"},
+			{Name: "a", ID: "o/a"}, {Name: "b", ID: "o/b"},
 		}}
-		if got := c.FarSlugs(); !slices.Equal(got, []string{"o/a", "o/b"}) {
-			t.Errorf("FarSlugs = %v", got)
+		if got := c.IDs(); !slices.Equal(got, []string{"o/a", "o/b"}) {
+			t.Errorf("IDs = %v", got)
 		}
 	})
 
@@ -420,26 +420,26 @@ far-slug = "Piprim/Git-ZF"
 	})
 
 	rejected := map[string]string{
-		"two near slugs differing only by case": `
+		"two names differing only by case": `
 [[issue-tracker.projects]]
-near-slug = "zf"
-far-slug = "o/a"
+name = "zf"
+id = "o/a"
 [[issue-tracker.projects]]
-near-slug = "ZF"
-far-slug = "o/b"
+name = "ZF"
+id = "o/b"
 `,
-		"a near slug with a space": `
+		"a name with a space": `
 [[issue-tracker.projects]]
-near-slug = "my project"
-far-slug = "o/a"
+name = "my project"
+id = "o/a"
 `,
-		"an empty near slug": `
+		"an empty name": `
 [[issue-tracker.projects]]
-far-slug = "o/a"
+id = "o/a"
 `,
-		"an empty far slug": `
+		"an empty ID": `
 [[issue-tracker.projects]]
-near-slug = "zf"
+name = "zf"
 `,
 		"mirror without a project": `
 [issue-tracker]
@@ -451,18 +451,18 @@ mirror = true
 type = "forgejo"
 mirror = true
 [[issue-tracker.projects]]
-near-slug = "a"
-far-slug = "o/a"
+name = "a"
+id = "o/a"
 [[issue-tracker.projects]]
-near-slug = "b"
-far-slug = "o/b"
+name = "b"
+id = "o/b"
 `,
 		"mirror without a tracker type": `
 [issue-tracker]
 mirror = true
 [[issue-tracker.projects]]
-near-slug = "a"
-far-slug = "o/a"
+name = "a"
+id = "o/a"
 `,
 	}
 	for name, blob := range rejected {
@@ -483,8 +483,8 @@ far-slug = "o/a"
 type = "forgejo"
 mirror = true
 [[issue-tracker.projects]]
-near-slug = "zf"
-far-slug = "o/a"
+name = "zf"
+id = "o/a"
 `)
 		if err != nil || !cfg.IssueTracker.Mirror {
 			t.Errorf("Mirror = %v, err = %v", cfg != nil && cfg.IssueTracker.Mirror, err)

@@ -19,7 +19,7 @@ import (
 func mirrorOn(rig *closeTestRig) *issuepkg.Mirror {
 	rig.cfg.IssueTracker = config.IssueTrackerConfig{
 		Type: "fake", Mirror: true,
-		Projects: []config.TrackerProject{{NearSlug: "zf", FarSlug: "piprim/git-zf"}},
+		Projects: []config.TrackerProject{{Name: "zf", ID: "piprim/git-zf"}},
 	}
 
 	return mirrorOf(rig.cfg, rig.tracker)

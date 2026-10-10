@@ -60,7 +60,7 @@ func TestNew(t *testing.T) {
 func newTestAdapter(t *testing.T, srv *httptest.Server, projects []string) *githubAdapter {
 	t.Helper()
 
-	a, err := New(config.IssueTrackerConfig{Token: "test", Projects: far(projects...)})
+	a, err := New(config.IssueTrackerConfig{Token: "test", Projects: withProjects(projects...)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 	t.Run("returns error when multiple projects are configured", func(t *testing.T) {
 		t.Parallel()
 
-		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: far("a/b", "c/d")})
+		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: withProjects("a/b", "c/d")})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -321,7 +321,7 @@ func TestUpdateIssueStatus(t *testing.T) {
 	t.Run("returns error for a malformed owner/repo project string", func(t *testing.T) {
 		t.Parallel()
 
-		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: far("onlyone")})
+		a, err := New(config.IssueTrackerConfig{Token: "x", Projects: withProjects("onlyone")})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -497,11 +497,11 @@ func TestAddComment(t *testing.T) {
 	})
 }
 
-// far builds the projects config from tracker-side names.
-func far(slugs ...string) []config.TrackerProject {
-	out := make([]config.TrackerProject, len(slugs))
-	for i, s := range slugs {
-		out[i] = config.TrackerProject{NearSlug: fmt.Sprintf("p%d", i), FarSlug: s}
+// withProjects builds the projects config from tracker-side IDs.
+func withProjects(ids ...string) []config.TrackerProject {
+	out := make([]config.TrackerProject, len(ids))
+	for i, s := range ids {
+		out[i] = config.TrackerProject{Name: fmt.Sprintf("p%d", i), ID: s}
 	}
 
 	return out

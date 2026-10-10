@@ -21,7 +21,7 @@ func newMirrorRig(t *testing.T) (*recordRig, *fake.Tracker, *issuepkg.Mirror) {
 	rig := newRecordRig(t, "alice", "")
 	rig.cfg.IssueTracker = config.IssueTrackerConfig{
 		Type: "fake", Mirror: true,
-		Projects: []config.TrackerProject{{NearSlug: "zf", FarSlug: "piprim/git-zf"}},
+		Projects: []config.TrackerProject{{Name: "zf", ID: "piprim/git-zf"}},
 	}
 	ft := &fake.Tracker{}
 
@@ -39,13 +39,13 @@ func TestMirrorOf(t *testing.T) {
 	t.Parallel()
 
 	on := &config.AppConfig{IssueTracker: config.IssueTrackerConfig{
-		Type: "fake", Mirror: true, Projects: []config.TrackerProject{{NearSlug: "zf", FarSlug: "a/b"}},
+		Type: "fake", Mirror: true, Projects: []config.TrackerProject{{Name: "zf", ID: "a/b"}},
 	}}
 	off := &config.AppConfig{IssueTracker: config.IssueTrackerConfig{
-		Type: "fake", Projects: []config.TrackerProject{{NearSlug: "zf", FarSlug: "a/b"}},
+		Type: "fake", Projects: []config.TrackerProject{{Name: "zf", ID: "a/b"}},
 	}}
 
-	t.Run("mirror on gives a mirror named by the tracker type and the near slug", func(t *testing.T) {
+	t.Run("mirror on gives a mirror named by the tracker type and the name", func(t *testing.T) {
 		t.Parallel()
 
 		m := mirrorOf(on, &fake.Tracker{})
@@ -74,7 +74,7 @@ func TestOpenMirror_TrackerCannotBeBuilt(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.AppConfig{IssueTracker: config.IssueTrackerConfig{
-		Type: "no-such-tracker", Mirror: true, Projects: []config.TrackerProject{{NearSlug: "zf", FarSlug: "a/b"}},
+		Type: "no-such-tracker", Mirror: true, Projects: []config.TrackerProject{{Name: "zf", ID: "a/b"}},
 	}}
 	var errW bytes.Buffer
 
@@ -138,7 +138,7 @@ func TestMirror_NewFetchesBeforeReconciling(t *testing.T) {
 		rig := newRecordRig(t, user, origin)
 		rig.cfg.IssueTracker = config.IssueTrackerConfig{
 			Type: "fake", Mirror: true,
-			Projects: []config.TrackerProject{{NearSlug: "zf", FarSlug: "piprim/git-zf"}},
+			Projects: []config.TrackerProject{{Name: "zf", ID: "piprim/git-zf"}},
 		}
 
 		return rig, mirrorOf(rig.cfg, ft)

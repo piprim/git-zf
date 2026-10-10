@@ -14,7 +14,7 @@ import (
 )
 
 // importRootTemplate is the op.json of an imported issue's root commit: at,
-// tracker type, near slug, tracker number. FROZEN: the ID of every imported
+// tracker type, project name, tracker number. FROZEN: the ID of every imported
 // issue is the hash of a commit holding exactly these bytes, so that two
 // clones importing the same tracker issue get the same chain. Changing one
 // character makes every clone import its issues a second time.
@@ -27,7 +27,7 @@ var plainTokenRe = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
 type Mirror struct {
 	Tracker tracker.Tracker
 	Type    string // tracker type, as configured
-	Project string // near slug
+	Project string // the configured project name
 }
 
 // MirrorResult summarizes one Reconcile.

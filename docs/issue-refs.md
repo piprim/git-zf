@@ -101,13 +101,13 @@ the refs: they see what another clone reconciled.
 ### Identity of an imported issue
 
 The root commit of an imported issue is built from four values only: the
-tracker type, the project's near slug, the tracker's issue number and its
+tracker type, the project's name, the tracker's issue number and its
 creation date. Author, committer and dates are fixed and the commit is never
 signed, so two clones importing the same tracker issue write the same commit
 and therefore the same ref. Title and description follow as ordinary ops.
 
-The near slug is part of the identity; the far slug is not. Renaming the
-project in the tracker means editing `far-slug`. Changing `near-slug` imports
+The name is part of the identity; the ID is not. Renaming the
+project in the tracker means editing `id`. Changing `name` imports
 every issue again under new IDs.
 
 ### Which side moved
