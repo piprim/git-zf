@@ -118,16 +118,27 @@ levels, on real on-disk repos and the fake tracker:
   pinned by a golden hash.
 - `issue/mirror_test.go` — `Reconcile`: import, export, the eight rows of the
   state table (`TestReconcile_StateTable`), two clones importing offline.
+- `issue/mirror_test.go` — the content: `TestReconcile_TitleAndDescription`,
+  `TestReconcile_Labels`, `TestReconcile_LabelRuleRejection`,
+  `TestReconcile_Comments`, `TestReconcile_StatusIsLabel`, `TestSyncOne`.
 - `cmd/issue/mirror_e2e_test.go`, `close_mirror_e2e_test.go` — the commands.
 
     mise exec -- go test ./issue/... -run "TestReconcile|TestFold_Tracker|TestResolve_TrackerNumber" -v
     mise exec -- go test ./git/... -run "TestChainRef_FixedRoot" -v
     mise exec -- go test ./cmd/issue/... -run "^TestMirror|^TestClose_Mirror" -v
+    mise exec -- go test ./issue/... -run "TestReconcile_(TitleAndDescription|Labels|LabelRuleRejection|Comments|StatusIsLabel)|TestSyncOne" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestMirror_(Edit|Comment|LabelPicker)|^TestClose_Mirror_StatusIsLabel" -v
 
 The fake tracker is stateful for these calls: `CreateIssue` lists the issue,
 `SetIssueOpen` / `CloseIssue` / `ReopenIssue` move it in and out of the open
 listing. Use `CloseIssue` for "someone closed it in the tracker's UI": it is
 not recorded in `RecordedOpens`.
+
+The fake's `Edit` and `WebComment` play the tracker's web UI (not recorded, the
+issue's `UpdatedAt` moves); `StatusIsLabel` makes it behave like Redmine. A
+reconcile runs state, content, state again, then writes `tracker_seen`; a
+`SetLabels` that returns `tracker.ErrLabelRule` makes the record take the
+tracker's labels back, any other error keeps the local change.
 
 `importRootTemplate` (`issue/mirror.go`) is frozen: the ID of every imported
 issue is the hash of a commit holding those bytes. Never edit it; if

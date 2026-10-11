@@ -352,3 +352,200 @@ func TestMirror_ShowByTrackerNumber(t *testing.T) {
 		}
 	})
 }
+
+// importedRecord imports tracker issue 42 into the rig and returns its record.
+func importedRecord(t *testing.T, rig *recordRig, ft *fake.Tracker, m *issuepkg.Mirror) issuepkg.Record {
+	t.Helper()
+
+	ft.ProjectIssues = []tracker.Issue{fromTracker("42", "A", "open")}
+	if _, err := m.Reconcile(t.Context(), rig.client); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	return rig.onlyRecord(t)
+}
+
+func TestMirror_EditReachesTheTrackerAtOnce(t *testing.T) {
+	t.Parallel()
+
+	rig, ft, m := newMirrorRig(t)
+	ctx := t.Context()
+	rec := importedRecord(t, rig, ft, m)
+	title := "B"
+
+	err := runEdit(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, editFlags{title: &title}, m)
+	onTracker, _ := ft.GetIssue(ctx, "42")
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runEdit: %v", err)
+		}
+	})
+	t.Run("the tracker has the new title, with no project listing", func(t *testing.T) {
+		if onTracker.Subject != "B" || ft.ListProjectCalls != 1 {
+			t.Errorf("tracker title = %q, listings = %d", onTracker.Subject, ft.ListProjectCalls)
+		}
+	})
+	t.Run("the record is settled: a reconcile writes nothing", func(t *testing.T) {
+		res, _ := m.Reconcile(ctx, rig.client)
+		if res.Pulled+res.Pushed != 0 {
+			t.Errorf("res = %+v", res)
+		}
+	})
+}
+
+func TestMirror_CommentReachesTheTrackerAtOnce(t *testing.T) {
+	t.Parallel()
+
+	rig, ft, m := newMirrorRig(t)
+	ctx := t.Context()
+	rec := importedRecord(t, rig, ft, m)
+
+	err := runComment(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, "Posted", m)
+	got, _ := issuepkg.Load(ctx, rig.client, rec.ID)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runComment: %v", err)
+		}
+	})
+	t.Run("the comment is posted and linked", func(t *testing.T) {
+		if len(ft.RecordedComments) != 1 || ft.RecordedComments[0].Body != "Posted" ||
+			len(got.Comments) != 1 || got.Comments[0].TrackerID != ft.RecordedComments[0].ID {
+			t.Errorf("posted = %+v, comments = %+v", ft.RecordedComments, got.Comments)
+		}
+	})
+}
+
+func TestMirror_ShowPrintsATrackerComment(t *testing.T) {
+	t.Parallel()
+
+	rig, ft, m := newMirrorRig(t)
+	ft.ProjectIssues = []tracker.Issue{fromTracker("42", "A", "open")}
+	ft.WebComment("42", "bob", "From the web")
+	if _, err := m.Reconcile(t.Context(), rig.client); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	rec := rig.onlyRecord(t)
+
+	var out bytes.Buffer
+	renderRecord(&out, &rec)
+
+	t.Run("the comment shows its tracker author", func(t *testing.T) {
+		if !strings.Contains(out.String(), "bob") || !strings.Contains(out.String(), "From the web") {
+			t.Errorf("output = %q", out.String())
+		}
+	})
+}
+
+func TestMirror_EditWithTheTrackerDown(t *testing.T) {
+	t.Parallel()
+
+	rig, ft, m := newMirrorRig(t)
+	ctx := t.Context()
+	rec := importedRecord(t, rig, ft, m)
+	ft.GetErr = errors.New("502")
+	title := "B"
+
+	err := runEdit(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, editFlags{title: &title}, m)
+	got, _ := issuepkg.Load(ctx, rig.client, rec.ID)
+
+	t.Run("the edit is saved and the tracker failure is one warning", func(t *testing.T) {
+		if err != nil || got.Title != "B" || !strings.Contains(rig.stderr.String(), "warning") {
+			t.Errorf("err = %v, title = %q, stderr = %q", err, got.Title, rig.stderr.String())
+		}
+	})
+}
+
+func TestMirror_LabelPicker(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the form is offered the tracker's labels united with the issue's, the issue's as current", func(t *testing.T) {
+		t.Parallel()
+
+		rig, ft, m := newMirrorRig(t)
+		ctx := t.Context()
+		ft.Labels = []string{"bug", "ui"}
+		rec := importedRecord(t, rig, ft, m)
+		if err := issuepkg.Append(ctx, rig.client, rec.ID, &issuepkg.Op{Type: issuepkg.OpAddLabel, Value: "local"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		p := &scriptedRecordPrompter{LabelSet: []string{"local", "ui"}}
+
+		if err := runLabel(ctx, rig.client, p, []string{rec.ID}, m); err != nil {
+			t.Fatalf("runLabel: %v", err)
+		}
+		if !slices.Equal(p.LabelOffered.Choices, []string{"bug", "local", "ui"}) || !slices.Equal(p.LabelOffered.Current, []string{"local"}) || p.LabelOffered.Single {
+			t.Errorf("offered = %+v", p.LabelOffered)
+		}
+		onTracker, _ := ft.GetIssue(ctx, "42")
+		sorted := slices.Clone(onTracker.Labels)
+		slices.Sort(sorted)
+		if !slices.Equal(sorted, []string{"local", "ui"}) {
+			t.Errorf("tracker labels = %q, want local and ui at once", onTracker.Labels)
+		}
+	})
+
+	t.Run("on a single-label tracker the form is a single pick among the statuses", func(t *testing.T) {
+		t.Parallel()
+
+		rig, ft, m := newMirrorRig(t)
+		ctx := t.Context()
+		ft.StatusIsLabel, ft.Statuses, ft.ClosingStatuses = true, []string{"New", "Resolved"}, []string{"Closed"}
+		ft.ProjectIssues = []tracker.Issue{fromTracker("42", "A", "New")}
+		if _, err := m.Reconcile(ctx, rig.client); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		rec := rig.onlyRecord(t)
+		p := &scriptedRecordPrompter{LabelSet: []string{"Resolved"}}
+
+		if err := runLabel(ctx, rig.client, p, []string{rec.ID}, m); err != nil {
+			t.Fatalf("runLabel: %v", err)
+		}
+		if !p.LabelOffered.Single || !slices.Equal(p.LabelOffered.Choices, []string{"New", "Resolved"}) {
+			t.Errorf("offered = %+v", p.LabelOffered)
+		}
+		if onTracker, _ := ft.GetIssue(ctx, "42"); onTracker.Status != "Resolved" {
+			t.Errorf("tracker status = %q", onTracker.Status)
+		}
+	})
+
+	t.Run("on a single-label tracker tokens that leave two labels are refused before any op", func(t *testing.T) {
+		t.Parallel()
+
+		rig, ft, m := newMirrorRig(t)
+		ctx := t.Context()
+		ft.StatusIsLabel, ft.Statuses = true, []string{"New", "Resolved"}
+		ft.ProjectIssues = []tracker.Issue{fromTracker("42", "A", "New")}
+		if _, err := m.Reconcile(ctx, rig.client); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		rec := rig.onlyRecord(t)
+
+		err := runLabel(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID, "+urgent"}, m)
+		got, _ := issuepkg.Load(ctx, rig.client, rec.ID)
+		if err == nil || !slices.Equal(got.Labels, []string{"New"}) {
+			t.Errorf("err = %v, labels = %q", err, got.Labels)
+		}
+	})
+
+	t.Run("with the tracker down the text form is used and tokens are written unchecked", func(t *testing.T) {
+		t.Parallel()
+
+		rig, ft, m := newMirrorRig(t)
+		ctx := t.Context()
+		ft.StatusIsLabel, ft.Statuses = true, []string{"New"}
+		ft.ProjectIssues = []tracker.Issue{fromTracker("42", "A", "New")}
+		if _, err := m.Reconcile(ctx, rig.client); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		rec := rig.onlyRecord(t)
+		ft.ListLabelsErr, ft.GetErr = errors.New("502"), errors.New("502")
+
+		err := runLabel(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID, "+urgent"}, m)
+		got, _ := issuepkg.Load(ctx, rig.client, rec.ID)
+		if err != nil || !slices.Equal(got.Labels, []string{"New", "urgent"}) {
+			t.Errorf("err = %v, labels = %q", err, got.Labels)
+		}
+	})
+}

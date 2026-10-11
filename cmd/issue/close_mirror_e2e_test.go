@@ -256,3 +256,67 @@ func TestClose_Mirror_RepoBornCloseCommitRefersToTheTrackerNumber(t *testing.T) 
 		}
 	})
 }
+
+// closeStatusIsLabel is closeTrackerBorn on a fake that behaves like
+// Redmine: the status is the one label.
+func closeStatusIsLabel(t *testing.T, status string) (*closeTestRig, issuepkg.Record, error) {
+	t.Helper()
+
+	rig := newCloseRig(t)
+	ctx := t.Context()
+	m := mirrorOn(rig)
+	rig.tracker.StatusIsLabel = true
+	rig.tracker.Statuses = []string{"New", "Resolved", "Closed"}
+	rig.tracker.ClosingStatuses = []string{"Closed"}
+	rig.tracker.ProjectIssues = []tracker.Issue{{
+		TrackerType: "fake", ID: "ABC-1", Subject: "Add thing", Status: "New",
+		CreatedAt: time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC),
+	}}
+	if _, err := m.Reconcile(ctx, rig.client); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	rec, err := issuepkg.Resolve(ctx, rig.client, importedID(t, rig))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	branchtest.Amend(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing", TrackerType: "fake", IssueID: rec.ID})
+
+	prompter := &scriptedPrompter{
+		Branch:        rig.pickedBranchRow(),
+		Strategy:      commitpkg.MergeStrategySquash,
+		Confirm:       true,
+		Message:       []byte("feat(thing): close ABC-1\n"),
+		TrackerStatus: status,
+		DeleteBranch:  true,
+	}
+	runErr := runClose(ctx, rig.deps(), prompter)
+
+	got, err := issuepkg.Load(ctx, rig.client, rec.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	return rig, got, runErr
+}
+
+func TestClose_Mirror_StatusIsLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a closing status picked at close becomes the record's label in one run", func(t *testing.T) {
+		t.Parallel()
+
+		_, rec, err := closeStatusIsLabel(t, "Closed")
+		if err != nil || rec.State != issuepkg.StateClosed || !slices.Equal(rec.Labels, []string{"Closed"}) {
+			t.Errorf("err = %v, record = %+v", err, rec)
+		}
+	})
+
+	t.Run("a status that leaves the issue open is the label and the record stays open", func(t *testing.T) {
+		t.Parallel()
+
+		_, rec, err := closeStatusIsLabel(t, "Resolved")
+		if err != nil || rec.State != issuepkg.StateOpen || !slices.Equal(rec.Labels, []string{"Resolved"}) {
+			t.Errorf("err = %v, record = %+v", err, rec)
+		}
+	})
+}

@@ -465,14 +465,23 @@ func TestAddComment(t *testing.T) {
 			}
 		)
 		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				fmt.Fprint(w, `{"issue":{"id":42,"journals":[{"id":3,"notes":"needs tests","user":{"name":"Me"},"created_on":"2026-09-01T09:00:00Z"}]}}`)
+
+				return
+			}
 			hits++
 			method, path = r.Method, r.URL.Path
 			_ = json.NewDecoder(r.Body).Decode(&got)
 			w.WriteHeader(http.StatusNoContent)
 		})
 
-		if err := a.AddComment(t.Context(), "42", "needs tests"); err != nil {
+		c, err := a.AddComment(t.Context(), "42", "needs tests")
+		if err != nil {
 			t.Fatalf("AddComment: %v", err)
+		}
+		if c.ID != "3" {
+			t.Errorf("comment ID = %q, want 3", c.ID)
 		}
 
 		if hits != 1 || method != http.MethodPut || path != "/issues/42.json" {
@@ -491,7 +500,7 @@ func TestAddComment(t *testing.T) {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 		})
 
-		if err := a.AddComment(t.Context(), "42", "x"); err == nil {
+		if _, err := a.AddComment(t.Context(), "42", "x"); err == nil {
 			t.Error("expected error on 422, got nil")
 		}
 	})

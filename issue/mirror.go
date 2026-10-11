@@ -89,7 +89,7 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 
 	for i := range listed {
 		iss := &listed[i]
-		if id, ok := healImport(ctx, c, bare, iss, res.warnf); id != "" {
+		if id, ok := m.healImport(ctx, c, bare, iss, res.warnf); id != "" {
 			healed[id] = true
 			if ok {
 				res.Imported++
@@ -109,7 +109,7 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 			continue
 		}
 
-		id, err := m.importIssue(ctx, c, iss)
+		id, err := m.importIssue(ctx, c, iss, res.warnf)
 		if err != nil {
 			res.warnf("import tracker issue %s: %v", iss.ID, err)
 
@@ -161,8 +161,13 @@ func (r *MirrorResult) warnf(format string, args ...any) {
 	r.Warnings = append(r.Warnings, "WARN: "+fmt.Sprintf(format, args...))
 }
 
-// syncRecords exports the open records without a tracker issue and syncs the
-// state of the linked ones. It returns the IDs of the records it changed.
+// contentMove sums what the content steps did to one record.
+type contentMove struct {
+	pulled, pushed bool
+}
+
+// syncRecords exports the open records without a tracker issue and runs the
+// four steps on the linked ones. It returns the IDs of the records it changed.
 func (m *Mirror) syncRecords(
 	ctx context.Context, c *git.Client, records []Record, open map[string]*tracker.Issue, res *MirrorResult,
 ) []string {
@@ -170,34 +175,37 @@ func (m *Mirror) syncRecords(
 
 	for i := range records {
 		rec := &records[i]
+		var listed *tracker.Issue
 
 		switch {
 		case rec.Tracker == nil && rec.State == StateOpen:
-			if err := m.export(ctx, c, rec); err != nil {
+			created, err := m.export(ctx, c, rec)
+			if err != nil {
 				res.warnf("export issue %s: %v", rec.DisplayID(), err)
 
 				continue
 			}
 			res.Exported++
 			changed = append(changed, rec.ID)
+			listed = &created
 		case m.owns(rec):
-			move, err := m.syncState(ctx, c, rec, open[rec.Tracker.ID])
-			if err != nil {
-				res.warnf("sync issue %s: %v", rec.DisplayID(), err)
+			listed = open[rec.Tracker.ID]
+		default:
+			continue
+		}
 
-				continue
-			}
-
-			switch move {
-			case movePulled:
-				res.Pulled++
-			case movePushed:
-				res.Pushed++
-			case moveNone, moveNoted:
-			}
-			if move != moveNone {
-				changed = append(changed, rec.ID)
-			}
+		pulled, pushed, moved, err := m.syncRecord(ctx, c, rec, listed, res)
+		if err != nil {
+			res.warnf("sync issue %s: %v", rec.DisplayID(), err)
+		}
+		if pulled {
+			res.Pulled++
+		}
+		if pushed {
+			res.Pushed++
+		}
+		if moved && !slices.Contains(changed, rec.ID) {
+			changed = append(changed, rec.ID)
 		}
 	}
 
@@ -206,7 +214,7 @@ func (m *Mirror) syncRecords(
 
 // importIssue writes the chain of a tracker issue that has no record and
 // returns its ID.
-func (m *Mirror) importIssue(ctx context.Context, c *git.Client, iss *tracker.Issue) (string, error) {
+func (m *Mirror) importIssue(ctx context.Context, c *git.Client, iss *tracker.Issue, warn func(string, ...any)) (string, error) {
 	if !plainTokenRe.MatchString(iss.ID) || !plainTokenRe.MatchString(m.Type) || !plainTokenRe.MatchString(m.Project) {
 		return "", fmt.Errorf("unsupported characters in %q, %q or %q", iss.ID, m.Type, m.Project)
 	}
@@ -234,7 +242,36 @@ func (m *Mirror) importIssue(ctx context.Context, c *git.Client, iss *tracker.Is
 		return "", fmt.Errorf("publish: %w", err)
 	}
 
-	return id, appendAll(ctx, c, id, importOps(iss)...)
+	return id, m.importContent(ctx, c, id, iss, warn)
+}
+
+// importContent writes the ops that follow the root of an imported issue and
+// pulls its comments. A failure to list the comments is not an error: the
+// snapshot written here has no updated time, so the next run reads them.
+func (m *Mirror) importContent(ctx context.Context, c *git.Client, id string, iss *tracker.Issue, warn func(string, ...any)) error {
+	ops := importOps(iss)
+	snapshot := ops[len(ops)-1]
+
+	comments, err := m.Tracker.ListComments(ctx, iss.ID)
+	if err != nil {
+		warn("import comments of tracker issue %s: %v (they come with the next run)", iss.ID, err)
+		snapshot.Updated = ""
+	}
+	if err := appendAll(ctx, c, id, ops[:len(ops)-1]...); err != nil {
+		return err
+	}
+	for _, tc := range comments {
+		if tc.Body == "" {
+			continue
+		}
+		op := &Op{Type: OpAddComment, Body: tc.Body, TrackerCommentID: tc.ID, TrackerAuthor: tc.Author,
+			TrackerAt: tc.CreatedAt.UTC().Format(time.RFC3339Nano)}
+		if err := appendAll(ctx, c, id, op); err != nil {
+			return err
+		}
+	}
+
+	return appendAll(ctx, c, id, snapshot)
 }
 
 // importOps are the ops that follow the root of an imported issue.
@@ -243,15 +280,19 @@ func importOps(iss *tracker.Issue) []*Op {
 	if iss.Description != "" {
 		ops = append(ops, &Op{Type: OpSetDescription, Value: iss.Description})
 	}
+	for _, l := range iss.Labels {
+		ops = append(ops, &Op{Type: OpAddLabel, Value: l})
+	}
+	snap := snapshotOf(iss)
 
-	return append(ops, &Op{Type: OpTrackerState, Value: StateOpen, Status: iss.Status})
+	return append(ops, &Op{Type: OpTrackerState, Value: StateOpen, Status: iss.Status}, snapshotOp(&snap))
 }
 
 // healImport redoes the ops of an import that stopped after the root was
 // published (a failed signature, a crash): the record has no title yet. It
 // returns the ID of such a record ("" when iss names none) and whether the
 // ops were written.
-func healImport(
+func (m *Mirror) healImport(
 	ctx context.Context, c *git.Client, bare map[string]*Record, iss *tracker.Issue, warn func(string, ...any),
 ) (id string, ok bool) {
 	rec := bare[iss.ID]
@@ -260,7 +301,7 @@ func healImport(
 	}
 	delete(bare, iss.ID)
 
-	if err := appendAll(ctx, c, rec.ID, importOps(iss)...); err != nil {
+	if err := m.importContent(ctx, c, rec.ID, iss, warn); err != nil {
 		warn("import tracker issue %s: %v", iss.ID, err)
 
 		return rec.ID, false
@@ -269,74 +310,486 @@ func healImport(
 	return rec.ID, true
 }
 
-// export creates the tracker issue of a record that has none and links them.
-func (m *Mirror) export(ctx context.Context, c *git.Client, rec *Record) error {
+// export creates the tracker issue of a record that has none, links them and
+// returns the created issue, so that the caller syncs the record against it
+// at once.
+func (m *Mirror) export(ctx context.Context, c *git.Client, rec *Record) (tracker.Issue, error) {
 	created, err := m.Tracker.CreateIssue(ctx, rec.Title, rec.Description)
 	if err != nil {
-		return fmt.Errorf("create tracker issue: %w", err)
+		return tracker.Issue{}, fmt.Errorf("create tracker issue: %w", err)
 	}
 
-	err = appendAll(ctx, c, rec.ID,
-		&Op{Type: OpLinkTracker, TrackerType: m.Type, Project: m.Project, TrackerID: created.ID},
-		&Op{Type: OpTrackerState, Value: StateOpen, Status: created.Status})
-	if err != nil {
+	// The record takes the labels the tracker gave the new issue (Redmine's
+	// default status), as an import does.
+	snap := snapshotOf(&created)
+	ops := []*Op{
+		{Type: OpLinkTracker, TrackerType: m.Type, Project: m.Project, TrackerID: created.ID},
+		{Type: OpTrackerState, Value: StateOpen, Status: created.Status},
+	}
+	for _, l := range created.Labels {
+		ops = append(ops, &Op{Type: OpAddLabel, Value: l})
+	}
+	if err := appendAll(ctx, c, rec.ID, append(ops, snapshotOp(&snap))...); err != nil {
 		// The next run exports again: the issue named here is the orphan.
-		return fmt.Errorf("link tracker issue %s (created, now orphaned): %w", created.ID, err)
+		return tracker.Issue{}, fmt.Errorf("link tracker issue %s (created, now orphaned): %w", created.ID, err)
+	}
+	rec.Tracker = &TrackerLink{Type: m.Type, Project: m.Project, ID: created.ID}
+	rec.Labels = slices.Compact(slices.Sorted(slices.Values(slices.Concat(rec.Labels, created.Labels))))
+	rec.TrackerState, rec.TrackerStatus, rec.TrackerSeen = StateOpen, created.Status, &snap
+
+	return created, nil
+}
+
+// SyncOne runs the four steps on one record and pushes it: what `edit`,
+// `label` and `comment` call after their push, so that the tracker gets the
+// change at once. The issue is read with one call, no listing. A nil Mirror,
+// or a record the mirror does not own, is a no-op.
+func (m *Mirror) SyncOne(ctx context.Context, c *git.Client, id string) (MirrorResult, error) {
+	var res MirrorResult
+	if m == nil {
+		return res, nil
 	}
 
-	return nil
+	rec, err := Load(ctx, c, id)
+	if err != nil {
+		return res, err
+	}
+	if !m.owns(&rec) {
+		return res, nil
+	}
+
+	// Read here, not left to syncRecord: a record closed on both sides still
+	// gets its comments posted.
+	t, err := m.reread(ctx, &rec)
+	if err != nil {
+		return res, err
+	}
+	pulled, pushed, changed, err := m.syncRecord(ctx, c, &rec, t, &res)
+	if pulled {
+		res.Pulled++
+	}
+	if pushed {
+		res.Pushed++
+	}
+	if changed {
+		if perr := Push(ctx, c, id); perr != nil {
+			res.warnf("issue saved locally but not pushed (run `git zf issue sync` later): %v", perr)
+		}
+	}
+
+	return res, err
+}
+
+// syncRecord runs the four steps on one linked record: state, content, state
+// again on the issue as re-read after a push, then the snapshot. listed is
+// the issue in the open listing, nil when it is not there. changed reports
+// whether an op was written, even when err is set.
+func (m *Mirror) syncRecord(
+	ctx context.Context, c *git.Client, rec *Record, listed *tracker.Issue, res *MirrorResult,
+) (pulled, pushed, changed bool, err error) {
+	t, err := m.trackerIssue(ctx, rec, listed)
+	if err != nil || t == nil {
+		return false, false, false, err
+	}
+
+	move, err := m.syncState(ctx, c, rec, t)
+	if err != nil {
+		return false, false, false, err
+	}
+	pulled, pushed, changed = move == movePulled, move == movePushed, move != moveNone
+	if move == movePushed {
+		if t, err = m.reread(ctx, rec); err != nil {
+			return pulled, pushed, changed, err
+		}
+	}
+
+	cm, err := m.syncContent(ctx, c, rec, t, res)
+	pulled, pushed, changed = pulled || cm.pulled, pushed || cm.pushed, changed || cm.pulled || cm.pushed
+	if err != nil {
+		return pulled, pushed, changed, err
+	}
+	if cm.pushed {
+		if t, err = m.reread(ctx, rec); err != nil {
+			return pulled, pushed, changed, err
+		}
+		adopted, err := adopt(ctx, c, rec, t)
+		changed = changed || adopted
+		if err != nil {
+			return pulled, pushed, changed, err
+		}
+		move, err = m.syncState(ctx, c, rec, t)
+		if err != nil {
+			return pulled, pushed, changed, err
+		}
+		pulled, changed = pulled || move == movePulled, changed || move != moveNone
+	}
+
+	snap := snapshotOf(t)
+	if !sameSnapshot(rec.TrackerSeen, &snap) {
+		if err := appendAll(ctx, c, rec.ID, snapshotOp(&snap)); err != nil {
+			return pulled, pushed, changed, err
+		}
+		rec.TrackerSeen, changed = &snap, true
+	}
+
+	return pulled, pushed, changed, nil
+}
+
+// adopt runs the pull half of the rule on t as re-read after a push, the
+// baseline being what was sent (the record): a value the tracker respelled
+// (a label's case, a trimmed title) is taken back, so the next run is settled.
+func adopt(ctx context.Context, c *git.Client, rec *Record, t *tracker.Issue) (bool, error) {
+	title, pullTitle, _, _ := resolveField(rec.Title, rec.Title, t.Subject)
+	desc, pullDesc, _, _ := resolveField(rec.Description, rec.Description, t.Description)
+	labels, ops, _ := resolveLabels(rec.Labels, rec.Labels, t.Labels)
+	if pullTitle {
+		ops = append(ops, &Op{Type: OpSetTitle, Value: title})
+	}
+	if pullDesc {
+		ops = append(ops, &Op{Type: OpSetDescription, Value: desc})
+	}
+	if len(ops) == 0 {
+		return false, nil
+	}
+	if err := appendAll(ctx, c, rec.ID, ops...); err != nil {
+		return false, err
+	}
+	rec.Title, rec.Description, rec.Labels = title, desc, labels
+
+	return true, nil
+}
+
+// trackerIssue is the issue as the tracker shows it now: listed when it is
+// in the open listing, read with one call otherwise. nil, nil for a record
+// closed on both sides and not listed: nothing to compare.
+func (m *Mirror) trackerIssue(ctx context.Context, rec *Record, listed *tracker.Issue) (*tracker.Issue, error) {
+	if listed != nil {
+		return listed, nil
+	}
+	if rec.State == StateClosed && cmp.Or(rec.TrackerState, StateOpen) == StateClosed {
+		return nil, nil
+	}
+
+	return m.reread(ctx, rec)
+}
+
+// reread reads the record's tracker issue.
+func (m *Mirror) reread(ctx context.Context, rec *Record) (*tracker.Issue, error) {
+	iss, err := m.Tracker.GetIssue(ctx, rec.Tracker.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read tracker issue %s: %w", rec.Tracker.ID, err)
+	}
+
+	return &iss, nil
 }
 
 // syncState compares three states of a linked record: l, the tracker state its
 // chain last recorded (open when it recorded none); r, the repo state; t, the
 // tracker state now. The side that differs from l moved, and the other one
-// follows. When both differ from l they are equal: there is no conflict.
-// listed is the issue in the open listing, nil when it is not there.
-func (m *Mirror) syncState(
-	ctx context.Context, c *git.Client, rec *Record, listed *tracker.Issue,
-) (stateMove, error) {
+// follows. When both differ from l they are equal: there is no conflict. The
+// record is updated in memory with what was appended.
+func (m *Mirror) syncState(ctx context.Context, c *git.Client, rec *Record, t *tracker.Issue) (stateMove, error) {
 	l, r := cmp.Or(rec.TrackerState, StateOpen), rec.State
-	t, status := StateOpen, rec.TrackerStatus
-
-	switch {
-	case listed != nil:
-		status = listed.Status
-	case r == StateClosed && l == StateClosed:
-		// Closed on both sides and still not listed: no need to ask.
-		t = StateClosed
-	default:
-		closed, err := m.Tracker.IsIssueClosed(ctx, rec.Tracker.ID)
-		if err != nil {
-			return moveNone, fmt.Errorf("read tracker issue %s: %w", rec.Tracker.ID, err)
-		}
-		if closed {
-			t, status = StateClosed, StateClosed
+	state, status := StateOpen, t.Status
+	if t.Closed {
+		state = StateClosed
+		if status == "" {
+			status = StateClosed
 		}
 	}
 
-	seen := &Op{Type: OpTrackerState, Value: t, Status: status}
+	seen := &Op{Type: OpTrackerState, Value: state, Status: status}
+	note := func() { rec.TrackerState, rec.TrackerStatus = seen.Value, seen.Status }
 
 	switch {
-	case t != l && r != t:
-		return movePulled, appendAll(ctx, c, rec.ID, &Op{Type: OpSetState, Value: t}, seen)
-	case t != l:
-		return moveNoted, appendAll(ctx, c, rec.ID, seen)
-	case r != t:
+	case state != l && r != state:
+		err := appendAll(ctx, c, rec.ID, &Op{Type: OpSetState, Value: state}, seen)
+		if err == nil {
+			rec.State = state
+			note()
+		}
+
+		return movePulled, err
+	case state != l:
+		err := appendAll(ctx, c, rec.ID, seen)
+		if err == nil {
+			note()
+		}
+
+		return moveNoted, err
+	case r != state:
 		if err := m.Tracker.SetIssueOpen(ctx, rec.Tracker.ID, r == StateOpen); err != nil {
 			return moveNone, fmt.Errorf("set tracker issue %s %s: %w", rec.Tracker.ID, r, err)
 		}
-		// The status name a reopened issue got is read from the next listing.
+		// The status name a reopened issue got is read from the re-read.
 		seen.Value, seen.Status = r, ""
 		if r == StateClosed {
 			seen.Status = StateClosed
 		}
+		err := appendAll(ctx, c, rec.ID, seen)
+		if err == nil {
+			note()
+		}
 
-		return movePushed, appendAll(ctx, c, rec.ID, seen)
+		return movePushed, err
 	case rec.TrackerState == "" || status != rec.TrackerStatus:
-		return moveNoted, appendAll(ctx, c, rec.ID, seen)
+		err := appendAll(ctx, c, rec.ID, seen)
+		if err == nil {
+			note()
+		}
+
+		return moveNoted, err
 	}
 
 	return moveNone, nil
+}
+
+// syncContent resolves title, description, labels and comments between the
+// baseline, the record and t. A push goes to the tracker before any pull op
+// is written, so that a failed push leaves the chain as it was and the next
+// run redoes the whole step. Comments come last: pulled first, so that a
+// comment posted here is never pulled back as a new one.
+func (m *Mirror) syncContent(
+	ctx context.Context, c *git.Client, rec *Record, t *tracker.Issue, res *MirrorResult,
+) (contentMove, error) {
+	var cm contentMove
+	if contentSettled(rec, t) {
+		return cm, nil
+	}
+	base := baseline(rec)
+
+	title, pullTitle, pushTitle, conflictTitle := resolveField(base.Title, rec.Title, t.Subject)
+	desc, pullDesc, pushDesc, conflictDesc := resolveField(base.Description, rec.Description, t.Description)
+	if conflictTitle {
+		res.warnf("issue %s: title changed on both sides; kept %q, the tracker had %q", rec.DisplayID(), rec.Title, t.Subject)
+	}
+	if conflictDesc {
+		res.warnf("issue %s: description changed on both sides; kept the repo's, the tracker had %q", rec.DisplayID(), t.Description)
+	}
+
+	if pushTitle || pushDesc {
+		if err := m.Tracker.UpdateIssue(ctx, rec.Tracker.ID, title, desc); err != nil {
+			return cm, fmt.Errorf("update tracker issue %s: %w", rec.Tracker.ID, err)
+		}
+		cm.pushed = true
+	}
+
+	labels, pullLabels, pushLabels := resolveLabels(base.Labels, rec.Labels, t.Labels)
+	if pushLabels {
+		err := m.Tracker.SetLabels(ctx, rec.Tracker.ID, labels)
+		switch {
+		case errors.Is(err, tracker.ErrLabelRule):
+			// The record's labels cannot exist on the tracker: take the
+			// tracker's back, once, and say which names are dropped.
+			var dropped []string
+			for _, name := range rec.Labels {
+				if !slices.Contains(t.Labels, name) {
+					dropped = append(dropped, name)
+				}
+			}
+			labels, pullLabels, _ = resolveLabels(rec.Labels, rec.Labels, t.Labels)
+			res.warnf("issue %s: labels %q refused by the tracker, kept %q: %v", rec.DisplayID(), dropped, labels, err)
+		case err != nil:
+			return cm, fmt.Errorf("set labels of tracker issue %s: %w", rec.Tracker.ID, err)
+		default:
+			cm.pushed = true
+		}
+	}
+
+	var ops []*Op
+	if pullTitle {
+		ops = append(ops, &Op{Type: OpSetTitle, Value: title})
+	}
+	if pullDesc {
+		ops = append(ops, &Op{Type: OpSetDescription, Value: desc})
+	}
+	ops = append(ops, pullLabels...)
+	if len(ops) > 0 {
+		if err := appendAll(ctx, c, rec.ID, ops...); err != nil {
+			return cm, err
+		}
+		rec.Title, rec.Description, cm.pulled = title, desc, true
+		rec.Labels = labels
+	}
+
+	pulledComments, err := m.pullComments(ctx, c, rec, t)
+	cm.pulled = cm.pulled || pulledComments
+	if err != nil {
+		return cm, err
+	}
+	pushedComments, err := m.pushComments(ctx, c, rec)
+	cm.pushed = cm.pushed || pushedComments
+	if err != nil {
+		return cm, err
+	}
+
+	return cm, nil
+}
+
+// pullComments appends the tracker's comments the record lacks, oldest
+// first, when the tracker moved since the snapshot. An empty body is skipped.
+func (m *Mirror) pullComments(ctx context.Context, c *git.Client, rec *Record, t *tracker.Issue) (bool, error) {
+	if rec.TrackerSeen != nil && t.UpdatedAt.Equal(rec.TrackerSeen.Updated) {
+		return false, nil
+	}
+
+	comments, err := m.Tracker.ListComments(ctx, rec.Tracker.ID)
+	if err != nil {
+		return false, fmt.Errorf("list comments of tracker issue %s: %w", rec.Tracker.ID, err)
+	}
+	known := make(map[string]bool, len(rec.Comments))
+	for _, rc := range rec.Comments {
+		known[rc.TrackerID] = true
+	}
+
+	var ops []*Op
+	for _, tc := range comments {
+		if tc.Body == "" || known[tc.ID] {
+			continue
+		}
+		ops = append(ops, &Op{
+			Type: OpAddComment, Body: tc.Body, TrackerCommentID: tc.ID, TrackerAuthor: tc.Author,
+			TrackerAt: tc.CreatedAt.UTC().Format(time.RFC3339Nano),
+		})
+		rec.Comments = append(rec.Comments, Comment{Author: tc.Author, At: tc.CreatedAt, Body: tc.Body, TrackerID: tc.ID})
+	}
+	if len(ops) == 0 {
+		return false, nil
+	}
+
+	return true, appendAll(ctx, c, rec.ID, ops...)
+}
+
+// pushComments posts every record comment the tracker has not got and links
+// each one with the ID it was given.
+func (m *Mirror) pushComments(ctx context.Context, c *git.Client, rec *Record) (bool, error) {
+	pushed := false
+	for i := range rec.Comments {
+		rc := &rec.Comments[i]
+		if rc.TrackerID != "" {
+			continue
+		}
+		posted, err := m.Tracker.AddComment(ctx, rec.Tracker.ID, rc.Body)
+		if err != nil {
+			return pushed, fmt.Errorf("post comment on tracker issue %s: %w", rec.Tracker.ID, err)
+		}
+		pushed = true
+		if err := appendAll(ctx, c, rec.ID, &Op{Type: OpLinkComment, Comment: rc.ID, TrackerCommentID: posted.ID}); err != nil {
+			// The next run posts it again: the comment named here is the orphan.
+			return pushed, fmt.Errorf("link comment %s (posted on tracker issue %s as %s, now orphaned): %w",
+				rc.ID, rec.Tracker.ID, posted.ID, err)
+		}
+		rc.TrackerID = posted.ID
+	}
+
+	return pushed, nil
+}
+
+// resolveLabels applies the rule to every name of l, r and t: the side that
+// differs from the baseline moved. It returns the final set, the add/remove
+// ops that take the record to it, and whether the tracker must be set.
+func resolveLabels(l, r, t []string) (final []string, pull []*Op, push bool) {
+	names := slices.Concat(l, r, t)
+	slices.Sort(names)
+	names = slices.Compact(names)
+
+	for _, name := range names {
+		inL, inR, inT := slices.Contains(l, name), slices.Contains(r, name), slices.Contains(t, name)
+		switch {
+		case inT && !inL && !inR:
+			pull = append(pull, &Op{Type: OpAddLabel, Value: name})
+			final = append(final, name)
+		case !inT && inL && inR:
+			pull = append(pull, &Op{Type: OpRemoveLabel, Value: name})
+		case inR && !inL && !inT, !inR && inL && inT:
+			push = true
+			if inR {
+				final = append(final, name)
+			}
+		case inR:
+			final = append(final, name)
+		}
+	}
+	if final == nil {
+		final = []string{}
+	}
+
+	return final, pull, push
+}
+
+// resolveField applies the rule of one field: l the baseline, r the record, t
+// the tracker. The side that differs from l moved. Both sides moved apart is
+// a conflict the record wins.
+func resolveField(l, r, t string) (final string, pull, push, conflict bool) {
+	switch {
+	case t == l && r == l:
+		return r, false, false, false
+	case t != l && r == l:
+		return t, true, false, false
+	case r != l && t == l:
+		return r, false, true, false
+	case r == t:
+		return r, false, false, false
+	default:
+		return r, false, true, true
+	}
+}
+
+// baseline is the snapshot, or the record itself when the chain has none (a
+// link written before snapshots existed): the tracker is then pulled
+// wherever it differs.
+func baseline(rec *Record) TrackerSnapshot {
+	if rec.TrackerSeen != nil {
+		return *rec.TrackerSeen
+	}
+
+	return TrackerSnapshot{Title: rec.Title, Description: rec.Description, Labels: slices.Clone(rec.Labels)}
+}
+
+// contentSettled reports that nothing moved on either side since the
+// snapshot: the tracker's updated time is the snapshot's, the record equals
+// the snapshot, and every comment is on the tracker.
+func contentSettled(rec *Record, t *tracker.Issue) bool {
+	s := rec.TrackerSeen
+	if s == nil || s.Updated.IsZero() || !t.UpdatedAt.Equal(s.Updated) {
+		return false
+	}
+	if rec.Title != s.Title || rec.Description != s.Description || !slices.Equal(rec.Labels, s.Labels) {
+		return false
+	}
+	for _, c := range rec.Comments {
+		if c.TrackerID == "" {
+			return false
+		}
+	}
+
+	return true
+}
+
+// snapshotOf is the snapshot of t: what the tracker shows.
+func snapshotOf(t *tracker.Issue) TrackerSnapshot {
+	labels := slices.Clone(t.Labels)
+	if labels == nil {
+		labels = []string{}
+	}
+	slices.Sort(labels)
+
+	return TrackerSnapshot{Title: t.Subject, Description: t.Description, Labels: labels, Updated: t.UpdatedAt}
+}
+
+func sameSnapshot(a, b *TrackerSnapshot) bool {
+	return a != nil && a.Title == b.Title && a.Description == b.Description &&
+		slices.Equal(a.Labels, b.Labels) && a.Updated.Equal(b.Updated)
+}
+
+// snapshotOp is the tracker_seen op of s.
+func snapshotOp(s *TrackerSnapshot) *Op {
+	op := &Op{Type: OpTrackerSeen, Title: s.Title, Description: s.Description, Labels: s.Labels}
+	if !s.Updated.IsZero() {
+		op.Updated = s.Updated.UTC().Format(time.RFC3339Nano)
+	}
+
+	return op
 }
 
 // appendAll appends ops to issue id, in order.

@@ -3,6 +3,7 @@ package issue
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func op(id, typ, at string, parents ...string) Op {
@@ -421,6 +422,134 @@ func TestFold_Tracker(t *testing.T) {
 		rec := Fold("c0", []Op{root, seen("c1", "resolved", "Resolved", "c0")})
 		if rec.TrackerState != "" || rec.TrackerStatus != "" {
 			t.Errorf("TrackerState = %q, TrackerStatus = %q", rec.TrackerState, rec.TrackerStatus)
+		}
+	})
+}
+
+func TestFold_Content(t *testing.T) {
+	t.Parallel()
+
+	root := op("c0", OpCreate, "2026-10-01T10:00:00Z")
+	root.TrackerType, root.Project, root.TrackerID = "forgejo", "zf", "42"
+
+	t.Run("tracker_seen gives the snapshot with sorted labels and the updated time", func(t *testing.T) {
+		t.Parallel()
+
+		seen := op("c1", OpTrackerSeen, "2026-10-01T11:00:00Z", "c0")
+		seen.Title, seen.Description, seen.Labels, seen.Updated = "T", "D", []string{"ui", "bug"}, "2026-10-01T10:30:00Z"
+
+		got := Fold("c0", []Op{root, seen}).TrackerSeen
+		want := &TrackerSnapshot{Title: "T", Description: "D", Labels: []string{"bug", "ui"},
+			Updated: time.Date(2026, 10, 1, 10, 30, 0, 0, time.UTC)}
+		if got == nil || got.Title != want.Title || got.Description != want.Description ||
+			!slices.Equal(got.Labels, want.Labels) || !got.Updated.Equal(want.Updated) {
+			t.Errorf("TrackerSeen = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("a tracker_seen without labels folds to an empty, non-nil list", func(t *testing.T) {
+		t.Parallel()
+
+		seen := op("c1", OpTrackerSeen, "2026-10-01T11:00:00Z", "c0")
+		if got := Fold("c0", []Op{root, seen}).TrackerSeen; got == nil || got.Labels == nil || len(got.Labels) != 0 {
+			t.Errorf("TrackerSeen = %+v", got)
+		}
+	})
+
+	t.Run("no tracker_seen leaves TrackerSeen nil", func(t *testing.T) {
+		t.Parallel()
+
+		if got := Fold("c0", []Op{root}).TrackerSeen; got != nil {
+			t.Errorf("TrackerSeen = %+v, want nil", got)
+		}
+	})
+
+	t.Run("an imported comment shows the tracker author, time and ID", func(t *testing.T) {
+		t.Parallel()
+
+		c := op("c1", OpAddComment, "2026-10-02T09:00:00Z", "c0")
+		c.Author, c.Body = "alice <a@test.com>", "From the web"
+		c.TrackerCommentID, c.TrackerAuthor, c.TrackerAt = "77", "bob", "2026-10-01T15:00:00Z"
+
+		got := Fold("c0", []Op{root, c}).Comments
+		if len(got) != 1 || got[0].Author != "bob" || got[0].TrackerID != "77" || got[0].Body != "From the web" ||
+			!got[0].At.Equal(time.Date(2026, 10, 1, 15, 0, 0, 0, time.UTC)) {
+			t.Errorf("Comments = %+v", got)
+		}
+	})
+
+	t.Run("a second add_comment with the same tracker comment ID is dropped", func(t *testing.T) {
+		t.Parallel()
+
+		c1 := op("c1", OpAddComment, "2026-10-02T09:00:00Z", "c0")
+		c1.Body, c1.TrackerCommentID = "From the web", "77"
+		c2 := op("c2", OpAddComment, "2026-10-02T09:00:01Z", "c0")
+		c2.Body, c2.TrackerCommentID = "From the web", "77"
+
+		if got := Fold("c0", []Op{root, c1, c2}).Comments; len(got) != 1 || got[0].ID != "c1" {
+			t.Errorf("Comments = %+v, want the first only", got)
+		}
+	})
+
+	t.Run("link_comment sets the tracker ID of a local comment", func(t *testing.T) {
+		t.Parallel()
+
+		c := op("c1", OpAddComment, "2026-10-02T09:00:00Z", "c0")
+		c.Author, c.Body = "alice <a@test.com>", "Local"
+		link := op("c2", OpLinkComment, "2026-10-02T09:01:00Z", "c1")
+		link.Comment, link.TrackerCommentID = "c1", "78"
+
+		got := Fold("c0", []Op{root, c, link}).Comments
+		if len(got) != 1 || got[0].TrackerID != "78" || got[0].Author != "alice <a@test.com>" {
+			t.Errorf("Comments = %+v", got)
+		}
+	})
+
+	t.Run("a link_comment naming no comment, or an already linked one, changes nothing", func(t *testing.T) {
+		t.Parallel()
+
+		c := op("c1", OpAddComment, "2026-10-02T09:00:00Z", "c0")
+		c.Body, c.TrackerCommentID = "Imported", "77"
+		stray := op("c2", OpLinkComment, "2026-10-02T09:01:00Z", "c1")
+		stray.Comment, stray.TrackerCommentID = "nope", "1"
+		again := op("c3", OpLinkComment, "2026-10-02T09:02:00Z", "c2")
+		again.Comment, again.TrackerCommentID = "c1", "99"
+
+		if got := Fold("c0", []Op{root, c, stray, again}).Comments; len(got) != 1 || got[0].TrackerID != "77" {
+			t.Errorf("Comments = %+v", got)
+		}
+	})
+
+	t.Run("a comment linked on one clone and pulled on another folds to one comment, in either order", func(t *testing.T) {
+		t.Parallel()
+
+		local := op("a1", OpAddComment, "2026-10-02T09:00:00Z", "c0")
+		local.Body = "Local"
+		link := op("a2", OpLinkComment, "2026-10-02T09:01:00Z", "a1")
+		link.Comment, link.TrackerCommentID = "a1", "c5"
+		for name, at := range map[string]string{"pull first": "2026-10-02T08:00:00Z", "pull last": "2026-10-02T10:00:00Z"} {
+			pull := op("b1", OpAddComment, at, "c0")
+			pull.Body, pull.TrackerCommentID = "Local", "c5"
+			t.Run(name, func(t *testing.T) {
+				if got := Fold("c0", []Op{root, local, link, pull}).Comments; len(got) != 1 || got[0].TrackerID != "c5" {
+					t.Errorf("Comments = %+v", got)
+				}
+			})
+		}
+	})
+}
+
+func TestDecodeOp_ContentFields(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the new fields are decoded and cleaned of control characters", func(t *testing.T) {
+		t.Parallel()
+
+		payload := `{"v":1,"type":"tracker_seen","at":"2026-10-01T11:00:00Z","title":"T\u0007","labels":["a\tb"],"updated":"2026-10-01T10:30:00Z","tracker_comment_id":"7\u0007","tracker_author":"bob","tracker_at":"2026-10-01T15:00:00Z","comment":"c1"}`
+		op, ok := DecodeOp("x", nil, []byte(payload))
+		if !ok || op.Title != "T" || !slices.Equal(op.Labels, []string{"a b"}) || op.Updated != "2026-10-01T10:30:00Z" ||
+			op.TrackerCommentID != "7" || op.TrackerAuthor != "bob" || op.TrackerAt != "2026-10-01T15:00:00Z" || op.Comment != "c1" {
+			t.Errorf("op = %+v, ok = %v", op, ok)
 		}
 	})
 }

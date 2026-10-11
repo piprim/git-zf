@@ -34,7 +34,7 @@ func applyTrackerStatus(ctx context.Context, deps reviewDeps, prompter ReviewPro
 // Callers must have checked trackerBornIssue first.
 func addTrackerComment(ctx context.Context, deps reviewDeps, issueSlug string, round int, reason string) {
 	body := fmt.Sprintf("Changes requested (review round %d):\n\n%s", round, reason)
-	if err := deps.tracker.AddComment(ctx, issueSlug, body); err != nil {
+	if _, err := deps.tracker.AddComment(ctx, issueSlug, body); err != nil {
 		fmt.Fprintf(deps.client.IO().Err, "warning: add tracker comment: %v\n", err)
 	}
 }

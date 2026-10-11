@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -630,5 +631,734 @@ func TestResolve_TrackerNumber(t *testing.T) {
 		if _, err := Resolve(ctx, c, "999"); !errors.Is(err, git.ErrIssueNotFound) {
 			t.Errorf("err = %v, want ErrIssueNotFound", err)
 		}
+	})
+}
+
+// countingTracker counts the per-issue reads the reconcile makes.
+type countingTracker struct {
+	*fake.Tracker
+	gets int
+}
+
+func (c *countingTracker) GetIssue(ctx context.Context, id string) (tracker.Issue, error) {
+	c.gets++
+
+	return c.Tracker.GetIssue(ctx, id)
+}
+
+// importOne imports tracker issue 42 titled "A" with description "D" and
+// returns the repo, the fake, the mirror and the record.
+func importOne(t *testing.T) (*git.Client, *fake.Tracker, *Mirror, Record) {
+	t.Helper()
+
+	c := newRepo(t, "alice", "")
+	iss := trackerIssue("42", "A")
+	iss.Description = "D"
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{iss}}
+	m := newTestMirror(ft)
+	mustReconcile(t, m, c)
+
+	return c, ft, m, onlyRecord(t, c)
+}
+
+func TestReconcile_TitleAndDescription(t *testing.T) {
+	t.Parallel()
+
+	rows := []struct {
+		name           string
+		r, tr          string // what each side set the title to; "A" is the baseline
+		want           string
+		pulled, pushed int
+		edits          int // UpdateIssue calls
+		conflict       bool
+	}{
+		{"nobody moved", "A", "A", "A", 0, 0, 0, false},
+		{"the tracker moved", "A", "B", "B", 1, 0, 0, false},
+		{"the repo moved", "B", "A", "B", 0, 1, 1, false},
+		{"both moved the same way", "B", "B", "B", 0, 0, 0, false},
+		{"both moved apart: the repo wins", "B", "C", "B", 0, 1, 1, true},
+	}
+
+	for _, row := range rows {
+		t.Run("title: "+row.name, func(t *testing.T) {
+			t.Parallel()
+
+			c, ft, m, rec := importOne(t)
+			ctx := t.Context()
+			if row.r != "A" {
+				if err := Append(ctx, c, rec.ID, &Op{Type: OpSetTitle, Value: row.r}); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			if row.tr != "A" {
+				ft.Edit("42", func(iss *tracker.Issue) { iss.Subject = row.tr })
+			}
+
+			res := mustReconcile(t, m, c)
+			got, _ := Load(ctx, c, rec.ID)
+			onTracker, _ := ft.GetIssue(ctx, "42")
+
+			if got.Title != row.want || onTracker.Subject != row.want {
+				t.Errorf("repo title = %q, tracker title = %q, want both %q", got.Title, onTracker.Subject, row.want)
+			}
+			if res.Pulled != row.pulled || res.Pushed != row.pushed || len(ft.RecordedEdits) != row.edits {
+				t.Errorf("pulled/pushed/edits = %d/%d/%d, want %d/%d/%d", res.Pulled, res.Pushed, len(ft.RecordedEdits), row.pulled, row.pushed, row.edits)
+			}
+			if warned := len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], "title"); warned != row.conflict {
+				t.Errorf("warnings = %q, want a conflict warning: %v", res.Warnings, row.conflict)
+			}
+			if got.TrackerSeen == nil || got.TrackerSeen.Title != row.want || !got.TrackerSeen.Updated.Equal(onTracker.UpdatedAt) {
+				t.Errorf("snapshot = %+v, tracker updated %v", got.TrackerSeen, onTracker.UpdatedAt)
+			}
+		})
+	}
+
+	t.Run("description cleared on the tracker clears the record", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ft.Edit("42", func(iss *tracker.Issue) { iss.Description = "" })
+		res := mustReconcile(t, m, c)
+		got, _ := Load(t.Context(), c, rec.ID)
+		if got.Description != "" || res.Pulled != 1 {
+			t.Errorf("description = %q, res = %+v", got.Description, res)
+		}
+	})
+
+	t.Run("description changed in the repo reaches the tracker with the unchanged title", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		if err := Append(t.Context(), c, rec.ID, &Op{Type: OpSetDescription, Value: "D2"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		mustReconcile(t, m, c)
+		if want := (fake.Edit{IssueID: "42", Title: "A", Description: "D2"}); len(ft.RecordedEdits) != 1 || ft.RecordedEdits[0] != want {
+			t.Errorf("edits = %+v, want %+v", ft.RecordedEdits, want)
+		}
+	})
+}
+
+func TestReconcile_ContentSettles(t *testing.T) {
+	t.Parallel()
+
+	c, ft, _, rec := importOne(t)
+	ct := &countingTracker{Tracker: ft}
+	m := &Mirror{Tracker: ct, Type: "fake", Project: "zf"}
+	ctx := t.Context()
+
+	before := opCount(t, c, rec.ID)
+	again := mustReconcile(t, m, c)
+
+	t.Run("a run with nothing changed writes no op, reads no issue and edits nothing", func(t *testing.T) {
+		if opCount(t, c, rec.ID) != before || ct.gets != 0 || len(ft.RecordedEdits) != 0 || again.Pulled+again.Pushed != 0 {
+			t.Errorf("ops %d → %d, gets %d, edits %d, res %+v", before, opCount(t, c, rec.ID), ct.gets, len(ft.RecordedEdits), again)
+		}
+	})
+
+	if err := Append(ctx, c, rec.ID, &Op{Type: OpSetTitle, Value: "B"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	mustReconcile(t, m, c)
+	gets := ct.gets
+	afterPush := opCount(t, c, rec.ID)
+	third := mustReconcile(t, m, c)
+
+	t.Run("a push re-reads the issue once so that the run after it is settled", func(t *testing.T) {
+		if gets != 1 || opCount(t, c, rec.ID) != afterPush || ct.gets != 1 || third.Pulled+third.Pushed != 0 {
+			t.Errorf("gets after push %d, ops %d → %d, gets after third %d, third %+v", gets, afterPush, opCount(t, c, rec.ID), ct.gets, third)
+		}
+	})
+}
+
+func TestReconcile_ContentOfAClosedIssue(t *testing.T) {
+	t.Parallel()
+
+	c, ft, m, rec := importOne(t)
+	ft.Edit("42", func(iss *tracker.Issue) { iss.Subject = "Closed with a new title" })
+	ft.CloseIssue("42")
+	res := mustReconcile(t, m, c)
+	got, _ := Load(t.Context(), c, rec.ID)
+
+	t.Run("an issue closed on the tracker still gets its last edit", func(t *testing.T) {
+		if got.State != StateClosed || got.Title != "Closed with a new title" || res.Pulled != 1 {
+			t.Errorf("record = %+v, res = %+v", got, res)
+		}
+	})
+}
+
+func TestReconcile_TrackerIssueGone(t *testing.T) {
+	t.Parallel()
+
+	c, ft, m, rec := importOne(t)
+	ft.CloseIssue("42")
+	ft.Unknown = map[string]bool{"42": true}
+	before := opCount(t, c, rec.ID)
+	res := mustReconcile(t, m, c)
+
+	t.Run("a record whose tracker issue is gone is skipped with one warning", func(t *testing.T) {
+		if len(res.Warnings) != 1 || opCount(t, c, rec.ID) != before {
+			t.Errorf("warnings = %q, ops %d → %d", res.Warnings, before, opCount(t, c, rec.ID))
+		}
+	})
+}
+
+func TestReconcile_RecordWithoutSnapshot(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+	rec, err := Create(ctx, c, NewIssue{Title: "Local", Description: "Old", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// A link written by the binary before this change: no tracker_seen.
+	for _, op := range []*Op{
+		{Type: OpLinkTracker, TrackerType: "fake", Project: "zf", TrackerID: "7"},
+		{Type: OpTrackerState, Value: StateOpen, Status: "open"},
+	} {
+		if err := Append(ctx, c, rec.ID, op); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	iss := trackerIssue("7", "Local")
+	iss.Description = "Edited on the web"
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{iss}}
+	res := mustReconcile(t, newTestMirror(ft), c)
+	got, _ := Load(ctx, c, rec.ID)
+
+	t.Run("the tracker's content is pulled wherever it differs, and a snapshot is written", func(t *testing.T) {
+		if got.Description != "Edited on the web" || got.TrackerSeen == nil || res.Pulled != 1 || len(ft.RecordedEdits) != 0 {
+			t.Errorf("record = %+v, res = %+v, edits = %+v", got, res, ft.RecordedEdits)
+		}
+	})
+}
+
+func TestReconcile_ExportWritesASnapshot(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	if _, err := Create(t.Context(), c, NewIssue{Title: "Local", Description: "Steps", BranchType: "feat"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ft := &fake.Tracker{}
+	mustReconcile(t, newTestMirror(ft), c)
+	rec := onlyRecord(t, c)
+
+	t.Run("the snapshot is the created issue", func(t *testing.T) {
+		if rec.TrackerSeen == nil || rec.TrackerSeen.Title != "Local" || rec.TrackerSeen.Description != "Steps" || rec.TrackerSeen.Updated.IsZero() {
+			t.Errorf("snapshot = %+v", rec.TrackerSeen)
+		}
+	})
+}
+
+func TestReconcile_PullFromAnUnlistedIssueIsPushed(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", newOrigin(t))
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "A")}}
+	m := newTestMirror(ft)
+	mustReconcile(t, m, c)
+	ft.CloseIssue("42")
+	res := mustReconcile(t, m, c)
+	rec := onlyRecord(t, c)
+
+	t.Run("the close read from the tracker is pushed", func(t *testing.T) {
+		pushed, err := c.ChainRefPushed(t.Context(), git.IssueRefs, rec.ID)
+		if rec.State != StateClosed || res.Pulled != 1 || err != nil || !pushed {
+			t.Errorf("state %s, res %+v, ChainRefPushed = %v, %v", rec.State, res, pushed, err)
+		}
+	})
+}
+
+func TestReconcile_Labels(t *testing.T) {
+	t.Parallel()
+
+	// The baseline is {bug}. Each row names what each side did to it.
+	rows := []struct {
+		name   string
+		r, tr  []string
+		want   []string
+		pulled int
+		pushed int
+		sets   int // SetLabels calls
+	}{
+		{"nobody moved", []string{"bug"}, []string{"bug"}, []string{"bug"}, 0, 0, 0},
+		{"the tracker added one", []string{"bug"}, []string{"bug", "ui"}, []string{"bug", "ui"}, 1, 0, 0},
+		{"the tracker removed one", []string{"bug"}, nil, []string{}, 1, 0, 0},
+		{"the repo added one", []string{"bug", "needs triage"}, []string{"bug"}, []string{"bug", "needs triage"}, 0, 1, 1},
+		{"the repo removed one", nil, []string{"bug"}, []string{}, 0, 1, 1},
+		{"both added the same one", []string{"bug", "ui"}, []string{"bug", "ui"}, []string{"bug", "ui"}, 0, 0, 0},
+		{"each side added its own", []string{"bug", "ui"}, []string{"bug", "doc"}, []string{"bug", "doc", "ui"}, 1, 1, 1},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := newRepo(t, "alice", "")
+			ctx := t.Context()
+			iss := trackerIssue("42", "A")
+			iss.Labels = []string{"bug"}
+			ft := &fake.Tracker{ProjectIssues: []tracker.Issue{iss}, Labels: []string{"bug", "ui", "doc"}}
+			m := newTestMirror(ft)
+			mustReconcile(t, m, c)
+			rec := onlyRecord(t, c)
+
+			for _, op := range diffLabelsForTest(rec.Labels, row.r) {
+				if err := Append(ctx, c, rec.ID, op); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			if !slices.Equal(row.tr, []string{"bug"}) {
+				ft.Edit("42", func(iss *tracker.Issue) { iss.Labels = slices.Clone(row.tr) })
+			}
+
+			res := mustReconcile(t, m, c)
+			got, _ := Load(ctx, c, rec.ID)
+			onTracker, _ := ft.GetIssue(ctx, "42")
+			sorted := slices.Clone(onTracker.Labels)
+			slices.Sort(sorted)
+
+			if !slices.Equal(got.Labels, row.want) || !slices.Equal(sorted, row.want) {
+				t.Errorf("repo labels = %q, tracker labels = %q, want both %q", got.Labels, sorted, row.want)
+			}
+			if res.Pulled != row.pulled || res.Pushed != row.pushed || len(ft.RecordedLabelSets) != row.sets {
+				t.Errorf("pulled/pushed/sets = %d/%d/%d, want %d/%d/%d", res.Pulled, res.Pushed, len(ft.RecordedLabelSets), row.pulled, row.pushed, row.sets)
+			}
+			if got.TrackerSeen == nil || !slices.Equal(got.TrackerSeen.Labels, row.want) {
+				t.Errorf("snapshot labels = %q, want %q", got.TrackerSeen, row.want)
+			}
+		})
+	}
+}
+
+// diffLabelsForTest is the add/remove ops that take labels from have to want.
+func diffLabelsForTest(have, want []string) []*Op {
+	var ops []*Op
+	for _, l := range have {
+		if !slices.Contains(want, l) {
+			ops = append(ops, &Op{Type: OpRemoveLabel, Value: l})
+		}
+	}
+	for _, l := range want {
+		if !slices.Contains(have, l) {
+			ops = append(ops, &Op{Type: OpAddLabel, Value: l})
+		}
+	}
+
+	return ops
+}
+
+func TestReconcile_LabelRuleRejection(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+	iss := trackerIssue("42", "A")
+	iss.Status, iss.Labels = "New", []string{"New"}
+	ft := &fake.Tracker{StatusIsLabel: true, Statuses: []string{"New", "Closed"}, ClosingStatuses: []string{"Closed"},
+		ProjectIssues: []tracker.Issue{iss}}
+	m := newTestMirror(ft)
+	mustReconcile(t, m, c)
+	rec := onlyRecord(t, c)
+	if err := Append(ctx, c, rec.ID, &Op{Type: OpAddLabel, Value: "urgent"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	res := mustReconcile(t, m, c)
+	got, _ := Load(ctx, c, rec.ID)
+
+	t.Run("the record takes the tracker's labels back, with one warning naming the dropped name", func(t *testing.T) {
+		if !slices.Equal(got.Labels, []string{"New"}) || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "urgent") {
+			t.Errorf("labels = %q, warnings = %q", got.Labels, res.Warnings)
+		}
+	})
+
+	t.Run("the warning names the labels the tracker kept", func(t *testing.T) {
+		if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], `kept ["New"]`) {
+			t.Errorf("warnings = %q", res.Warnings)
+		}
+	})
+
+	before := opCount(t, c, rec.ID)
+	again := mustReconcile(t, m, c)
+
+	t.Run("the run after is quiet", func(t *testing.T) {
+		if len(again.Warnings) != 0 || opCount(t, c, rec.ID) != before {
+			t.Errorf("warnings = %q, ops %d → %d", again.Warnings, before, opCount(t, c, rec.ID))
+		}
+	})
+}
+
+func TestReconcile_LabelTransportFailureKeepsTheChange(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "A")}}
+	m := newTestMirror(ft)
+	mustReconcile(t, m, c)
+	rec := onlyRecord(t, c)
+	if err := Append(ctx, c, rec.ID, &Op{Type: OpAddLabel, Value: "urgent"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	ft.SetLabelsErr = errors.New("502")
+	res := mustReconcile(t, m, c)
+	got, _ := Load(ctx, c, rec.ID)
+
+	t.Run("a transport failure is a warning and the local label stays", func(t *testing.T) {
+		if !slices.Equal(got.Labels, []string{"urgent"}) || len(res.Warnings) != 1 {
+			t.Errorf("labels = %q, warnings = %q", got.Labels, res.Warnings)
+		}
+	})
+
+	ft.SetLabelsErr = nil
+	mustReconcile(t, m, c)
+	onTracker, _ := ft.GetIssue(ctx, "42")
+
+	t.Run("the next run pushes it", func(t *testing.T) {
+		if !slices.Equal(onTracker.Labels, []string{"urgent"}) {
+			t.Errorf("tracker labels = %q", onTracker.Labels)
+		}
+	})
+}
+
+func TestReconcile_Comments(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an import brings the tracker's comments with their author, time and ID", func(t *testing.T) {
+		t.Parallel()
+
+		c := newRepo(t, "alice", "")
+		ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "A")}}
+		web := ft.WebComment("42", "bob", "From the web")
+		mustReconcile(t, newTestMirror(ft), c)
+		rec := onlyRecord(t, c)
+		if len(rec.Comments) != 1 || rec.Comments[0].Author != "bob" || rec.Comments[0].TrackerID != web.ID ||
+			rec.Comments[0].Body != "From the web" || !rec.Comments[0].At.Equal(web.CreatedAt) {
+			t.Errorf("comments = %+v", rec.Comments)
+		}
+	})
+
+	t.Run("a tracker comment made after the import is pulled, once", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ft.WebComment("42", "bob", "Later")
+		res := mustReconcile(t, m, c)
+		got, _ := Load(t.Context(), c, rec.ID)
+		if len(got.Comments) != 1 || got.Comments[0].Body != "Later" || res.Pulled != 1 {
+			t.Errorf("comments = %+v, res = %+v", got.Comments, res)
+		}
+		before := opCount(t, c, rec.ID)
+		mustReconcile(t, m, c)
+		if opCount(t, c, rec.ID) != before {
+			t.Errorf("ops %d → %d on the run after", before, opCount(t, c, rec.ID))
+		}
+	})
+
+	t.Run("a repo comment is posted and linked, and not pulled back", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ctx := t.Context()
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpAddComment, Body: "From the repo"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		res := mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		if len(ft.RecordedComments) != 1 || ft.RecordedComments[0].Body != "From the repo" || res.Pushed != 1 {
+			t.Errorf("posted = %+v, res = %+v", ft.RecordedComments, res)
+		}
+		if len(got.Comments) != 1 || got.Comments[0].TrackerID != ft.RecordedComments[0].ID {
+			t.Errorf("comments = %+v", got.Comments)
+		}
+		mustReconcile(t, m, c)
+		got, _ = Load(ctx, c, rec.ID)
+		if len(got.Comments) != 1 || len(ft.RecordedComments) != 1 {
+			t.Errorf("after a second run: comments = %+v, posted = %+v", got.Comments, ft.RecordedComments)
+		}
+	})
+
+	t.Run("an empty tracker comment is not pulled", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ft.WebComment("42", "bot", "")
+		mustReconcile(t, m, c)
+		got, _ := Load(t.Context(), c, rec.ID)
+		if len(got.Comments) != 0 {
+			t.Errorf("comments = %+v", got.Comments)
+		}
+	})
+
+	t.Run("two clones pulling the same comment offline fold to one", func(t *testing.T) {
+		t.Parallel()
+
+		origin := newOrigin(t)
+		a, b := newRepo(t, "alice", origin), newRepo(t, "bob", origin)
+		ctx := t.Context()
+		ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "A")}}
+		mustReconcile(t, newTestMirror(ft), a)
+		if _, err := Fetch(ctx, b); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		ft.WebComment("42", "bob", "Seen by both")
+		mustReconcile(t, newTestMirror(ft), a)
+		mustReconcile(t, newTestMirror(ft), b)
+		if _, err := Fetch(ctx, a); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if ra := onlyRecord(t, a); len(ra.Comments) != 1 {
+			t.Errorf("comments = %+v", ra.Comments)
+		}
+	})
+}
+
+func TestSyncOne(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a nil mirror does nothing", func(t *testing.T) {
+		t.Parallel()
+
+		var m *Mirror
+		if res, err := m.SyncOne(t.Context(), newRepo(t, "alice", ""), "x"); err != nil || res.Pushed != 0 {
+			t.Errorf("res = %+v, err = %v", res, err)
+		}
+	})
+
+	t.Run("pushes the record's change to the tracker without a listing", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ctx := t.Context()
+		listings := ft.ListProjectCalls
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpSetTitle, Value: "B"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		res, err := m.SyncOne(ctx, c, rec.ID)
+		onTracker, _ := ft.GetIssue(ctx, "42")
+		if err != nil || res.Pushed != 1 || onTracker.Subject != "B" || ft.ListProjectCalls != listings {
+			t.Errorf("res = %+v, err = %v, tracker title = %q, listings %d → %d", res, err, onTracker.Subject, listings, ft.ListProjectCalls)
+		}
+	})
+
+	t.Run("a record without a link is left alone", func(t *testing.T) {
+		t.Parallel()
+
+		c := newRepo(t, "alice", "")
+		ctx := t.Context()
+		rec, err := Create(ctx, c, NewIssue{Title: "Local", BranchType: "feat"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		ft := &fake.Tracker{}
+		if res, err := newTestMirror(ft).SyncOne(ctx, c, rec.ID); err != nil || res.Exported != 0 || len(ft.RecordedCreates) != 0 {
+			t.Errorf("res = %+v, err = %v, creates = %+v", res, err, ft.RecordedCreates)
+		}
+	})
+
+	t.Run("a comment on a record closed on both sides is posted", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ctx := t.Context()
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpSetState, Value: StateClosed}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		mustReconcile(t, m, c)
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpAddComment, Body: "After the close"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		_, err := m.SyncOne(ctx, c, rec.ID)
+		got, _ := Load(ctx, c, rec.ID)
+		if err != nil || len(ft.RecordedComments) != 1 || len(got.Comments) != 1 || got.Comments[0].TrackerID == "" {
+			t.Errorf("err = %v, posted = %+v, comments = %+v", err, ft.RecordedComments, got.Comments)
+		}
+	})
+
+	t.Run("a tracker failure is returned, the record untouched", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ft.GetErr = errors.New("502")
+		before := opCount(t, c, rec.ID)
+		if _, err := m.SyncOne(t.Context(), c, rec.ID); err == nil || opCount(t, c, rec.ID) != before {
+			t.Errorf("err = %v, ops %d → %d", err, before, opCount(t, c, rec.ID))
+		}
+	})
+}
+
+// newStatusIsLabelMirror imports issue 42 in status "New" on a fake that
+// behaves like Redmine.
+func newStatusIsLabelMirror(t *testing.T) (*git.Client, *fake.Tracker, *Mirror, Record) {
+	t.Helper()
+
+	c := newRepo(t, "alice", "")
+	iss := trackerIssue("42", "A")
+	iss.Status = "New"
+	ft := &fake.Tracker{StatusIsLabel: true, Statuses: []string{"New", "Resolved", "Closed"},
+		ClosingStatuses: []string{"Closed"}, ProjectIssues: []tracker.Issue{iss}}
+	m := newTestMirror(ft)
+	mustReconcile(t, m, c)
+
+	return c, ft, m, onlyRecord(t, c)
+}
+
+func TestReconcile_StatusIsLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the imported record carries the status as its one label", func(t *testing.T) {
+		t.Parallel()
+
+		_, _, _, rec := newStatusIsLabelMirror(t)
+		if !slices.Equal(rec.Labels, []string{"New"}) {
+			t.Errorf("labels = %q", rec.Labels)
+		}
+	})
+
+	t.Run("a close in the repo gives the record the closing status as label in one run", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := newStatusIsLabelMirror(t)
+		ctx := t.Context()
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpSetState, Value: StateClosed}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		closed, _ := ft.IsIssueClosed(ctx, "42")
+		if !closed || !slices.Equal(got.Labels, []string{"Closed"}) || got.State != StateClosed {
+			t.Errorf("tracker closed = %v, record = %+v", closed, got)
+		}
+		if len(ft.RecordedLabelSets) != 0 {
+			t.Errorf("SetLabels was called: %+v", ft.RecordedLabelSets)
+		}
+	})
+
+	t.Run("a closing status set as a label closes the record in the same run", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := newStatusIsLabelMirror(t)
+		ctx := t.Context()
+		for _, op := range []*Op{{Type: OpRemoveLabel, Value: "New"}, {Type: OpAddLabel, Value: "Closed"}} {
+			if err := Append(ctx, c, rec.ID, op); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+		}
+		mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		closed, _ := ft.IsIssueClosed(ctx, "42")
+		if !closed || got.State != StateClosed || !slices.Equal(got.Labels, []string{"Closed"}) || got.TrackerStatus != "Closed" {
+			t.Errorf("tracker closed = %v, record = %+v", closed, got)
+		}
+	})
+
+	t.Run("an exported record takes the default status as its one label, quietly", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, _ := newStatusIsLabelMirror(t)
+		ctx := t.Context()
+		local, err := Create(ctx, c, NewIssue{Title: "Local", BranchType: "feat"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		res := mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, local.ID)
+		if res.Exported != 1 || !slices.Equal(got.Labels, []string{"New"}) || len(res.Warnings) != 0 || len(ft.RecordedLabelSets) != 0 {
+			t.Errorf("res = %+v, labels = %q, sets = %+v", res, got.Labels, ft.RecordedLabelSets)
+		}
+	})
+
+	t.Run("a status picked on the tracker is pulled as the label", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := newStatusIsLabelMirror(t)
+		ctx := t.Context()
+		if err := ft.UpdateIssueStatus(ctx, "42", "Resolved"); err != nil {
+			t.Fatalf("UpdateIssueStatus: %v", err)
+		}
+		mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		if !slices.Equal(got.Labels, []string{"Resolved"}) || got.TrackerStatus != "Resolved" {
+			t.Errorf("record = %+v", got)
+		}
+	})
+}
+
+func TestContentSettled_ZeroUpdated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a snapshot without an updated time is not settled", func(t *testing.T) {
+		rec := &Record{Title: "A", Labels: []string{}, TrackerSeen: &TrackerSnapshot{Title: "A", Labels: []string{}}}
+		if contentSettled(rec, &tracker.Issue{Subject: "A"}) {
+			t.Error("contentSettled = true, want false")
+		}
+	})
+}
+
+// trimmingTracker trims the title it is sent, as a tracker that respells it.
+type trimmingTracker struct{ *fake.Tracker }
+
+func (tt trimmingTracker) UpdateIssue(ctx context.Context, id, title, description string) error {
+	return tt.Tracker.UpdateIssue(ctx, id, strings.TrimSpace(title), description)
+}
+
+func TestReconcile_RespelledPushSettles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a label the tracker respells is pushed once", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := newStatusIsLabelMirror(t)
+		ctx := t.Context()
+		for _, op := range []*Op{{Type: OpRemoveLabel, Value: "New"}, {Type: OpAddLabel, Value: "resolved"}} {
+			if err := Append(ctx, c, rec.ID, op); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+		}
+		mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		t.Run("the record takes the tracker's spelling", func(t *testing.T) {
+			if !slices.Equal(got.Labels, []string{"Resolved"}) || len(ft.RecordedLabelSets) != 1 {
+				t.Errorf("labels = %q, sets = %+v", got.Labels, ft.RecordedLabelSets)
+			}
+		})
+
+		before := opCount(t, c, rec.ID)
+		mustReconcile(t, m, c)
+		t.Run("the second run writes nothing and sets no label", func(t *testing.T) {
+			if opCount(t, c, rec.ID) != before || len(ft.RecordedLabelSets) != 1 {
+				t.Errorf("ops %d → %d, sets = %+v", before, opCount(t, c, rec.ID), ft.RecordedLabelSets)
+			}
+		})
+	})
+
+	t.Run("a title the tracker trims is pushed once", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, _, rec := importOne(t)
+		ctx := t.Context()
+		m := &Mirror{Tracker: trimmingTracker{ft}, Type: "fake", Project: "zf"}
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpSetTitle, Value: "B "}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		t.Run("the record takes the tracker's title", func(t *testing.T) {
+			if got.Title != "B" || len(ft.RecordedEdits) != 1 {
+				t.Errorf("title = %q, edits = %+v", got.Title, ft.RecordedEdits)
+			}
+		})
+
+		before := opCount(t, c, rec.ID)
+		mustReconcile(t, m, c)
+		t.Run("the second run writes nothing and edits nothing", func(t *testing.T) {
+			if opCount(t, c, rec.ID) != before || len(ft.RecordedEdits) != 1 {
+				t.Errorf("ops %d → %d, edits = %+v", before, opCount(t, c, rec.ID), ft.RecordedEdits)
+			}
+		})
 	})
 }

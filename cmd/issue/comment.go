@@ -39,10 +39,10 @@ func (i Issue) commentRunE(cmd *cobra.Command, args []string, message string) er
 		return fmt.Errorf("open repository: %w", err)
 	}
 
-	return runComment(cmd.Context(), client, huhRecordPrompter{}, args, message)
+	return runComment(cmd.Context(), client, huhRecordPrompter{}, args, message, openMirror(i.appConfig, client.IO().Err))
 }
 
-func runComment(ctx context.Context, client *git.Client, p recordPrompter, args []string, message string) error {
+func runComment(ctx context.Context, client *git.Client, p recordPrompter, args []string, message string, m *issuepkg.Mirror) error {
 	fetchIssues(ctx, client)
 
 	rec, err := resolveRecord(ctx, client, p, args)
@@ -68,6 +68,7 @@ func runComment(ctx context.Context, client *git.Client, p recordPrompter, args 
 	}
 
 	pushIssue(ctx, client, rec.ID)
+	syncOne(ctx, client, m, rec.ID)
 	fmt.Fprintf(client.IO().Out, "Commented on issue %s\n", rec.DisplayID())
 
 	return nil

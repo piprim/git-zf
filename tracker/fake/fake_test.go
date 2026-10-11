@@ -2,6 +2,7 @@ package fake
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/piprim/git-zf/tracker"
@@ -99,6 +100,116 @@ func TestFake_Mirror(t *testing.T) {
 		}
 		if _, err := ft.CreateIssue(ctx, "x", ""); !errors.Is(err, boom) {
 			t.Errorf("CreateIssue err = %v", err)
+		}
+	})
+}
+
+func TestFake_Content(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	t.Run("every mutation moves UpdatedAt forward", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1", Subject: "T"}}}
+		before, _ := ft.GetIssue(ctx, "1")
+		_ = ft.UpdateIssue(ctx, "1", "T2", "D")
+		mid, _ := ft.GetIssue(ctx, "1")
+		ft.Edit("1", func(iss *tracker.Issue) { iss.Subject = "T3" })
+		after, _ := ft.GetIssue(ctx, "1")
+		if !before.UpdatedAt.Before(mid.UpdatedAt) || !mid.UpdatedAt.Before(after.UpdatedAt) || after.Subject != "T3" {
+			t.Errorf("UpdatedAt %v, %v, %v; subject %q", before.UpdatedAt, mid.UpdatedAt, after.UpdatedAt, after.Subject)
+		}
+	})
+
+	t.Run("GetIssue of a closed issue reports Closed and the status closed", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1", Status: "open"}}}
+		ft.CloseIssue("1")
+		if iss, err := ft.GetIssue(ctx, "1"); err != nil || !iss.Closed || iss.Status != "closed" {
+			t.Errorf("GetIssue = %+v, %v", iss, err)
+		}
+	})
+
+	t.Run("GetIssue honours Unknown and Errors like IsIssueClosed", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{Unknown: map[string]bool{"9": true}, Errors: map[string]error{"8": errors.New("boom")}}
+		if _, err := ft.GetIssue(ctx, "9"); !errors.Is(err, tracker.ErrIssueNotFound) {
+			t.Errorf("unknown: err = %v", err)
+		}
+		if _, err := ft.GetIssue(ctx, "8"); err == nil || err.Error() != "boom" {
+			t.Errorf("errors: err = %v", err)
+		}
+	})
+
+	t.Run("SetLabels records the set, creates the missing names and lists them", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1"}}, Labels: []string{"bug"}}
+		if err := ft.SetLabels(ctx, "1", []string{"bug", "urgent"}); err != nil {
+			t.Fatalf("SetLabels: %v", err)
+		}
+		iss, _ := ft.GetIssue(ctx, "1")
+		names, _ := ft.ListLabels(ctx)
+		if !slices.Equal(iss.Labels, []string{"bug", "urgent"}) || !slices.Equal(names, []string{"bug", "urgent"}) ||
+			len(ft.RecordedLabelSets) != 1 || !slices.Equal(ft.RecordedLabelSets[0].Labels, []string{"bug", "urgent"}) {
+			t.Errorf("labels = %q, catalogue = %q, recorded = %+v", iss.Labels, names, ft.RecordedLabelSets)
+		}
+	})
+
+	t.Run("AddComment returns the comment with an ID, lists it and records it", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1"}}}
+		c, err := ft.AddComment(ctx, "1", "Hello")
+		listed, _ := ft.ListComments(ctx, "1")
+		if err != nil || c.ID != "c1" || c.Body != "Hello" || len(listed) != 1 || listed[0].ID != "c1" ||
+			len(ft.RecordedComments) != 1 || ft.RecordedComments[0].ID != "c1" {
+			t.Errorf("comment = %+v, err = %v, listed = %+v, recorded = %+v", c, err, listed, ft.RecordedComments)
+		}
+	})
+
+	t.Run("a web comment is listed but not recorded", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1"}}}
+		c := ft.WebComment("1", "bob", "From the web")
+		listed, _ := ft.ListComments(ctx, "1")
+		if c.Author != "bob" || len(listed) != 1 || len(ft.RecordedComments) != 0 {
+			t.Errorf("comment = %+v, listed = %+v, recorded = %+v", c, listed, ft.RecordedComments)
+		}
+	})
+
+	t.Run("with StatusIsLabel the status is the one label and SetLabels sets it", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{StatusIsLabel: true, Statuses: []string{"New", "Closed"}, ClosingStatuses: []string{"Closed"},
+			ProjectIssues: []tracker.Issue{{ID: "1", Status: "New"}}}
+		listed, _ := ft.ListProjectIssues(ctx)
+		names, _ := ft.ListLabels(ctx)
+		if !tracker.SingleLabel(ft) || !slices.Equal(listed[0].Labels, []string{"New"}) || !slices.Equal(names, []string{"New", "Closed"}) {
+			t.Errorf("single = %v, labels = %q, names = %q", tracker.SingleLabel(ft), listed[0].Labels, names)
+		}
+		if err := ft.SetLabels(ctx, "1", []string{"Closed"}); err != nil {
+			t.Fatalf("SetLabels: %v", err)
+		}
+		if iss, _ := ft.GetIssue(ctx, "1"); !iss.Closed || !slices.Equal(iss.Labels, []string{"Closed"}) {
+			t.Errorf("after: %+v", iss)
+		}
+	})
+
+	t.Run("with StatusIsLabel a set that is not one status is ErrLabelRule", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{StatusIsLabel: true, Statuses: []string{"New"}, ProjectIssues: []tracker.Issue{{ID: "1", Status: "New"}}}
+		if err := ft.SetLabels(ctx, "1", []string{"New", "urgent"}); !errors.Is(err, tracker.ErrLabelRule) {
+			t.Errorf("two names: err = %v", err)
+		}
+		if err := ft.SetLabels(ctx, "1", []string{"urgent"}); !errors.Is(err, tracker.ErrLabelRule) {
+			t.Errorf("not a status: err = %v", err)
 		}
 	})
 }

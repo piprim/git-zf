@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -211,8 +212,9 @@ func TestListIssues(t *testing.T) {
 		want := tracker.Issue{
 			TrackerType: "forgejo", ID: "42", Subject: "Fix login",
 			Description: "details", Status: "open", Project: "octocat/hello",
+			Labels: []string{},
 		}
-		if got != want {
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("issue = %+v, want %+v", got, want)
 		}
 
@@ -760,8 +762,12 @@ func TestAddComment(t *testing.T) {
 		srv, rec := newCommentServer(t)
 		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: withProjects("a/b")})
 
-		if err := a.AddComment(t.Context(), "42", "needs tests"); err != nil {
+		c, err := a.AddComment(t.Context(), "42", "needs tests")
+		if err != nil {
 			t.Fatalf("AddComment: %v", err)
+		}
+		if c.ID != "1" {
+			t.Errorf("comment ID = %q, want 1", c.ID)
 		}
 
 		if rec.hits != 1 {
@@ -782,7 +788,7 @@ func TestAddComment(t *testing.T) {
 		t.Cleanup(srv.Close)
 		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: withProjects("a/b")})
 
-		if err := a.AddComment(t.Context(), "42", "x"); err == nil {
+		if _, err := a.AddComment(t.Context(), "42", "x"); err == nil {
 			t.Error("expected error on 403, got nil")
 		}
 	})
@@ -793,7 +799,7 @@ func TestAddComment(t *testing.T) {
 		srv, rec := newCommentServer(t)
 		a := newTestAdapter(t, srv, config.IssueTrackerConfig{Projects: withProjects("a/b")})
 
-		if err := a.AddComment(t.Context(), "abc", "x"); err == nil {
+		if _, err := a.AddComment(t.Context(), "abc", "x"); err == nil {
 			t.Error("expected error for non-numeric id")
 		}
 
@@ -960,4 +966,208 @@ func TestSetIssueOpen(t *testing.T) {
 			}
 		})
 	}
+}
+
+const forgejoIssue42 = `{"number":42,"title":"T","body":"D","state":"closed","created_at":"2026-09-01T08:00:00Z","updated_at":"2026-09-02T09:00:00Z","labels":[{"id":1,"name":"bug"},{"id":2,"name":"ui"}]}`
+
+func TestGetIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns title, body, labels, updated time and the closed state", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/repos/a/b/issues/42" {
+				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
+
+				return
+			}
+			fmt.Fprint(w, forgejoIssue42)
+		})
+
+		iss, err := a.GetIssue(t.Context(), "42")
+		if err != nil || iss.Subject != "T" || iss.Description != "D" || !iss.Closed ||
+			!slices.Equal(iss.Labels, []string{"bug", "ui"}) ||
+			!iss.UpdatedAt.Equal(time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)) {
+			t.Errorf("GetIssue = %+v, %v", iss, err)
+		}
+	})
+
+	t.Run("a 404 is ErrIssueNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+		if _, err := a.GetIssue(t.Context(), "42"); !errors.Is(err, tracker.ErrIssueNotFound) {
+			t.Errorf("err = %v", err)
+		}
+	})
+}
+
+func TestUpdateIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PATCHes title and body", func(t *testing.T) {
+		t.Parallel()
+
+		var got struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+		}
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/repos/a/b/issues/42" {
+				http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			fmt.Fprint(w, forgejoIssue42)
+		})
+
+		if err := a.UpdateIssue(t.Context(), "42", "New T", "New D"); err != nil || got.Title != "New T" || got.Body != "New D" {
+			t.Errorf("err = %v, sent %+v", err, got)
+		}
+	})
+}
+
+func TestListLabels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("walks the pages of the repository's labels", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/repos/a/b/labels" {
+				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
+
+				return
+			}
+			switch r.URL.Query().Get("page") {
+			case "1":
+				fmt.Fprint(w, `[{"id":1,"name":"bug"},{"id":2,"name":"ui"}]`)
+			default:
+				fmt.Fprint(w, `[]`)
+			}
+		})
+
+		if got, err := a.ListLabels(t.Context()); err != nil || !slices.Equal(got, []string{"bug", "ui"}) {
+			t.Errorf("ListLabels = %q, %v", got, err)
+		}
+	})
+}
+
+func TestSetLabels(t *testing.T) {
+	t.Parallel()
+
+	type server struct {
+		created []string
+		put     []int
+	}
+
+	newServer := func(t *testing.T) (*forgejoAdapter, *server) {
+		t.Helper()
+
+		s := &server{}
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/a/b/labels":
+				if r.URL.Query().Get("page") == "1" {
+					fmt.Fprint(w, `[{"id":1,"name":"bug"}]`)
+				} else {
+					fmt.Fprint(w, `[]`)
+				}
+			case r.Method == http.MethodPost && r.URL.Path == "/api/v1/repos/a/b/labels":
+				var body struct {
+					Name string `json:"name"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				s.created = append(s.created, body.Name)
+				w.WriteHeader(http.StatusCreated)
+				fmt.Fprintf(w, `{"id":%d,"name":%q}`, 10+len(s.created), body.Name)
+			case r.Method == http.MethodPut && r.URL.Path == "/api/v1/repos/a/b/issues/42/labels":
+				var body struct {
+					Labels []int `json:"labels"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				s.put = body.Labels
+				fmt.Fprint(w, `[]`)
+			default:
+				http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+			}
+		})
+
+		return a, s
+	}
+
+	t.Run("creates the missing labels, then replaces the issue's set by ID", func(t *testing.T) {
+		t.Parallel()
+
+		a, s := newServer(t)
+		if err := a.SetLabels(t.Context(), "42", []string{"bug", "urgent"}); err != nil {
+			t.Fatalf("SetLabels: %v", err)
+		}
+		if !slices.Equal(s.created, []string{"urgent"}) || !slices.Equal(s.put, []int{1, 11}) {
+			t.Errorf("created %q, put %v", s.created, s.put)
+		}
+	})
+
+	t.Run("an empty set clears the labels and creates nothing", func(t *testing.T) {
+		t.Parallel()
+
+		a, s := newServer(t)
+		if err := a.SetLabels(t.Context(), "42", nil); err != nil || len(s.created) != 0 || len(s.put) != 0 {
+			t.Errorf("err = %v, created %q, put %v", err, s.created, s.put)
+		}
+	})
+}
+
+func TestListComments(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns the comments oldest first and drops empty bodies", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/repos/a/b/issues/42/comments" {
+				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
+
+				return
+			}
+			if r.URL.Query().Get("page") != "1" {
+				fmt.Fprint(w, `[]`)
+
+				return
+			}
+			fmt.Fprint(w, `[{"id":7,"body":"First","user":{"login":"bob"},"created_at":"2026-09-01T09:00:00Z"},`+
+				`{"id":8,"body":"","user":{"login":"bot"},"created_at":"2026-09-01T09:30:00Z"},`+
+				`{"id":9,"body":"Second","user":{"login":"alice"},"created_at":"2026-09-01T10:00:00Z"}]`)
+		})
+
+		got, err := a.ListComments(t.Context(), "42")
+		if err != nil || len(got) != 2 || got[0].ID != "7" || got[0].Author != "bob" || got[0].Body != "First" ||
+			got[1].ID != "9" || !got[1].CreatedAt.Equal(time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)) {
+			t.Errorf("ListComments = %+v, %v", got, err)
+		}
+	})
+}
+
+func TestListProjectIssues_Content(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the listing carries labels, updated time and the open state", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") != "1" {
+				fmt.Fprint(w, `[]`)
+
+				return
+			}
+			fmt.Fprint(w, `[`+strings.Replace(forgejoIssue42, `"closed"`, `"open"`, 1)+`]`)
+		})
+
+		got, err := a.ListProjectIssues(t.Context())
+		if err != nil || len(got) != 1 || got[0].Closed || !slices.Equal(got[0].Labels, []string{"bug", "ui"}) || got[0].UpdatedAt.IsZero() {
+			t.Errorf("ListProjectIssues = %+v, %v", got, err)
+		}
+	})
 }

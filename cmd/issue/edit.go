@@ -61,12 +61,12 @@ func (i Issue) editRunE(cmd *cobra.Command, args []string, flags editFlags) erro
 		return fmt.Errorf("open repository: %w", err)
 	}
 
-	return runEdit(cmd.Context(), client, huhRecordPrompter{}, args, flags)
+	return runEdit(cmd.Context(), client, huhRecordPrompter{}, args, flags, openMirror(i.appConfig, client.IO().Err))
 }
 
 // runEdit changes the title and the description of an issue. Without flags
 // the form asks for both. Only a field that changed gets an op.
-func runEdit(ctx context.Context, client *git.Client, p recordPrompter, args []string, flags editFlags) error {
+func runEdit(ctx context.Context, client *git.Client, p recordPrompter, args []string, flags editFlags, m *issuepkg.Mirror) error {
 	fetchIssues(ctx, client)
 
 	rec, err := resolveRecord(ctx, client, p, args)
@@ -113,6 +113,7 @@ func runEdit(ctx context.Context, client *git.Client, p recordPrompter, args []s
 	}
 
 	pushIssue(ctx, client, rec.ID)
+	syncOne(ctx, client, m, rec.ID)
 	fmt.Fprintf(client.IO().Out, "Edited issue %s: %s\n", rec.DisplayID(), newTitle)
 
 	return nil

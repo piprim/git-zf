@@ -31,7 +31,18 @@ func (f *fakeIssueTracker) UpdateIssueStatus(_ context.Context, _, _ string) err
 	return nil
 }
 
-func (f *fakeIssueTracker) AddComment(_ context.Context, _, _ string) error { return nil }
+func (f *fakeIssueTracker) AddComment(_ context.Context, _, _ string) (tracker.Comment, error) {
+	return tracker.Comment{}, nil
+}
+func (f *fakeIssueTracker) GetIssue(_ context.Context, _ string) (tracker.Issue, error) {
+	return tracker.Issue{}, nil
+}
+func (f *fakeIssueTracker) UpdateIssue(_ context.Context, _, _, _ string) error     { return nil }
+func (f *fakeIssueTracker) SetLabels(_ context.Context, _ string, _ []string) error { return nil }
+func (f *fakeIssueTracker) ListLabels(_ context.Context) ([]string, error)          { return nil, nil }
+func (f *fakeIssueTracker) ListComments(_ context.Context, _ string) ([]tracker.Comment, error) {
+	return nil, nil
+}
 func (f *fakeIssueTracker) IsIssueClosed(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/piprim/git-zf/config"
@@ -22,9 +23,16 @@ type Issue struct {
 	Description string
 	Status      string
 	Project     string
+	// Labels are the issue's labels as the tracker names them. On Redmine
+	// it is one name: the status.
+	Labels []string
 	// CreatedAt is when the tracker says the issue was created; zero when the
-	// call that built the Issue does not report it.
+	// call that built the Issue does not report it. UpdatedAt is the tracker's
+	// time of the last change of any kind on the issue.
 	CreatedAt time.Time
+	UpdatedAt time.Time
+	// Closed reports the tracker's open/closed state.
+	Closed bool
 }
 
 // Clean returns i with the control characters dropped from what the tracker
@@ -33,8 +41,27 @@ type Issue struct {
 func (i Issue) Clean() Issue {
 	i.Subject, i.Status, i.Project = text.Line(i.Subject), text.Line(i.Status), text.Line(i.Project)
 	i.Description = text.Clean(i.Description)
+	i.Labels = slices.Clone(i.Labels)
+	for k := range i.Labels {
+		i.Labels[k] = text.Line(i.Labels[k])
+	}
 
 	return i
+}
+
+// Comment is one comment of a tracker issue.
+type Comment struct {
+	ID        string
+	Author    string // the tracker login
+	Body      string
+	CreatedAt time.Time
+}
+
+// Clean drops the control characters, as Issue.Clean does.
+func (c Comment) Clean() Comment {
+	c.ID, c.Author, c.Body = text.Line(c.ID), text.Line(c.Author), text.Clean(c.Body)
+
+	return c
 }
 
 // ErrIssueNotFound is returned by IsIssueClosed when the tracker has no record
@@ -54,8 +81,21 @@ type Tracker interface {
 	// Returns ErrIssueNotFound for missing-issue cases so callers can format
 	// the warning distinctly from transport/auth failures.
 	IsIssueClosed(ctx context.Context, issueID string) (bool, error)
-	// AddComment posts body as a comment on issueID.
-	AddComment(ctx context.Context, issueID, body string) error
+	// AddComment posts body as a comment on issueID and returns the comment
+	// with the ID the tracker gave it.
+	AddComment(ctx context.Context, issueID, body string) (Comment, error)
+	// GetIssue reads one issue: title, description, labels, updated time and
+	// state. ErrIssueNotFound when the tracker has no such issue.
+	GetIssue(ctx context.Context, issueID string) (Issue, error)
+	// UpdateIssue sets the title and the description.
+	UpdateIssue(ctx context.Context, issueID, title, description string) error
+	// SetLabels replaces the issue's labels, creating the names the tracker
+	// lacks. A set the tracker refuses by rule is ErrLabelRule.
+	SetLabels(ctx context.Context, issueID string, labels []string) error
+	// ListLabels returns the label names the tracker project defines.
+	ListLabels(ctx context.Context) ([]string, error)
+	// ListComments returns the issue's comments, oldest first.
+	ListComments(ctx context.Context, issueID string) ([]Comment, error)
 	// ListProjectIssues retrieves every open issue of the single configured
 	// project, whoever it is assigned to. It is the issue mirror's listing.
 	ListProjectIssues(ctx context.Context) ([]Issue, error)
@@ -65,6 +105,19 @@ type Tracker interface {
 	// SetIssueOpen reopens (open) or closes issueID, with whatever status the
 	// tracker uses for that.
 	SetIssueOpen(ctx context.Context, issueID string, open bool) error
+}
+
+// ErrLabelRule is returned by SetLabels when the set breaks a rule of the
+// tracker (Redmine: exactly one name, a status), as opposed to a transport
+// or auth failure. The mirror then takes the tracker's labels back.
+var ErrLabelRule = errors.New("tracker: label set breaks a rule of the tracker")
+
+// SingleLabel reports whether t allows exactly one label per issue, which is
+// its status. Redmine does; a tracker without the optional method does not.
+func SingleLabel(t Tracker) bool {
+	s, ok := t.(interface{ SingleLabel() bool })
+
+	return ok && s.SingleLabel()
 }
 
 var registry = make(map[string]func(config.IssueTrackerConfig) (Tracker, error))

@@ -25,6 +25,8 @@ const (
 	OpMerge          = "merge"
 	OpLinkTracker    = "link_tracker"
 	OpTrackerState   = "tracker_state"
+	OpTrackerSeen    = "tracker_seen"
+	OpLinkComment    = "link_comment"
 )
 
 // Issue states.
@@ -55,6 +57,14 @@ type Op struct {
 	TrackerID   string `json:"tracker_id,omitempty"`   // create, link_tracker: the tracker's issue number
 	Status      string `json:"status,omitempty"`       // tracker_state: the tracker's status name
 
+	Labels  []string `json:"labels,omitempty"`  // tracker_seen: the tracker's labels
+	Updated string   `json:"updated,omitempty"` // tracker_seen: the tracker's updated time, RFC 3339
+
+	TrackerCommentID string `json:"tracker_comment_id,omitempty"` // add_comment (imported), link_comment
+	TrackerAuthor    string `json:"tracker_author,omitempty"`     // add_comment (imported): the tracker login
+	TrackerAt        string `json:"tracker_at,omitempty"`         // add_comment (imported): the tracker's time, RFC 3339
+	Comment          string `json:"comment,omitempty"`            // link_comment: the op ID of the add_comment
+
 	ID      string   `json:"-"`
 	Parents []string `json:"-"`
 }
@@ -73,6 +83,11 @@ func DecodeOp(id string, parents []string, payload []byte) (op Op, ok bool) {
 	op.Author, op.Title, op.BranchType = text.Line(op.Author), text.Line(op.Title), text.Line(op.BranchType)
 	op.TrackerType, op.Project, op.TrackerID, op.Status =
 		text.Line(op.TrackerType), text.Line(op.Project), text.Line(op.TrackerID), text.Line(op.Status)
+	op.Updated, op.TrackerCommentID, op.TrackerAuthor, op.TrackerAt, op.Comment =
+		text.Line(op.Updated), text.Line(op.TrackerCommentID), text.Line(op.TrackerAuthor), text.Line(op.TrackerAt), text.Line(op.Comment)
+	for i := range op.Labels {
+		op.Labels[i] = text.Line(op.Labels[i])
+	}
 	op.Description, op.Body = text.Clean(op.Description), text.Clean(op.Body)
 	if op.Type == OpSetDescription {
 		op.Value = text.Clean(op.Value)
@@ -83,12 +98,24 @@ func DecodeOp(id string, parents []string, payload []byte) (op Op, ok bool) {
 	return op, true
 }
 
-// Comment is one add_comment op.
+// Comment is one add_comment op. Author and At are the tracker's when the
+// comment was imported from it. TrackerID is the tracker's comment ID, ""
+// for a comment the tracker has not got yet.
 type Comment struct {
-	ID     string    `json:"id"`
-	Author string    `json:"author"`
-	At     time.Time `json:"at"`
-	Body   string    `json:"body"`
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	At        time.Time `json:"at"`
+	Body      string    `json:"body"`
+	TrackerID string    `json:"tracker_id,omitempty"`
+}
+
+// TrackerSnapshot is what the tracker showed the last time the mirror read
+// the issue: the baseline the reconcile compares both sides with.
+type TrackerSnapshot struct {
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Labels      []string  `json:"labels"`
+	Updated     time.Time `json:"updated"`
 }
 
 // TrackerLink names the tracker issue a record is mirrored with.
@@ -118,6 +145,8 @@ type Record struct {
 	// when it never saw one. TrackerStatus is the tracker's own status name.
 	TrackerState  string `json:"tracker_state"`
 	TrackerStatus string `json:"tracker_status"`
+	// TrackerSeen is the last tracker_seen op; nil when the chain has none.
+	TrackerSeen *TrackerSnapshot `json:"tracker_seen"`
 	// DuplicateTrackerIDs lists the tracker issues named by link_tracker ops
 	// that lost to an earlier link.
 	DuplicateTrackerIDs []string `json:"-"`
@@ -150,6 +179,7 @@ func (r *Record) DisplayID() string {
 func Fold(id string, ops []Op) Record {
 	rec := Record{ID: id, State: StateOpen, Labels: []string{}, Comments: []Comment{}}
 	labels := make(map[string]bool)
+	seenComments := make(map[string]bool)
 
 	ordered := chain.Order(ops, func(op *Op) chain.Node {
 		return chain.Node{ID: op.ID, Parents: op.Parents, At: op.At}
@@ -178,7 +208,41 @@ func Fold(id string, ops []Op) Record {
 		case OpRemoveLabel:
 			delete(labels, op.Value)
 		case OpAddComment:
-			rec.Comments = append(rec.Comments, Comment{ID: op.ID, Author: op.Author, At: chain.ParseAt(op.At), Body: op.Body})
+			if op.TrackerCommentID != "" {
+				if seenComments[op.TrackerCommentID] {
+					continue
+				}
+				seenComments[op.TrackerCommentID] = true
+			}
+			c := Comment{ID: op.ID, Author: op.Author, At: chain.ParseAt(op.At), Body: op.Body, TrackerID: op.TrackerCommentID}
+			if op.TrackerAuthor != "" {
+				c.Author = op.TrackerAuthor
+			}
+			if op.TrackerAt != "" {
+				c.At = chain.ParseAt(op.TrackerAt)
+			}
+			rec.Comments = append(rec.Comments, c)
+		case OpLinkComment:
+			i := slices.IndexFunc(rec.Comments, func(c Comment) bool { return c.ID == op.Comment && c.TrackerID == "" })
+			switch {
+			case i < 0 || op.TrackerCommentID == "":
+			case seenComments[op.TrackerCommentID]:
+				// Another clone pulled the comment this one posted: keep one.
+				rec.Comments = slices.Delete(rec.Comments, i, i+1)
+			default:
+				rec.Comments[i].TrackerID = op.TrackerCommentID
+				seenComments[op.TrackerCommentID] = true
+			}
+		case OpTrackerSeen:
+			seen := &TrackerSnapshot{Title: op.Title, Description: op.Description, Labels: slices.Clone(op.Labels)}
+			if seen.Labels == nil {
+				seen.Labels = []string{}
+			}
+			slices.Sort(seen.Labels)
+			if op.Updated != "" {
+				seen.Updated = chain.ParseAt(op.Updated)
+			}
+			rec.TrackerSeen = seen
 		case OpLinkTracker:
 			switch {
 			case op.TrackerID == "":

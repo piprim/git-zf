@@ -39,7 +39,7 @@ func TestRunComment(t *testing.T) {
 
 	t.Run("--message adds the comment without the form", func(t *testing.T) {
 		p := &scriptedRecordPrompter{Err: errors.New("form must not open")}
-		if err := runComment(ctx, rig.client, p, []string{rec.ShortID()}, "  from flag  "); err != nil {
+		if err := runComment(ctx, rig.client, p, []string{rec.ShortID()}, "  from flag  ", nil); err != nil {
 			t.Fatalf("runComment: %v", err)
 		}
 		if got := comments(t); !slices.Equal(got, []string{"from flag"}) {
@@ -49,7 +49,7 @@ func TestRunComment(t *testing.T) {
 
 	t.Run("without --message the form supplies the body", func(t *testing.T) {
 		p := &scriptedRecordPrompter{Comment: "from form\nsecond line"}
-		if err := runComment(ctx, rig.client, p, []string{rec.ID}, ""); err != nil {
+		if err := runComment(ctx, rig.client, p, []string{rec.ID}, "", nil); err != nil {
 			t.Fatalf("runComment: %v", err)
 		}
 		if got := comments(t); len(got) != 2 || got[1] != "from form\nsecond line" {
@@ -59,7 +59,7 @@ func TestRunComment(t *testing.T) {
 
 	t.Run("an empty comment is refused", func(t *testing.T) {
 		p := &scriptedRecordPrompter{Comment: "   "}
-		err := runComment(ctx, rig.client, p, []string{rec.ID}, "")
+		err := runComment(ctx, rig.client, p, []string{rec.ID}, "", nil)
 		if err == nil || !strings.Contains(err.Error(), "empty") {
 			t.Fatalf("err = %v", err)
 		}
@@ -91,7 +91,7 @@ func TestRunLabel(t *testing.T) {
 	}
 
 	t.Run("+name adds and -name removes", func(t *testing.T) {
-		if err := runLabel(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ShortID(), "+bug", "-old", "+ui"}); err != nil {
+		if err := runLabel(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ShortID(), "+bug", "-old", "+ui"}, nil); err != nil {
 			t.Fatalf("runLabel: %v", err)
 		}
 		if got := labels(t); !slices.Equal(got, []string{"bug", "ui"}) {
@@ -102,13 +102,16 @@ func TestRunLabel(t *testing.T) {
 		}
 	})
 
-	t.Run("without tokens the form supplies them", func(t *testing.T) {
-		p := &scriptedRecordPrompter{Labels: "+p1  -ui"}
-		if err := runLabel(ctx, rig.client, p, []string{rec.ID}); err != nil {
+	t.Run("without tokens the form supplies the final set", func(t *testing.T) {
+		p := &scriptedRecordPrompter{LabelSet: []string{"bug", "p1"}}
+		if err := runLabel(ctx, rig.client, p, []string{rec.ID}, nil); err != nil {
 			t.Fatalf("runLabel: %v", err)
 		}
 		if got := labels(t); !slices.Equal(got, []string{"bug", "p1"}) {
 			t.Errorf("labels = %v", got)
+		}
+		if p.LabelOffered.Choices != nil || !slices.Equal(p.LabelOffered.Current, []string{"bug", "ui"}) || p.LabelOffered.Single {
+			t.Errorf("offered = %+v, want no choices, the current labels, not single", p.LabelOffered)
 		}
 	})
 
@@ -120,7 +123,7 @@ func TestRunLabel(t *testing.T) {
 	} {
 		t.Run(name+" is refused and nothing changes", func(t *testing.T) {
 			before := labels(t)
-			err := runLabel(ctx, rig.client, &scriptedRecordPrompter{}, append([]string{rec.ID}, tokens...))
+			err := runLabel(ctx, rig.client, &scriptedRecordPrompter{}, append([]string{rec.ID}, tokens...), nil)
 			if err == nil || !strings.Contains(err.Error(), "want +name or -name") {
 				t.Fatalf("err = %v", err)
 			}
@@ -272,7 +275,7 @@ func TestRunEdit(t *testing.T) {
 	t.Run("--title changes the title only, without the form", func(t *testing.T) {
 		p := &scriptedRecordPrompter{Err: errors.New("form must not open")}
 		title := "  New title  "
-		if err := runEdit(ctx, rig.client, p, []string{rec.ShortID()}, editFlags{title: &title}); err != nil {
+		if err := runEdit(ctx, rig.client, p, []string{rec.ShortID()}, editFlags{title: &title}, nil); err != nil {
 			t.Fatalf("runEdit: %v", err)
 		}
 		got := load(t)
@@ -286,7 +289,7 @@ func TestRunEdit(t *testing.T) {
 
 	t.Run("without flags the form is prefilled and supplies both fields", func(t *testing.T) {
 		p := &scriptedRecordPrompter{EditTitle: "Form title", EditDescription: "Form description"}
-		if err := runEdit(ctx, rig.client, p, []string{rec.ID}, editFlags{}); err != nil {
+		if err := runEdit(ctx, rig.client, p, []string{rec.ID}, editFlags{}, nil); err != nil {
 			t.Fatalf("runEdit: %v", err)
 		}
 		if want := [2]string{"New title", "Old description"}; p.EditOffered != want {
@@ -300,7 +303,7 @@ func TestRunEdit(t *testing.T) {
 	t.Run("a form left unchanged writes no op", func(t *testing.T) {
 		before := opCount(t)
 		p := &scriptedRecordPrompter{EditTitle: "Form title", EditDescription: "Form description"}
-		if err := runEdit(ctx, rig.client, p, []string{rec.ID}, editFlags{}); err != nil {
+		if err := runEdit(ctx, rig.client, p, []string{rec.ID}, editFlags{}, nil); err != nil {
 			t.Fatalf("runEdit: %v", err)
 		}
 		if after := opCount(t); after != before {
@@ -314,7 +317,7 @@ func TestRunEdit(t *testing.T) {
 	t.Run("an empty --description clears the description", func(t *testing.T) {
 		p := &scriptedRecordPrompter{Err: errors.New("form must not open")}
 		empty := ""
-		if err := runEdit(ctx, rig.client, p, []string{rec.ID}, editFlags{description: &empty}); err != nil {
+		if err := runEdit(ctx, rig.client, p, []string{rec.ID}, editFlags{description: &empty}, nil); err != nil {
 			t.Fatalf("runEdit: %v", err)
 		}
 		if got := load(t); got.Title != "Form title" || got.Description != "" {
@@ -325,7 +328,7 @@ func TestRunEdit(t *testing.T) {
 	t.Run("an empty title is refused and nothing changes", func(t *testing.T) {
 		before := opCount(t)
 		blank := "   "
-		err := runEdit(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, editFlags{title: &blank})
+		err := runEdit(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, editFlags{title: &blank}, nil)
 		if err == nil || !strings.Contains(err.Error(), "title") {
 			t.Fatalf("err = %v", err)
 		}
@@ -348,7 +351,7 @@ func TestRunEdit_Pushes(t *testing.T) {
 	}
 
 	title := "Pushed title"
-	runErr := runEdit(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, editFlags{title: &title})
+	runErr := runEdit(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, editFlags{title: &title}, nil)
 
 	t.Run("no error", func(t *testing.T) {
 		if runErr != nil {

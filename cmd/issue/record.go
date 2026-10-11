@@ -29,8 +29,10 @@ type recordPrompter interface {
 	EditIssue(ctx context.Context, title, description *string) error
 	// CommentBody returns the comment text.
 	CommentBody(ctx context.Context) (string, error)
-	// LabelChanges returns "+add -remove" tokens on one line.
-	LabelChanges(ctx context.Context) (string, error)
+	// LabelChanges returns the issue's final labels. choices are the labels
+	// the tracker knows (nil: unknown, the text line applies to current);
+	// single means one label only, the status.
+	LabelChanges(ctx context.Context, choices, current []string, single bool) ([]string, error)
 }
 
 type huhRecordPrompter struct{}
@@ -76,13 +78,37 @@ func (huhRecordPrompter) CommentBody(ctx context.Context) (string, error) {
 	return body, nil
 }
 
-func (huhRecordPrompter) LabelChanges(ctx context.Context) (string, error) {
-	var changes string
-	if err := huh.NewForm(tui.IssueLabelInput(&changes)).RunWithContext(ctx); err != nil {
-		return "", fmt.Errorf("label form: %w", err)
-	}
+func (huhRecordPrompter) LabelChanges(ctx context.Context, choices, current []string, single bool) ([]string, error) {
+	switch {
+	case choices == nil:
+		var changes string
+		if err := huh.NewForm(tui.IssueLabelInput(&changes)).RunWithContext(ctx); err != nil {
+			return nil, fmt.Errorf("label form: %w", err)
+		}
+		ops, err := parseLabelChanges(strings.Fields(changes))
+		if err != nil {
+			return nil, err
+		}
 
-	return changes, nil
+		return applyLabelChanges(current, ops), nil
+	case single:
+		picked := ""
+		if len(current) > 0 {
+			picked = current[0]
+		}
+		if err := huh.NewForm(tui.IssueLabelStatusPicker(choices, picked, &picked)).RunWithContext(ctx); err != nil {
+			return nil, fmt.Errorf("status form: %w", err)
+		}
+
+		return []string{picked}, nil
+	default:
+		selected, extra := slices.Clone(current), ""
+		if err := huh.NewForm(tui.IssueLabelPicker(choices, current, &selected, &extra)).RunWithContext(ctx); err != nil {
+			return nil, fmt.Errorf("label form: %w", err)
+		}
+
+		return cleanLabels(append(selected, strings.Fields(extra)...)), nil
+	}
 }
 
 // commitTypeNames returns the configured commit types, which are the allowed
@@ -176,6 +202,17 @@ func reconcileIssues(ctx context.Context, client *git.Client, m *issuepkg.Mirror
 	printWarnings(client.IO().Err, res.Warnings)
 
 	return res
+}
+
+// syncOne gives the tracker one record's change at once, after the record
+// was pushed. A failure is a warning: the next reconcile retries from the
+// chain. A nil m is a no-op.
+func syncOne(ctx context.Context, client *git.Client, m *issuepkg.Mirror, id string) {
+	res, err := m.SyncOne(ctx, client, id)
+	if err != nil {
+		fmt.Fprintf(client.IO().Err, "warning: tracker mirror: %v\n", err)
+	}
+	printWarnings(client.IO().Err, res.Warnings)
 }
 
 // resolveRecord returns the record named by args[0], or opens the picker over

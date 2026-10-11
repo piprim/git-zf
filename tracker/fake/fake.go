@@ -5,14 +5,19 @@ package fake
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/tracker"
 )
+
+// fakeEpoch is where the fake's clock starts; every mutation adds a second.
+var fakeEpoch = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
 func init() {
 	tracker.Register("fake", New)
@@ -51,6 +56,25 @@ type Tracker struct {
 	// listed status.
 	ClosingStatuses []string
 
+	// Labels is the catalogue of the project's labels; SetLabels adds the
+	// names it lacks. Comments holds each issue's comments by issue ID.
+	Labels   []string
+	Comments map[string][]tracker.Comment
+	// StatusIsLabel makes the fake behave like Redmine: an issue's Labels is
+	// its status, SetLabels sets the status or returns ErrLabelRule, and
+	// SingleLabel is true.
+	StatusIsLabel bool
+	// GetErr, when non-nil, is returned by GetIssue.
+	GetErr            error
+	RecordedEdits     []Edit
+	RecordedLabelSets []LabelSet
+	// SetLabelsErr, when non-nil, is returned by SetLabels.
+	SetLabelsErr error
+	// ListLabelsErr, when non-nil, is returned by ListLabels.
+	ListLabelsErr error
+
+	ticks   int
+	nextCID int
 	nextID  int
 	shelved map[string]tracker.Issue // closed issues, by ID
 }
@@ -61,9 +85,21 @@ type Update struct {
 	StatusName string
 }
 
+// Edit captures one UpdateIssue call.
+type Edit struct {
+	IssueID, Title, Description string
+}
+
+// LabelSet captures one SetLabels call.
+type LabelSet struct {
+	IssueID string
+	Labels  []string
+}
+
 // Comment captures one AddComment call.
 type Comment struct {
 	IssueID string
+	ID      string
 	Body    string
 }
 
@@ -121,25 +157,13 @@ func (t *Tracker) UpdateIssueStatus(_ context.Context, issueID, statusName strin
 	t.RecordedUpdates = append(t.RecordedUpdates, Update{IssueID: issueID, StatusName: statusName})
 
 	if slices.Contains(t.ClosingStatuses, statusName) {
+		t.mutate(issueID, func(iss *tracker.Issue) { iss.Status = statusName })
 		t.setOpen(issueID, false)
 
 		return nil
 	}
 
-	for i := range t.ProjectIssues {
-		if t.ProjectIssues[i].ID == issueID {
-			t.ProjectIssues[i].Status = statusName
-		}
-	}
-
-	return nil
-}
-
-func (t *Tracker) AddComment(_ context.Context, issueID, body string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.RecordedComments = append(t.RecordedComments, Comment{IssueID: issueID, Body: body})
+	t.mutate(issueID, func(iss *tracker.Issue) { iss.Status = statusName })
 
 	return nil
 }
@@ -165,7 +189,12 @@ func (t *Tracker) ListProjectIssues(_ context.Context) ([]tracker.Issue, error) 
 		return nil, t.ListErr
 	}
 
-	return slices.Clone(t.ProjectIssues), nil
+	out := make([]tracker.Issue, len(t.ProjectIssues))
+	for i, iss := range t.ProjectIssues {
+		out[i] = t.view(iss, false)
+	}
+
+	return out, nil
 }
 
 // CreateIssue records the call and adds an open issue numbered 1, 2, 3….
@@ -186,12 +215,15 @@ func (t *Tracker) CreateIssue(_ context.Context, title, description string) (tra
 	}
 	iss := tracker.Issue{
 		TrackerType: "fake", ID: strconv.Itoa(t.nextID), Subject: title, Description: description,
-		Status: "open", CreatedAt: time.Now().UTC(),
+		Status: "open", CreatedAt: time.Now().UTC(), UpdatedAt: t.now(),
+	}
+	if t.StatusIsLabel {
+		iss.Status = t.firstOpenStatus()
 	}
 	t.RecordedCreates = append(t.RecordedCreates, Create{Title: title, Description: description})
 	t.ProjectIssues = append(t.ProjectIssues, iss)
 
-	return iss, nil
+	return t.view(iss, false), nil
 }
 
 // numbersTaken is the set of numeric IDs of the listed and shelved issues.
@@ -255,12 +287,220 @@ func (t *Tracker) setOpen(issueID string, open bool) {
 	i := slices.IndexFunc(t.ProjectIssues, func(iss tracker.Issue) bool { return iss.ID == issueID })
 	switch {
 	case !open && i >= 0:
-		t.shelved[issueID] = t.ProjectIssues[i]
+		iss := t.ProjectIssues[i]
+		if !slices.Contains(t.ClosingStatuses, iss.Status) {
+			iss.Status = "closed"
+			if len(t.ClosingStatuses) > 0 {
+				iss.Status = t.ClosingStatuses[0]
+			}
+		}
+		iss.UpdatedAt = t.now()
+		t.shelved[issueID] = iss
 		t.ProjectIssues = slices.Delete(t.ProjectIssues, i, i+1)
 	case open && i < 0:
 		if iss, ok := t.shelved[issueID]; ok {
+			// A reopened issue is "open"; with StatusIsLabel it takes the first
+			// open status, as Redmine does.
+			iss.Status = "open"
+			if t.StatusIsLabel {
+				iss.Status = t.firstOpenStatus()
+			}
+			iss.UpdatedAt = t.now()
 			t.ProjectIssues = append(t.ProjectIssues, iss)
 			delete(t.shelved, issueID)
 		}
 	}
+}
+
+// firstOpenStatus is the first status that does not close, "open" when
+// there is none: what a created or reopened issue gets on Redmine.
+func (t *Tracker) firstOpenStatus() string {
+	for _, st := range t.Statuses {
+		if !slices.Contains(t.ClosingStatuses, st) {
+			return st
+		}
+	}
+
+	return "open"
+}
+
+// now advances the fake's clock. The caller holds t.mu.
+func (t *Tracker) now() time.Time {
+	t.ticks++
+
+	return fakeEpoch.Add(time.Duration(t.ticks) * time.Second)
+}
+
+// view is the issue as the tracker shows it: with its status as the label
+// when StatusIsLabel. The caller holds t.mu.
+func (t *Tracker) view(iss tracker.Issue, closed bool) tracker.Issue {
+	iss.Closed = closed
+	if t.StatusIsLabel {
+		iss.Labels = []string{iss.Status}
+	}
+
+	return iss
+}
+
+// SingleLabel reports StatusIsLabel.
+func (t *Tracker) SingleLabel() bool { return t.StatusIsLabel }
+
+// Edit applies fn to the issue the way a person edits it on the web: not
+// recorded, UpdatedAt moves.
+func (t *Tracker) Edit(issueID string, fn func(*tracker.Issue)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.mutate(issueID, fn)
+}
+
+// mutate applies fn to the listed or shelved issue and bumps UpdatedAt. The
+// caller holds t.mu.
+func (t *Tracker) mutate(issueID string, fn func(*tracker.Issue)) {
+	for i := range t.ProjectIssues {
+		if t.ProjectIssues[i].ID == issueID {
+			fn(&t.ProjectIssues[i])
+			t.ProjectIssues[i].UpdatedAt = t.now()
+
+			return
+		}
+	}
+	if iss, ok := t.shelved[issueID]; ok {
+		fn(&iss)
+		iss.UpdatedAt = t.now()
+		t.shelved[issueID] = iss
+	}
+}
+
+// GetIssue returns the issue, listed or closed, honouring Errors, Unknown
+// and GetErr.
+func (t *Tracker) GetIssue(_ context.Context, issueID string) (tracker.Issue, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.GetErr != nil {
+		return tracker.Issue{}, t.GetErr
+	}
+	if err, ok := t.Errors[issueID]; ok && err != nil {
+		return tracker.Issue{}, err
+	}
+	if t.Unknown[issueID] {
+		return tracker.Issue{}, tracker.ErrIssueNotFound
+	}
+	for _, iss := range t.ProjectIssues {
+		if iss.ID == issueID {
+			return t.view(iss, false), nil
+		}
+	}
+	if iss, ok := t.shelved[issueID]; ok {
+		return t.view(iss, true), nil
+	}
+
+	return tracker.Issue{}, tracker.ErrIssueNotFound
+}
+
+// UpdateIssue records the call and sets title and description.
+func (t *Tracker) UpdateIssue(_ context.Context, issueID, title, description string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.RecordedEdits = append(t.RecordedEdits, Edit{IssueID: issueID, Title: title, Description: description})
+	t.mutate(issueID, func(iss *tracker.Issue) { iss.Subject, iss.Description = title, description })
+
+	return nil
+}
+
+// ListLabels returns the catalogue, or the statuses with StatusIsLabel.
+func (t *Tracker) ListLabels(_ context.Context) ([]string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.ListLabelsErr != nil {
+		return nil, t.ListLabelsErr
+	}
+	if t.StatusIsLabel {
+		return slices.Clone(t.Statuses), nil
+	}
+
+	return slices.Clone(t.Labels), nil
+}
+
+// SetLabels records the call and sets the issue's labels, adding the names
+// the catalogue lacks. With StatusIsLabel it sets the status named by the one
+// label, or returns ErrLabelRule.
+func (t *Tracker) SetLabels(ctx context.Context, issueID string, labels []string) error {
+	if t.SetLabelsErr != nil {
+		return t.SetLabelsErr
+	}
+
+	t.mu.Lock()
+	t.RecordedLabelSets = append(t.RecordedLabelSets, LabelSet{IssueID: issueID, Labels: slices.Clone(labels)})
+	single := t.StatusIsLabel
+	t.mu.Unlock()
+
+	if single {
+		if len(labels) != 1 {
+			return fmt.Errorf("%w: fake wants exactly one label, got %d", tracker.ErrLabelRule, len(labels))
+		}
+		// Matched in any case and set in the tracker's spelling, as Redmine.
+		i := slices.IndexFunc(t.Statuses, func(st string) bool { return strings.EqualFold(st, labels[0]) })
+		if i < 0 {
+			return fmt.Errorf("%w: %q is not a status", tracker.ErrLabelRule, labels[0])
+		}
+
+		return t.UpdateIssueStatus(ctx, issueID, t.Statuses[i])
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for _, name := range labels {
+		if !slices.Contains(t.Labels, name) {
+			t.Labels = append(t.Labels, name)
+		}
+	}
+	t.mutate(issueID, func(iss *tracker.Issue) { iss.Labels = slices.Clone(labels) })
+
+	return nil
+}
+
+// ListComments returns the issue's comments, oldest first.
+func (t *Tracker) ListComments(_ context.Context, issueID string) ([]tracker.Comment, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return slices.Clone(t.Comments[issueID]), nil
+}
+
+// AddComment records the call, lists the comment and returns it with its ID.
+func (t *Tracker) AddComment(_ context.Context, issueID, body string) (tracker.Comment, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	c := t.addComment(issueID, "fake-user", body)
+	t.RecordedComments = append(t.RecordedComments, Comment{IssueID: issueID, ID: c.ID, Body: body})
+
+	return c, nil
+}
+
+// WebComment adds a comment the way a person does on the web: not recorded.
+func (t *Tracker) WebComment(issueID, author, body string) tracker.Comment {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.addComment(issueID, author, body)
+}
+
+// addComment numbers the comment c1, c2, …, lists it and bumps the issue.
+// The caller holds t.mu.
+func (t *Tracker) addComment(issueID, author, body string) tracker.Comment {
+	if t.Comments == nil {
+		t.Comments = make(map[string][]tracker.Comment)
+	}
+	t.nextCID++
+	c := tracker.Comment{ID: "c" + strconv.Itoa(t.nextCID), Author: author, Body: body, CreatedAt: t.now()}
+	t.Comments[issueID] = append(t.Comments[issueID], c)
+	t.mutate(issueID, func(*tracker.Issue) {})
+
+	return c
 }

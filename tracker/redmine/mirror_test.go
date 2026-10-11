@@ -2,14 +2,17 @@ package redmine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/tracker"
 )
 
 // newMirrorAdapter returns the concrete adapter for project "cpro", served by handler.
@@ -221,6 +224,150 @@ func TestSetIssueOpen(t *testing.T) {
 		})
 		if err := a.SetIssueOpen(t.Context(), "57", false); err == nil {
 			t.Error("SetIssueOpen: want an error, got nil")
+		}
+	})
+}
+
+const redmineIssue42 = `{"issue":{"id":42,"subject":"T","description":"D","status":{"id":5,"name":"Closed","is_closed":true},"created_on":"2026-09-01T08:00:00Z","updated_on":"2026-09-02T09:00:00Z","journals":[{"id":7,"user":{"name":"Bob"},"notes":"First","created_on":"2026-09-01T09:00:00Z"},{"id":8,"user":{"name":"Bot"},"notes":"","created_on":"2026-09-01T09:30:00Z"},{"id":9,"user":{"name":"Alice"},"notes":"Second","created_on":"2026-09-01T10:00:00Z"}]}}`
+
+const redmineStatuses = `{"issue_statuses":[{"id":1,"name":"New","is_closed":false},{"id":5,"name":"Closed","is_closed":true}]}`
+
+func TestRedmineContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("GetIssue returns subject, description, the status as the one label, updated time and closed", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/issues/42.json" {
+				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
+
+				return
+			}
+			fmt.Fprint(w, redmineIssue42)
+		})
+
+		iss, err := a.GetIssue(t.Context(), "42")
+		if err != nil || iss.Subject != "T" || iss.Description != "D" || !iss.Closed || iss.Status != "Closed" ||
+			!slices.Equal(iss.Labels, []string{"Closed"}) ||
+			!iss.UpdatedAt.Equal(time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC)) {
+			t.Errorf("GetIssue = %+v, %v", iss, err)
+		}
+	})
+
+	t.Run("GetIssue on a 404 is ErrIssueNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+		if _, err := a.GetIssue(t.Context(), "42"); !errors.Is(err, tracker.ErrIssueNotFound) {
+			t.Errorf("err = %v", err)
+		}
+	})
+
+	t.Run("UpdateIssue PUTs subject and description only", func(t *testing.T) {
+		t.Parallel()
+
+		var got map[string]map[string]any
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPut || r.URL.Path != "/issues/42.json" {
+				http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			w.WriteHeader(http.StatusNoContent)
+		})
+
+		err := a.UpdateIssue(t.Context(), "42", "New T", "New D")
+		if err != nil || got["issue"]["subject"] != "New T" || got["issue"]["description"] != "New D" || len(got["issue"]) != 2 {
+			t.Errorf("err = %v, sent %+v", err, got)
+		}
+	})
+
+	t.Run("ListLabels is the status names and SingleLabel is true", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, redmineStatuses) })
+		got, err := a.ListLabels(t.Context())
+		if err != nil || !slices.Equal(got, []string{"New", "Closed"}) || !tracker.SingleLabel(a) {
+			t.Errorf("ListLabels = %q, %v, SingleLabel = %v", got, err, tracker.SingleLabel(a))
+		}
+	})
+
+	t.Run("SetLabels with one status name sets that status", func(t *testing.T) {
+		t.Parallel()
+
+		var statusID float64
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/issue_statuses.json":
+				fmt.Fprint(w, redmineStatuses)
+			case r.Method == http.MethodPut && r.URL.Path == "/issues/42.json":
+				var body map[string]map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				statusID, _ = body["issue"]["status_id"].(float64)
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
+			}
+		})
+
+		if err := a.SetLabels(t.Context(), "42", []string{"Closed"}); err != nil || statusID != 5 {
+			t.Errorf("err = %v, status_id = %v", err, statusID)
+		}
+	})
+
+	for name, labels := range map[string][]string{
+		"no name":             {},
+		"two names":           {"New", "Closed"},
+		"a name not a status": {"urgent"},
+	} {
+		t.Run("SetLabels with "+name+" is ErrLabelRule and PUTs nothing", func(t *testing.T) {
+			t.Parallel()
+
+			puts := 0
+			a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					puts++
+				}
+				fmt.Fprint(w, redmineStatuses)
+			})
+
+			if err := a.SetLabels(t.Context(), "42", labels); !errors.Is(err, tracker.ErrLabelRule) || puts != 0 {
+				t.Errorf("err = %v, puts = %d", err, puts)
+			}
+		})
+	}
+
+	t.Run("ListComments is the journals with notes, oldest first", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/issues/42.json" || r.URL.Query().Get("include") != "journals" {
+				http.Error(w, "unexpected "+r.URL.String(), http.StatusBadRequest)
+
+				return
+			}
+			fmt.Fprint(w, redmineIssue42)
+		})
+
+		got, err := a.ListComments(t.Context(), "42")
+		if err != nil || len(got) != 2 || got[0].ID != "7" || got[0].Author != "Bob" || got[0].Body != "First" ||
+			got[1].ID != "9" || !got[1].CreatedAt.Equal(time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)) {
+			t.Errorf("ListComments = %+v, %v", got, err)
+		}
+	})
+
+	t.Run("the project listing carries the status as label, updated time and open", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprint(w, `{"issues":[{"id":42,"subject":"T","status":{"id":1,"name":"New","is_closed":false},"created_on":"2026-09-01T08:00:00Z","updated_on":"2026-09-02T09:00:00Z"}],"total_count":1}`)
+		})
+
+		got, err := a.ListProjectIssues(t.Context())
+		if err != nil || len(got) != 1 || got[0].Closed || !slices.Equal(got[0].Labels, []string{"New"}) || got[0].UpdatedAt.IsZero() {
+			t.Errorf("ListProjectIssues = %+v, %v", got, err)
 		}
 	})
 }

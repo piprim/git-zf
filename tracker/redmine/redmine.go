@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,18 @@ type project struct {
 	Identifier string `json:"identifier"`
 }
 
+// journal is one entry of a Redmine issue's journals: a comment when Notes
+// is not empty.
+type journal struct {
+	ID   int `json:"id"`
+	User *struct {
+		Name string `json:"name"`
+	} `json:"user"`
+	Notes string `json:"notes"`
+	//nolint:tagliatelle // Redmine wire format
+	CreatedOn time.Time `json:"created_on"`
+}
+
 type issue struct {
 	ID          int      `json:"id"`
 	Subject     string   `json:"subject"`
@@ -41,6 +54,9 @@ type issue struct {
 	Project     *project `json:"project"`
 	//nolint:tagliatelle // Redmine wire format
 	CreatedOn time.Time `json:"created_on"`
+	//nolint:tagliatelle // Redmine wire format
+	UpdatedOn time.Time `json:"updated_on"`
+	Journals  []journal `json:"journals"`
 }
 
 type issuesResponse struct {
@@ -107,9 +123,13 @@ func (a *redmineAdapter) fetchIssues(ctx context.Context, path, project string) 
 func toIssues(issues []issue, project string) []tracker.Issue {
 	result := make([]tracker.Issue, 0, len(issues))
 	for _, iss := range issues {
-		statusName := ""
+		statusName, closed := "", false
 		if iss.Status != nil {
-			statusName = iss.Status.Name
+			statusName, closed = iss.Status.Name, iss.Status.IsClosed
+		}
+		var labels []string
+		if statusName != "" {
+			labels = []string{statusName}
 		}
 
 		result = append(result, tracker.Issue{
@@ -119,7 +139,10 @@ func toIssues(issues []issue, project string) []tracker.Issue {
 			Description: iss.Description,
 			Status:      statusName,
 			Project:     cmp.Or(project, redmineProjectName(iss.Project)),
+			Labels:      labels,
 			CreatedAt:   iss.CreatedOn,
+			UpdatedAt:   iss.UpdatedOn,
+			Closed:      closed,
 		}.Clean())
 	}
 
@@ -335,7 +358,7 @@ func (a *redmineAdapter) SetIssueOpen(ctx context.Context, issueID string, open 
 
 // AddComment adds body as a journal note via PUT /issues/{id}.json with
 // {"issue":{"notes": body}} — Redmine's comment mechanism.
-func (a *redmineAdapter) AddComment(ctx context.Context, issueID, body string) error {
+func (a *redmineAdapter) AddComment(ctx context.Context, issueID, body string) (tracker.Comment, error) {
 	type issueNotes struct {
 		Notes string `json:"notes"`
 	}
@@ -343,7 +366,21 @@ func (a *redmineAdapter) AddComment(ctx context.Context, issueID, body string) e
 		Issue issueNotes `json:"issue"`
 	}
 
-	return a.putIssue(ctx, issueID, "comment", payload{Issue: issueNotes{Notes: body}})
+	if err := a.putIssue(ctx, issueID, "comment", payload{Issue: issueNotes{Notes: body}}); err != nil {
+		return tracker.Comment{}, err
+	}
+
+	comments, err := a.ListComments(ctx, issueID)
+	if err != nil {
+		return tracker.Comment{}, fmt.Errorf("redmine: read back comment on issue %s: %w", issueID, err)
+	}
+	for i := len(comments) - 1; i >= 0; i-- {
+		if comments[i].Body == body {
+			return comments[i], nil
+		}
+	}
+
+	return tracker.Comment{}, fmt.Errorf("redmine: comment on issue %s posted but not found in its journals", issueID)
 }
 
 // putIssue JSON-encodes payload and PUTs it to /issues/{id}.json. what names
@@ -401,26 +438,106 @@ func unexpectedStatus(resp *http.Response) error {
 	return fmt.Errorf(`unexpected HTTP %d with content: "%s"`, resp.StatusCode, string(body))
 }
 
-// IsIssueClosed asks Redmine for the issue and reads status.is_closed.
-// HTTP 404 → tracker.ErrIssueNotFound; other failures are wrapped.
-func (a *redmineAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
+// getIssue reads one issue; query is appended to the path ("?include=journals").
+func (a *redmineAdapter) getIssue(ctx context.Context, issueID, query string) (issue, error) {
 	var payload struct {
-		Issue struct {
-			Status struct {
-				IsClosed bool `json:"is_closed"`
-			} `json:"status"`
-		} `json:"issue"`
+		Issue issue `json:"issue"`
 	}
-
-	code, err := a.getJSON(ctx, "/issues/"+issueID+".json", &payload)
+	code, err := a.getJSON(ctx, "/issues/"+url.PathEscape(issueID)+".json"+query, &payload)
 	if code == http.StatusNotFound {
-		return false, tracker.ErrIssueNotFound
+		return issue{}, tracker.ErrIssueNotFound
 	}
 	if err != nil {
-		return false, fmt.Errorf("redmine: get issue %s: %w", issueID, err)
+		return issue{}, fmt.Errorf("redmine: get issue %s: %w", issueID, err)
 	}
 
-	return payload.Issue.Status.IsClosed, nil
+	return payload.Issue, nil
+}
+
+// GetIssue reads one issue. HTTP 404 → tracker.ErrIssueNotFound.
+func (a *redmineAdapter) GetIssue(ctx context.Context, issueID string) (tracker.Issue, error) {
+	iss, err := a.getIssue(ctx, issueID, "")
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	p, _ := a.project()
+
+	return toIssues([]issue{iss}, p)[0], nil
+}
+
+// IsIssueClosed asks Redmine for the issue and reads status.is_closed.
+func (a *redmineAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
+	iss, err := a.GetIssue(ctx, issueID)
+	if err != nil {
+		return false, err
+	}
+
+	return iss.Closed, nil
+}
+
+// UpdateIssue PUTs subject and description only, the way setStatusID sends
+// only the status: a fuller payload trips Redmine's validation.
+func (a *redmineAdapter) UpdateIssue(ctx context.Context, issueID, title, description string) error {
+	type fields struct {
+		Subject     string `json:"subject"`
+		Description string `json:"description"`
+	}
+	type body struct {
+		Issue fields `json:"issue"`
+	}
+
+	return a.putIssue(ctx, issueID, "content", body{Issue: fields{Subject: title, Description: description}})
+}
+
+// SingleLabel reports that a Redmine issue has one label: its status.
+func (*redmineAdapter) SingleLabel() bool { return true }
+
+// ListLabels returns the status names: on Redmine the status is the label.
+func (a *redmineAdapter) ListLabels(ctx context.Context) ([]string, error) {
+	return a.ListStatuses(ctx)
+}
+
+// SetLabels sets the status named by the one label. Zero or several names,
+// or a name that is not a status, break the rule: tracker.ErrLabelRule.
+func (a *redmineAdapter) SetLabels(ctx context.Context, issueID string, labels []string) error {
+	if len(labels) != 1 {
+		return fmt.Errorf("%w: redmine wants exactly one label, the status, got %d", tracker.ErrLabelRule, len(labels))
+	}
+
+	statuses, err := a.issueStatuses(ctx)
+	if err != nil {
+		return err
+	}
+	for _, s := range statuses {
+		if strings.EqualFold(s.Name, labels[0]) {
+			return a.setStatusID(ctx, issueID, s.ID)
+		}
+	}
+
+	return fmt.Errorf("%w: %q is not a redmine status", tracker.ErrLabelRule, labels[0])
+}
+
+// ListComments returns the issue's journals that carry notes, oldest first.
+func (a *redmineAdapter) ListComments(ctx context.Context, issueID string) ([]tracker.Comment, error) {
+	iss, err := a.getIssue(ctx, issueID, "?include=journals")
+	if err != nil {
+		return nil, err
+	}
+
+	var out []tracker.Comment
+	for _, j := range iss.Journals {
+		if j.Notes == "" {
+			continue
+		}
+		author := ""
+		if j.User != nil {
+			author = j.User.Name
+		}
+		out = append(out, tracker.Comment{ID: strconv.Itoa(j.ID), Author: author, Body: j.Notes, CreatedAt: j.CreatedOn}.Clean())
+	}
+	slices.SortStableFunc(out, func(x, y tracker.Comment) int { return x.CreatedAt.Compare(y.CreatedAt) })
+
+	return out, nil
 }
 
 // redmineProjectName picks the slug, then the display name, then the numeric

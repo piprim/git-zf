@@ -89,6 +89,11 @@ func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error)
 
 // toIssue converts a GitHub issue of project (an "owner/repo").
 func toIssue(iss *gogithub.Issue, project string) tracker.Issue {
+	labels := make([]string, len(iss.Labels))
+	for i, l := range iss.Labels {
+		labels[i] = l.GetName()
+	}
+
 	return tracker.Issue{
 		TrackerType: trackerType,
 		ID:          strconv.Itoa(iss.GetNumber()),
@@ -96,7 +101,10 @@ func toIssue(iss *gogithub.Issue, project string) tracker.Issue {
 		Description: iss.GetBody(),
 		Status:      iss.GetState(),
 		Project:     project,
+		Labels:      labels,
 		CreatedAt:   iss.GetCreatedAt().Time,
+		UpdatedAt:   iss.GetUpdatedAt().Time,
+		Closed:      iss.GetState() == statusClosed,
 	}.Clean()
 }
 
@@ -214,26 +222,9 @@ func (a *githubAdapter) UpdateIssueStatus(ctx context.Context, issueID, statusNa
 // as a decimal string. HTTP 404 → tracker.ErrIssueNotFound; other failures
 // are wrapped.
 func (a *githubAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
-	owner, repo, err := a.ownerRepo()
-	if err != nil {
-		return false, fmt.Errorf("github: resolve owner/repo: %w", err)
-	}
+	iss, err := a.GetIssue(ctx, issueID)
 
-	n, err := strconv.Atoi(issueID)
-	if err != nil {
-		return false, fmt.Errorf("github: issue id %q not an integer: %w", issueID, err)
-	}
-
-	iss, resp, err := a.client.Issues.Get(ctx, owner, repo, n)
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return false, tracker.ErrIssueNotFound
-		}
-
-		return false, fmt.Errorf("github: get issue %s: %w", issueID, err)
-	}
-
-	return iss.GetState() == statusClosed, nil
+	return iss.Closed, err
 }
 
 func mapState(name string) (string, error) {
@@ -247,21 +238,167 @@ func mapState(name string) (string, error) {
 
 // AddComment posts body as an issue comment via
 // POST /repos/{owner}/{repo}/issues/{number}/comments.
-func (a *githubAdapter) AddComment(ctx context.Context, issueID, body string) error {
-	owner, repo, err := a.ownerRepo()
+func (a *githubAdapter) AddComment(ctx context.Context, issueID, body string) (tracker.Comment, error) {
+	owner, repo, n, err := a.issueRef(issueID)
+	if err != nil {
+		return tracker.Comment{}, err
+	}
+
+	c, _, err := a.client.Issues.CreateComment(ctx, owner, repo, n, &gogithub.IssueComment{Body: gogithub.Ptr(body)})
+	if err != nil {
+		return tracker.Comment{}, fmt.Errorf("github: comment on issue %d: %w", n, err)
+	}
+
+	return tracker.Comment{ID: strconv.FormatInt(c.GetID(), 10), Author: c.GetUser().GetLogin(), Body: c.GetBody(), CreatedAt: c.GetCreatedAt().Time}.Clean(), nil
+}
+
+// issueRef resolves the configured repository and the issue number.
+func (a *githubAdapter) issueRef(issueID string) (owner, repo string, n int, err error) {
+	owner, repo, err = a.ownerRepo()
+	if err != nil {
+		return "", "", 0, err
+	}
+	n, err = strconv.Atoi(issueID)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("github: invalid issue id %q: %w", issueID, err)
+	}
+
+	return owner, repo, n, nil
+}
+
+// GetIssue reads one issue. HTTP 404 → tracker.ErrIssueNotFound.
+func (a *githubAdapter) GetIssue(ctx context.Context, issueID string) (tracker.Issue, error) {
+	owner, repo, n, err := a.issueRef(issueID)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+
+	iss, resp, err := a.client.Issues.Get(ctx, owner, repo, n)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return tracker.Issue{}, tracker.ErrIssueNotFound
+		}
+
+		return tracker.Issue{}, fmt.Errorf("github: get issue %s: %w", issueID, err)
+	}
+
+	return toIssue(iss, owner+"/"+repo), nil
+}
+
+// UpdateIssue sets title and body.
+func (a *githubAdapter) UpdateIssue(ctx context.Context, issueID, title, description string) error {
+	owner, repo, n, err := a.issueRef(issueID)
 	if err != nil {
 		return err
 	}
 
-	n, err := strconv.Atoi(issueID)
+	_, _, err = a.client.Issues.Edit(ctx, owner, repo, n,
+		&gogithub.IssueRequest{Title: gogithub.Ptr(title), Body: gogithub.Ptr(description)})
 	if err != nil {
-		return fmt.Errorf("github: invalid issue id %q: %w", issueID, err)
-	}
-
-	_, _, err = a.client.Issues.CreateComment(ctx, owner, repo, n, &gogithub.IssueComment{Body: gogithub.Ptr(body)})
-	if err != nil {
-		return fmt.Errorf("github: comment on issue %d: %w", n, err)
+		return fmt.Errorf("github: edit issue %d: %w", n, err)
 	}
 
 	return nil
+}
+
+// ListLabels returns the names of the repository's labels, every page.
+func (a *githubAdapter) ListLabels(ctx context.Context) ([]string, error) {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return nil, err
+	}
+
+	var names []string
+	opt := &gogithub.ListOptions{PerPage: issuesPerPage}
+	for {
+		page, resp, err := a.client.Issues.ListLabels(ctx, owner, repo, opt)
+		if err != nil {
+			return nil, fmt.Errorf("github: list labels: %w", err)
+		}
+		for _, l := range page {
+			names = append(names, l.GetName())
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+
+	return names, nil
+}
+
+// defaultLabelColor is the colour of a label git-zf creates (GitHub wants it
+// without the '#').
+const defaultLabelColor = "ededed"
+
+// SetLabels replaces the issue's labels with names, creating the ones the
+// repository lacks.
+func (a *githubAdapter) SetLabels(ctx context.Context, issueID string, names []string) error {
+	owner, repo, n, err := a.issueRef(issueID)
+	if err != nil {
+		return err
+	}
+
+	existing, err := a.ListLabels(ctx)
+	if err != nil {
+		return err
+	}
+	// GitHub label names are case-insensitive: an existing one is sent in its
+	// own spelling, never created again.
+	sent := make([]string, 0, len(names))
+	for _, name := range names {
+		if i := slices.IndexFunc(existing, func(e string) bool { return strings.EqualFold(e, name) }); i >= 0 {
+			sent = append(sent, existing[i])
+
+			continue
+		}
+		_, _, err := a.client.Issues.CreateLabel(ctx, owner, repo,
+			&gogithub.Label{Name: gogithub.Ptr(name), Color: gogithub.Ptr(defaultLabelColor)})
+		if err != nil {
+			return fmt.Errorf("github: create label %q: %w", name, err)
+		}
+		sent = append(sent, name)
+	}
+
+	if _, _, err := a.client.Issues.ReplaceLabelsForIssue(ctx, owner, repo, n, sent); err != nil {
+		return fmt.Errorf("github: set labels of issue %d: %w", n, err)
+	}
+
+	return nil
+}
+
+// ListComments returns the issue's comments, oldest first; a comment with an
+// empty body is dropped.
+func (a *githubAdapter) ListComments(ctx context.Context, issueID string) ([]tracker.Comment, error) {
+	owner, repo, n, err := a.issueRef(issueID)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []tracker.Comment
+	opt := &gogithub.IssueListCommentsOptions{
+		Sort: gogithub.Ptr("created"), Direction: gogithub.Ptr("asc"),
+		ListOptions: gogithub.ListOptions{PerPage: issuesPerPage},
+	}
+	for {
+		page, resp, err := a.client.Issues.ListComments(ctx, owner, repo, n, opt)
+		if err != nil {
+			return nil, fmt.Errorf("github: list comments of issue %d: %w", n, err)
+		}
+		for _, c := range page {
+			if c.GetBody() == "" {
+				continue
+			}
+			out = append(out, tracker.Comment{
+				ID: strconv.FormatInt(c.GetID(), 10), Author: c.GetUser().GetLogin(),
+				Body: c.GetBody(), CreatedAt: c.GetCreatedAt().Time,
+			}.Clean())
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.ListOptions.Page = resp.NextPage
+	}
+
+	return out, nil
 }

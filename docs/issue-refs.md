@@ -38,9 +38,11 @@ commit is signed when `commit.gpgsign` is true.
 | `set_state` | `value`: `open` or `closed` | Opens or closes the issue. |
 | `add_label` | `value` | Adds a label. |
 | `remove_label` | `value` | Removes a label; nothing happens if it is absent. |
-| `add_comment` | `body` | Adds a comment. |
+| `add_comment` | `body`; for a comment imported from the tracker also `tracker_comment_id`, `tracker_author`, `tracker_at` | Adds a comment. Two ops with the same `tracker_comment_id` count once. |
 | `link_tracker` | `tracker_type`, `project`, `tracker_id` | The tracker issue a repo-born issue was created as. The first one wins. |
 | `tracker_state` | `value`: `open` or `closed`, `status` | The last tracker state the chain saw. |
+| `link_comment` | `comment` (the op ID of an `add_comment`), `tracker_comment_id` | The tracker comment a local comment was posted as. |
+| `tracker_seen` | `title`, `description`, `labels`, `updated` | What the tracker showed the last time the mirror read the issue. |
 | `merge` | none | Two-parent commit joining changes made on two clones. |
 
 `v` is the format version, currently 1. `at` is RFC 3339, UTC, with a
@@ -92,11 +94,11 @@ issues of the repository are one set:
 
 - every open tracker issue is imported as an issue ref;
 - every open repo-born issue is created in the tracker;
-- open/closed travels both ways.
+- title, description, labels, comments and open/closed travel both ways.
 
 `git zf issue list`, `issue new`, `issue close <id>`, `issue close` (merge)
-and `issue sync` reconcile. `show`, `edit`, `comment` and `label` only read
-the refs: they see what another clone reconciled.
+and `issue sync` reconcile the whole project. `edit`, `comment` and `label`
+sync the one issue they changed. `show` only reads the refs.
 
 ### Identity of an imported issue
 
@@ -116,6 +118,16 @@ Each reconcile compares the repo state, the tracker state, and the tracker
 state the chain last recorded (`tracker_state`). The side that differs from
 the recorded one moved, and the other follows. With two values, both sides
 moving means they agree.
+
+Content follows the same rule with `tracker_seen`, the snapshot of the
+tracker's title, description, labels and updated time: a field that differs
+from the snapshot moved. A title or a description changed on both sides to
+different values is kept as the repo has it, with a warning. A comment is
+append-only: one pulled from the tracker carries the tracker's comment ID,
+author and time on its `add_comment`; one posted from the repo gets a
+`link_comment` with the ID the tracker gave it. An issue whose updated time
+is the snapshot's and whose record equals the snapshot costs no call beyond
+the listing.
 
 ### Display
 

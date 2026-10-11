@@ -95,17 +95,17 @@ const issueTrackerPickerHeight = 10
 // IssueTrackerPicker shows the live issue list and branch type selector.
 func IssueTrackerPicker(
 	issues []tracker.Issue,
-	selected *tracker.Issue,
+	selected *int,
 	branchTypes []string,
 	branchType *string) *huh.Group {
-	opts := make([]huh.Option[tracker.Issue], len(issues))
+	opts := make([]huh.Option[int], len(issues))
 	for i, iss := range issues {
 		label := fmt.Sprintf("[%s] %s", iss.ID, iss.Subject)
-		opts[i] = huh.NewOption(label, iss)
+		opts[i] = huh.NewOption(label, i)
 	}
 
 	if len(opts) == 0 {
-		opts = []huh.Option[tracker.Issue]{huh.NewOption("(no issues found)", tracker.Issue{})}
+		opts = []huh.Option[int]{huh.NewOption("(no issues found)", -1)}
 	}
 
 	typeOpts := make([]huh.Option[string], len(branchTypes))
@@ -118,7 +118,7 @@ func IssueTrackerPicker(
 	}
 
 	return huh.NewGroup(
-		huh.NewSelect[tracker.Issue]().
+		huh.NewSelect[int]().
 			Title("Pick an issue:").
 			Options(opts...).
 			Value(selected).

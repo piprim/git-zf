@@ -22,7 +22,13 @@ type scriptedRecordPrompter struct {
 	New     issuepkg.NewIssue // copied into the form input by NewIssue
 	PickID  string            // returned by PickRecord; "" picks the first record offered
 	Comment string
-	Labels  string
+	// LabelSet is what LabelChanges returns; LabelOffered records what it was
+	// offered.
+	LabelSet     []string
+	LabelOffered struct {
+		Choices, Current []string
+		Single           bool
+	}
 	// EditTitle and EditDescription are what EditIssue leaves in the form.
 	EditTitle, EditDescription string
 	Err                        error // returned by every method when non-nil
@@ -68,8 +74,10 @@ func (s *scriptedRecordPrompter) EditIssue(_ context.Context, title, description
 	return nil
 }
 
-func (s *scriptedRecordPrompter) LabelChanges(_ context.Context) (string, error) {
-	return s.Labels, s.Err
+func (s *scriptedRecordPrompter) LabelChanges(_ context.Context, choices, current []string, single bool) ([]string, error) {
+	s.LabelOffered.Choices, s.LabelOffered.Current, s.LabelOffered.Single = choices, current, single
+
+	return s.LabelSet, s.Err
 }
 
 // recordRig is a real on-disk repo for the repo-issue commands.

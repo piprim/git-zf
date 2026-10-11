@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"slices"
 
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/issue"
@@ -110,5 +111,42 @@ func IssueLabelInput(changes *string) *huh.Group {
 			Placeholder("+bug -wontfix").
 			Validate(requiredText).
 			Value(changes),
+	)
+}
+
+// IssueLabelPicker is the `issue label` form when the tracker's labels are
+// known: a multi-select over choices, current preselected, plus a line for
+// names not in the list.
+func IssueLabelPicker(choices, current []string, selected *[]string, extra *string) *huh.Group {
+	opts := make([]huh.Option[string], len(choices))
+	for i, name := range choices {
+		opts[i] = huh.NewOption(name, name).Selected(slices.Contains(current, name))
+	}
+
+	return huh.NewGroup(
+		huh.NewMultiSelect[string]().
+			Title("Labels:").
+			Description("space/x toggles, enter confirms").
+			Options(opts...).
+			Value(selected),
+		huh.NewInput().
+			Title("New labels (space separated, optional):").
+			Value(extra),
+	)
+}
+
+// IssueLabelStatusPicker is the `issue label` form on a tracker whose one label
+// is the status: a single pick.
+func IssueLabelStatusPicker(choices []string, current string, picked *string) *huh.Group {
+	opts := make([]huh.Option[string], len(choices))
+	for i, name := range choices {
+		opts[i] = huh.NewOption(name, name).Selected(name == current)
+	}
+
+	return huh.NewGroup(
+		huh.NewSelect[string]().
+			Title("Status:").
+			Options(opts...).
+			Value(picked),
 	)
 }

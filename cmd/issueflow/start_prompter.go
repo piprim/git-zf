@@ -130,11 +130,16 @@ func (p *HuhStartPrompter) PickIssueFromUser(ctx context.Context, allowedTypes [
 
 func (p *HuhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error) {
 	var got issuepkg.Issue
-	var pickedIssue tracker.Issue
+	idx := -1
 
-	picker := tui.IssueTrackerPicker(issues, &pickedIssue, allowedTypes, &got.Type)
+	picker := tui.IssueTrackerPicker(issues, &idx, allowedTypes, &got.Type)
 	if err := huh.NewForm(picker).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("tracker picker: %w", err)
+	}
+
+	var pickedIssue tracker.Issue
+	if idx >= 0 {
+		pickedIssue = issues[idx]
 	}
 
 	got.ID = pickedIssue.ID

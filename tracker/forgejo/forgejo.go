@@ -40,6 +40,12 @@ type repository struct {
 // only presence matters.
 type pullRequestRef struct{}
 
+// label is the subset of the Forgejo Label object we consume.
+type label struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 // issue is the subset of the Forgejo Issue object we consume. PullRequest is
 // non-nil when the item is actually a pull request.
 type issue struct {
@@ -47,9 +53,23 @@ type issue struct {
 	Title      string      `json:"title"`
 	Body       string      `json:"body"`
 	State      string      `json:"state"`
+	Labels     []label     `json:"labels"`
 	Repository *repository `json:"repository"`
 	//nolint:tagliatelle // Forgejo wire format
 	PullRequest *pullRequestRef `json:"pull_request"`
+	//nolint:tagliatelle // Forgejo wire format
+	CreatedAt time.Time `json:"created_at"`
+	//nolint:tagliatelle // Forgejo wire format
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// comment is the subset of the Forgejo Comment object we consume.
+type comment struct {
+	ID   int    `json:"id"`
+	Body string `json:"body"`
+	User *struct {
+		Login string `json:"login"`
+	} `json:"user"`
 	//nolint:tagliatelle // Forgejo wire format
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -248,6 +268,11 @@ func (a *forgejoAdapter) listPages(ctx context.Context, path string, q url.Value
 
 // toIssue converts a Forgejo issue of project (an "owner/repo").
 func (a *forgejoAdapter) toIssue(iss *issue, project string) tracker.Issue {
+	labels := make([]string, len(iss.Labels))
+	for i, l := range iss.Labels {
+		labels[i] = l.Name
+	}
+
 	return tracker.Issue{
 		TrackerType: a.trackerType,
 		ID:          strconv.Itoa(iss.Number),
@@ -255,7 +280,10 @@ func (a *forgejoAdapter) toIssue(iss *issue, project string) tracker.Issue {
 		Description: iss.Body,
 		Status:      iss.State,
 		Project:     project,
+		Labels:      labels,
 		CreatedAt:   iss.CreatedAt,
+		UpdatedAt:   iss.UpdatedAt,
+		Closed:      iss.State == statusClosed,
 	}.Clean()
 }
 
@@ -390,45 +418,203 @@ func mapState(name string) (string, error) {
 	}
 }
 
-// IsIssueClosed asks Forgejo for the issue's state via
-// GET /repos/{owner}/{repo}/issues/{number}. HTTP 404 → tracker.ErrIssueNotFound;
-// other failures are wrapped.
-func (a *forgejoAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
+// GetIssue reads one issue via GET /repos/{owner}/{repo}/issues/{number}.
+// HTTP 404 → tracker.ErrIssueNotFound; other failures are wrapped.
+func (a *forgejoAdapter) GetIssue(ctx context.Context, issueID string) (tracker.Issue, error) {
 	path, err := a.issuePath(issueID)
 	if err != nil {
-		return false, err
+		return tracker.Issue{}, err
+	}
+	_, project, err := a.projectIssuesPath()
+	if err != nil {
+		return tracker.Issue{}, err
 	}
 
 	var iss issue
 	if err := a.doJSON(ctx, http.MethodGet, path, nil, &iss); err != nil {
 		var he *httpError
-		if errors.As(err, &he) {
-			if he.StatusCode == http.StatusNotFound {
-				return false, tracker.ErrIssueNotFound
-			}
+		if errors.As(err, &he) && he.StatusCode == http.StatusNotFound {
+			return tracker.Issue{}, tracker.ErrIssueNotFound
 		}
 
-		return false, fmt.Errorf("forgejo: get issue %s: %w", issueID, err)
+		return tracker.Issue{}, fmt.Errorf("forgejo: get issue %s: %w", issueID, err)
 	}
 
-	return iss.State == statusClosed, nil
+	return a.toIssue(&iss, project), nil
+}
+
+// IsIssueClosed asks Forgejo for the issue's state.
+func (a *forgejoAdapter) IsIssueClosed(ctx context.Context, issueID string) (bool, error) {
+	iss, err := a.GetIssue(ctx, issueID)
+	if err != nil {
+		return false, err
+	}
+
+	return iss.Closed, nil
 }
 
 // AddComment posts body as an issue comment via
 // POST /repos/{owner}/{repo}/issues/{number}/comments.
-func (a *forgejoAdapter) AddComment(ctx context.Context, issueID, body string) error {
+func (a *forgejoAdapter) AddComment(ctx context.Context, issueID, body string) (tracker.Comment, error) {
 	path, err := a.issuePath(issueID)
 	if err != nil {
-		return err
+		return tracker.Comment{}, err
 	}
 
 	payload := struct {
 		Body string `json:"body"`
 	}{Body: body}
 
-	if err := a.doJSON(ctx, http.MethodPost, path+"/comments", payload, nil); err != nil {
-		return fmt.Errorf("forgejo: comment on issue %s: %w", issueID, err)
+	var created comment
+	if err := a.doJSON(ctx, http.MethodPost, path+"/comments", payload, &created); err != nil {
+		return tracker.Comment{}, fmt.Errorf("forgejo: comment on issue %s: %w", issueID, err)
+	}
+	author := ""
+	if created.User != nil {
+		author = created.User.Login
+	}
+
+	return tracker.Comment{ID: strconv.Itoa(created.ID), Author: author, Body: created.Body, CreatedAt: created.CreatedAt}.Clean(), nil
+}
+
+// UpdateIssue sets title and body via PATCH /repos/{owner}/{repo}/issues/{number}.
+func (a *forgejoAdapter) UpdateIssue(ctx context.Context, issueID, title, description string) error {
+	path, err := a.issuePath(issueID)
+	if err != nil {
+		return err
+	}
+
+	body := struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}{Title: title, Body: description}
+
+	if err := a.doJSON(ctx, http.MethodPatch, path, body, nil); err != nil {
+		return fmt.Errorf("forgejo: edit issue %s: %w", issueID, err)
 	}
 
 	return nil
+}
+
+// repoLabels lists the repository's labels, every page.
+func (a *forgejoAdapter) repoLabels(ctx context.Context) (path string, labels []label, err error) {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return "", nil, err
+	}
+	path = fmt.Sprintf("/repos/%s/%s/labels", url.PathEscape(owner), url.PathEscape(repo))
+
+	for page := 1; page <= maxPages; page++ {
+		q := url.Values{"limit": {strconv.Itoa(issuesPerPage)}, "page": {strconv.Itoa(page)}}
+
+		var batch []label
+		if err := a.doJSON(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &batch); err != nil {
+			return "", nil, fmt.Errorf("forgejo: list labels: %w", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		labels = append(labels, batch...)
+	}
+
+	return path, labels, nil
+}
+
+// ListLabels returns the names of the repository's labels.
+func (a *forgejoAdapter) ListLabels(ctx context.Context) ([]string, error) {
+	_, labels, err := a.repoLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, len(labels))
+	for i, l := range labels {
+		names[i] = l.Name
+	}
+
+	return names, nil
+}
+
+// defaultLabelColor is the colour of a label git-zf creates.
+const defaultLabelColor = "#ededed"
+
+// SetLabels replaces the issue's labels with names, creating the ones the
+// repository lacks, via PUT /repos/{owner}/{repo}/issues/{number}/labels.
+func (a *forgejoAdapter) SetLabels(ctx context.Context, issueID string, names []string) error {
+	issuePath, err := a.issuePath(issueID)
+	if err != nil {
+		return err
+	}
+
+	labelsPath, labels, err := a.repoLabels(ctx)
+	if err != nil {
+		return err
+	}
+	byName := make(map[string]int, len(labels))
+	for _, l := range labels {
+		byName[l.Name] = l.ID
+	}
+
+	ids := make([]int, 0, len(names))
+	for _, name := range names {
+		id, ok := byName[name]
+		if !ok {
+			var created label
+			body := struct {
+				Name  string `json:"name"`
+				Color string `json:"color"`
+			}{Name: name, Color: defaultLabelColor}
+			if err := a.doJSON(ctx, http.MethodPost, labelsPath, body, &created); err != nil {
+				return fmt.Errorf("forgejo: create label %q: %w", name, err)
+			}
+			id = created.ID
+		}
+		ids = append(ids, id)
+	}
+
+	body := struct {
+		Labels []int `json:"labels"`
+	}{Labels: ids}
+	if err := a.doJSON(ctx, http.MethodPut, issuePath+"/labels", body, nil); err != nil {
+		return fmt.Errorf("forgejo: set labels of issue %s: %w", issueID, err)
+	}
+
+	return nil
+}
+
+// ListComments returns the issue's comments, oldest first, via
+// GET /repos/{owner}/{repo}/issues/{number}/comments. A comment with an empty
+// body (an event Forgejo lists as a comment) is dropped.
+func (a *forgejoAdapter) ListComments(ctx context.Context, issueID string) ([]tracker.Comment, error) {
+	path, err := a.issuePath(issueID)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []tracker.Comment
+	for page := 1; page <= maxPages; page++ {
+		q := url.Values{"limit": {strconv.Itoa(issuesPerPage)}, "page": {strconv.Itoa(page)}}
+
+		var batch []comment
+		if err := a.doJSON(ctx, http.MethodGet, path+"/comments?"+q.Encode(), nil, &batch); err != nil {
+			return nil, fmt.Errorf("forgejo: list comments of issue %s: %w", issueID, err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, c := range batch {
+			if c.Body == "" {
+				continue
+			}
+			author := ""
+			if c.User != nil {
+				author = c.User.Login
+			}
+			out = append(out, tracker.Comment{ID: strconv.Itoa(c.ID), Author: author, Body: c.Body, CreatedAt: c.CreatedAt}.Clean())
+		}
+	}
+
+	slices.SortStableFunc(out, func(x, y tracker.Comment) int { return x.CreatedAt.Compare(y.CreatedAt) })
+
+	return out, nil
 }
