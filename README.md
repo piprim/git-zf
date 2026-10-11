@@ -249,7 +249,7 @@ round on the approved branch.
 $ git zf log                    # browse the commit graph of every branch and tag
 $ git zf log -- -n 100          # arguments after -- go to git log
 $ git zf log -- main..feature   # a revision range
-$ git zf log | less -R          # without a terminal: the plain git log output
+$ git zf log -- --color=always | less -R   # without a terminal: the plain git log output
 ```
 
 An interactive view of `git log`, without git-zf's own refs (`refs/zf/*`). Enter opens the commit under the cursor in a dialog with its stat, raw file list and patch; esc returns. `/` filters the lines as you type (enter keeps the filter, esc clears it), ←→ scroll long lines, `q` quits.
@@ -414,7 +414,7 @@ key = 7                          # 1-9 switches to it; 0 or omitted = no shortcu
 cmd = "git log --exclude='*zf/*' --all --author='Jane' --oneline --decorate --pretty=tformat:'%Cred%h%Creset %s %Cgreen(%cr)%Creset'"
 ```
 
-`cmd` is a shell command line starting with `git log` (the `git` may be left out); it is split like a shell would, so a quoted `--pretty` format works. Every line it prints must start with the commit hash, after the graph characters, for enter to find the commit: put `%h` or `%H` first in a custom format. Colors are handled by the view (`--color` is appended), and the arguments given after `--` on the command line are appended too.
+`cmd` is a shell command line starting with `git log` (the `git` may be left out); it is split like a shell would, so a quoted `--pretty` format works. Every line it prints must start with the commit hash, after the graph characters, for enter to find the commit: put `%h` or `%H` first in a custom format. The view forces colors (`--color=always` is appended); without a terminal git's own color rules apply, so pass `-- --color=always` to pipe colors into `less -R`. The arguments given after `--` on the command line are appended too.
 
 A `[[log.cmds]]` array in a config file replaces the whole built-in list, like `commit-message.items`, so copy the entries you keep from [`config/default.toml`](config/default.toml). Names and keys must be unique, keys are 0 to 9, and `default-cmd` must name one of the entries (it falls back to the first when empty).
 

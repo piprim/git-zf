@@ -173,6 +173,15 @@ cmd = "git log -n 1"
 		}
 	})
 
+	t.Run("a command with no words after git is an error, not a panic", func(t *testing.T) {
+		for _, cmd := range []string{"git", "   "} {
+			_, err := load(t, "[log]\ndefault-cmd = \"a\"\n[[log.cmds]]\nname = \"a\"\ncmd = \""+cmd+"\"\n")
+			if err == nil || !strings.Contains(err.Error(), "git log") {
+				t.Errorf("cmd %q: err = %v", cmd, err)
+			}
+		}
+	})
+
 	t.Run("a command that is not git log is an error", func(t *testing.T) {
 		_, err := load(t, `
 [log]

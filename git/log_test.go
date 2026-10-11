@@ -134,6 +134,16 @@ func TestShowCommit(t *testing.T) {
 		}
 	})
 
+	t.Run("a file named like the hash does not make it ambiguous", func(t *testing.T) {
+		h := strings.TrimSpace(string(head))
+		if err := os.WriteFile(filepath.Join(dir, h), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.ShowCommit(t.Context(), h); err != nil {
+			t.Errorf("ShowCommit: %v", err)
+		}
+	})
+
 	t.Run("an unknown hash is an error", func(t *testing.T) {
 		if _, err := client.ShowCommit(t.Context(), "deadbeef"); err == nil {
 			t.Error("expected an error")
@@ -167,6 +177,17 @@ func TestPrintLog(t *testing.T) {
 	t.Run("a pipe gets no colors", func(t *testing.T) {
 		if strings.Contains(out.String(), "\x1b[") {
 			t.Errorf("out = %q", out.String())
+		}
+	})
+
+	t.Run("an explicit --color=always is honored", func(t *testing.T) {
+		var forced bytes.Buffer
+		client.io = &pkg.IO{In: strings.NewReader(""), Out: &forced, Err: io.Discard}
+		if err := client.PrintLog(t.Context(), append(graphArgs, "--color=always")...); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(forced.String(), "\x1b[") {
+			t.Errorf("out = %q", forced.String())
 		}
 	})
 }

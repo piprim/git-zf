@@ -69,7 +69,7 @@ func (l *LogConfig) normalize() error {
 			return fmt.Errorf("log.cmds: command %q has no cmd", c.Name)
 		case err != nil:
 			return fmt.Errorf("log.cmds: %w", err)
-		case args[0] != "log":
+		case len(args) == 0 || args[0] != "log":
 			return fmt.Errorf("log.cmds: command %q must be a git log command", c.Name)
 		case c.Key < 0 || c.Key > maxLogKey:
 			return fmt.Errorf("log.cmds: command %q: key %d is not between 0 and 9", c.Name, c.Key)
