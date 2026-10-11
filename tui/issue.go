@@ -163,13 +163,21 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 	)
 }
 
-// IssueShower renders the issue of a row, by its slug, as `issue show` does;
-// its error is shown in place of the issue.
-type IssueShower func(slug string) (string, error)
+// IssueActions are the repository operations behind the dialogs of the issue
+// table, keyed by the row's slug. A nil action disables its key.
+type IssueActions struct {
+	// Show renders the issue as `issue show` does; its error is shown in
+	// place of the issue.
+	Show func(slug string) (string, error)
+	// Load returns the title and description the edit form starts from.
+	Load func(slug string) (title, description string, err error)
+	// Edit saves the edit form and returns the line the table shows.
+	Edit func(slug, title, description string) (string, error)
+}
 
 // IssueTableModel is the `issue list` table. Enter opens the row's issue in a
-// dialog rendered by show (nil: enter does nothing); esc closes it.
-func IssueTableModel(rows []issue.Row, initialStatus string, show IssueShower) (tea.Model, error) {
+// dialog that replaces the table, e opens its edit form; esc closes either.
+func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueActions) (tea.Model, error) {
 	projects := issue.UniqueProjects(rows)
 	includeProj := len(projects) > 1
 	cols := buildIssueTableColumns(rows)
@@ -206,7 +214,7 @@ func IssueTableModel(rows []issue.Row, initialStatus string, show IssueShower) (
 		projects:      projects,
 		projectFilter: projectAll,
 		visible:       filterRows(rows, status, "", projectAll, includeProj),
-		show:          show,
+		actions:       actions,
 		dialog:        viewport.New(width, issueTableHeight),
 	}, nil
 }
@@ -315,10 +323,16 @@ type issueTableModel struct {
 	pickCursor    int
 	// visible mirrors the table's rows: the one under the cursor is shown.
 	visible []issue.Row
-	show    IssueShower
-	// viewing is set while the dialog replaces the table.
+	actions IssueActions
+	// viewing is set while the show dialog replaces the table.
 	viewing bool
 	dialog  viewport.Model
+	// form is the edit dialog while it replaces the table; the fields are
+	// its values.
+	form                                 *huh.Form
+	editSlug, editTitle, editDescription string
+	// notice is the line under the table until the next key.
+	notice string
 }
 
 func (*issueTableModel) Init() tea.Cmd { return nil }
@@ -333,10 +347,14 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.dialog.Width = size.Width - 4 // the border and its padding
 	}
+	if m.form != nil {
+		return m.updateEditing(msg)
+	}
 	if m.viewing {
 		return m.updateViewing(msg)
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
+		m.notice = ""
 		if m.picking {
 			return m.updatePicking(key)
 		}
@@ -359,6 +377,8 @@ func (m *issueTableModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewing = false
 
 			return m, nil
+		case "e":
+			return m, m.openEdit()
 		case "ctrl+c":
 			return m, tea.Quit
 		}
@@ -370,13 +390,77 @@ func (m *issueTableModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *issueTableModel) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.form = nil
+
+			return m, nil
+		case "ctrl+c":
+			return m, tea.Quit
+		}
+	}
+
+	f, cmd := m.form.Update(msg)
+	m.form = f.(*huh.Form)
+	switch m.form.State {
+	case huh.StateCompleted:
+		m.form = nil
+		m.saveEdit()
+	case huh.StateAborted:
+		m.form = nil
+	case huh.StateNormal:
+	}
+
+	return m, cmd
+}
+
+// openEdit replaces the table with the edit form of the issue under the
+// cursor; a load error is the notice instead.
+func (m *issueTableModel) openEdit() tea.Cmd {
+	c := m.table.Cursor()
+	if m.actions.Load == nil || m.actions.Edit == nil || c < 0 || c >= len(m.visible) {
+		return nil
+	}
+	m.viewing = false
+	slug := m.visible[c].IssueSlug
+	title, description, err := m.actions.Load(slug)
+	if err != nil {
+		m.notice = "Error: " + err.Error()
+
+		return nil
+	}
+	m.editSlug, m.editTitle, m.editDescription = slug, title, description
+	m.form = huh.NewForm(IssueEditForm(&m.editTitle, &m.editDescription)).WithWidth(m.dialog.Width)
+
+	return m.form.Init()
+}
+
+// saveEdit gives the form's values to Edit and shows the row's new title.
+func (m *issueTableModel) saveEdit() {
+	line, err := m.actions.Edit(m.editSlug, m.editTitle, m.editDescription)
+	if err != nil {
+		m.notice = "Error: " + err.Error()
+
+		return
+	}
+	m.notice = line
+	for i := range m.allRows {
+		if m.allRows[i].IssueSlug == m.editSlug {
+			m.allRows[i].Title = strings.TrimSpace(m.editTitle)
+		}
+	}
+	m.refreshRows()
+}
+
 // openDialog shows the issue under the cursor, or the error of loading it.
 func (m *issueTableModel) openDialog() {
 	c := m.table.Cursor()
-	if m.show == nil || c < 0 || c >= len(m.visible) {
+	if m.actions.Show == nil || c < 0 || c >= len(m.visible) {
 		return
 	}
-	text, err := m.show(m.visible[c].IssueSlug)
+	text, err := m.actions.Show(m.visible[c].IssueSlug)
 	if err != nil {
 		text = "Error: " + err.Error()
 	}
@@ -446,6 +530,8 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		m.openDialog()
 
 		return m, nil, true
+	case "e":
+		return m, m.openEdit(), true
 	case "tab":
 		m.statusFilter = nextStatus(m.statusFilter)
 		m.refreshRows()
@@ -517,8 +603,11 @@ func renderProjectPicker(cursor int, projects []string) string {
 var dialogStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 
 func (m *issueTableModel) View() string {
+	if m.form != nil {
+		return dialogStyle.Render(m.form.View()) + "\n\nenter: save · esc: cancel"
+	}
 	if m.viewing {
-		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓ scroll · esc: back"
+		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓ scroll · e: edit · esc: back"
 	}
 
 	tabs := renderStatusTabs(m.statusFilter)
@@ -527,11 +616,11 @@ func (m *issueTableModel) View() string {
 		return m.table.View() + "\n\n" + tabs + "\n\n" + renderProjectPicker(m.pickCursor, m.projects)
 	}
 
-	hint := "enter: show · / to filter · tab: status · q to quit"
+	hint := "enter: show · e: edit · / to filter · tab: status · q to quit"
 	proj := ""
 
 	if len(m.projects) > 0 {
-		hint = "enter: show · / to filter · tab: status · p: project · q to quit"
+		hint = "enter: show · e: edit · / to filter · tab: status · p: project · q to quit"
 		proj = "    Project: " + activeTabStyle.Render(m.projectFilter)
 	}
 
@@ -539,6 +628,9 @@ func (m *issueTableModel) View() string {
 
 	if m.filtering {
 		return view + "    /" + m.filter.View() + "  (esc: clear  enter: confirm)"
+	}
+	if m.notice != "" {
+		return view + "    " + hint + "\n" + m.notice
 	}
 
 	return view + "    " + hint

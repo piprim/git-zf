@@ -117,8 +117,18 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 		return nil
 	}
 
-	show := func(slug string) (string, error) { return renderIssue(ctx, infra.client, slug) }
-	m, err := tui.IssueTableModel(rows, flags.status, show)
+	actions := tui.IssueActions{
+		Show: func(slug string) (string, error) { return renderIssue(ctx, infra.client, slug) },
+		Load: func(slug string) (string, string, error) {
+			rec, err := resolveRow(ctx, infra.client, slug)
+
+			return rec.Title, rec.Description, err
+		},
+		Edit: func(slug, title, description string) (string, error) {
+			return editIssue(ctx, infra, slug, title, description)
+		},
+	}
+	m, err := tui.IssueTableModel(rows, flags.status, actions)
 	if err != nil {
 		return fmt.Errorf("failed to construct issue table: %w", err)
 	}
@@ -129,19 +139,48 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 	return nil
 }
 
-// renderIssue renders the issue of a table row as `issue show` does, for the
-// list's dialog; a row that is not an issue stored in the repository is an
-// error.
-func renderIssue(ctx context.Context, client *git.Client, slug string) (string, error) {
+// resolveRow loads the issue of a table row; a row that is not an issue
+// stored in the repository is an error.
+func resolveRow(ctx context.Context, client *git.Client, slug string) (issuepkg.Record, error) {
 	rec, err := issuepkg.Resolve(ctx, client, slug)
 	if err != nil {
-		return "", fmt.Errorf("resolve issue %s: %w", slug, err)
+		return issuepkg.Record{}, fmt.Errorf("resolve issue %s: %w", slug, err)
+	}
+
+	return rec, nil
+}
+
+// renderIssue renders the issue of a table row as `issue show` does, for the
+// list's dialog.
+func renderIssue(ctx context.Context, client *git.Client, slug string) (string, error) {
+	rec, err := resolveRow(ctx, client, slug)
+	if err != nil {
+		return "", err
 	}
 
 	var b strings.Builder
 	renderRecord(&b, &rec)
 
 	return b.String(), nil
+}
+
+// editIssue saves the edit dialog of a table row as `issue edit` does and
+// returns the line the table shows.
+func editIssue(ctx context.Context, infra issueListInfra, slug, title, description string) (string, error) {
+	rec, err := resolveRow(ctx, infra.client, slug)
+	if err != nil {
+		return "", err
+	}
+
+	changed, err := applyEdit(ctx, infra.client, &rec, title, description, infra.mirror)
+	if err != nil {
+		return "", err
+	}
+	if !changed {
+		return fmt.Sprintf("Issue %s unchanged", rec.DisplayID()), nil
+	}
+
+	return fmt.Sprintf("Edited issue %s: %s", rec.DisplayID(), strings.TrimSpace(title)), nil
 }
 
 // buildRows lists the issue rows matching status, as the TUI's status tab

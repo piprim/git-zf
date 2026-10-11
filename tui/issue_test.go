@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/issue"
@@ -250,9 +251,9 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 	}
 	key := func(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
 	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
-	newTable := func(t *testing.T, show IssueShower) tea.Model {
+	newTable := func(t *testing.T, show func(string) (string, error)) tea.Model {
 		t.Helper()
-		m, err := IssueTableModel(rows, "open", show)
+		m, err := IssueTableModel(rows, "open", IssueActions{Show: show})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -338,6 +339,153 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 		m := newTable(t, show)
 		if _, cmd := m.Update(runeKey('q')); cmd == nil {
 			t.Error("expected a quit command")
+		}
+	})
+}
+
+func TestIssueTable_EditDialog(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "A"},
+		{IssueSlug: "B", Title: "B"},
+	}
+	key := func(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
+	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+	type edit struct{ slug, title, description string }
+	var loaded []string
+	var edits []edit
+	actions := IssueActions{
+		Show: func(slug string) (string, error) { return "ISSUE " + slug + " BODY", nil },
+		Load: func(slug string) (string, string, error) {
+			loaded = append(loaded, slug)
+
+			return "Title " + slug, "Desc " + slug, nil
+		},
+		Edit: func(slug, title, description string) (string, error) {
+			edits = append(edits, edit{slug, title, description})
+
+			return "Edited " + slug, nil
+		},
+	}
+	newTable := func(t *testing.T, a IssueActions) tea.Model {
+		t.Helper()
+		loaded, edits = nil, nil
+		m, err := IssueTableModel(rows, "open", a)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return m
+	}
+	// complete plays the user submitting the form with title: the form
+	// reaches huh.StateCompleted and the next message saves it.
+	complete := func(m tea.Model, title string) tea.Model {
+		model := m.(*issueTableModel)
+		model.editTitle = title
+		model.form.State = huh.StateCompleted
+		m, _ = m.Update(key(tea.KeyTab))
+
+		return m
+	}
+
+	t.Run("e opens the form with the issue's title and description", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyDown))
+		m, cmd := m.Update(runeKey('e'))
+		if cmd == nil {
+			t.Error("expected the form's init command")
+		}
+		v := m.View()
+		for _, want := range []string{"Title:", "Title B", "Desc B", "esc: cancel"} {
+			if !strings.Contains(v, want) {
+				t.Errorf("view misses %q:\n%s", want, v)
+			}
+		}
+		if !slices.Equal(loaded, []string{"B"}) {
+			t.Errorf("loaded = %v", loaded)
+		}
+	})
+
+	t.Run("typed keys reach the form", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(runeKey('e'))
+		m, _ = m.Update(runeKey('X'))
+		if m.(*issueTableModel).editTitle != "Title AX" {
+			t.Errorf("title = %q", m.(*issueTableModel).editTitle)
+		}
+	})
+
+	t.Run("esc cancels without saving", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(runeKey('e'))
+		m, _ = m.Update(key(tea.KeyEsc))
+		if v := m.View(); !strings.Contains(v, "enter: show") || strings.Contains(v, "Title:") {
+			t.Errorf("view = %q", v)
+		}
+		if len(edits) != 0 {
+			t.Errorf("edits = %v", edits)
+		}
+	})
+
+	t.Run("a submitted form saves, refreshes the row and shows the line", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyDown))
+		m, _ = m.Update(runeKey('e'))
+		m = complete(m, " New B ")
+		if !slices.Equal(edits, []edit{{"B", " New B ", "Desc B"}}) {
+			t.Errorf("edits = %v", edits)
+		}
+		v := m.View()
+		for _, want := range []string{"New B", "Edited B", "enter: show"} {
+			if !strings.Contains(v, want) {
+				t.Errorf("view misses %q:\n%s", want, v)
+			}
+		}
+		m, _ = m.Update(key(tea.KeyUp))
+		if strings.Contains(m.View(), "Edited B") {
+			t.Error("the notice must go with the next key")
+		}
+	})
+
+	t.Run("e in the show dialog edits the shown issue", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyDown))
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = m.Update(runeKey('e'))
+		if v := m.View(); !strings.Contains(v, "Title B") || strings.Contains(v, "ISSUE B BODY") {
+			t.Errorf("view = %q", v)
+		}
+		m = complete(m, "New B")
+		if !slices.Equal(edits, []edit{{"B", "New B", "Desc B"}}) || !strings.Contains(m.View(), "enter: show") {
+			t.Errorf("edits = %v, view = %q", edits, m.View())
+		}
+	})
+
+	t.Run("a load error is shown under the table", func(t *testing.T) {
+		a := actions
+		a.Load = func(string) (string, string, error) { return "", "", errors.New("no such issue") }
+		m := newTable(t, a)
+		m, _ = m.Update(runeKey('e'))
+		if v := m.View(); !strings.Contains(v, "Error: no such issue") || !strings.Contains(v, "enter: show") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("a save error is shown under the table", func(t *testing.T) {
+		a := actions
+		a.Edit = func(string, string, string) (string, error) { return "", errors.New("title is required") }
+		m := newTable(t, a)
+		m, _ = m.Update(runeKey('e'))
+		m = complete(m, "")
+		if v := m.View(); !strings.Contains(v, "Error: title is required") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("without an editor e does nothing", func(t *testing.T) {
+		m := newTable(t, IssueActions{})
+		m, _ = m.Update(runeKey('e'))
+		if v := m.View(); strings.Contains(v, "Title:") {
+			t.Errorf("view = %q", v)
 		}
 	})
 }

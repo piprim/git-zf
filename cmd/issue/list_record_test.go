@@ -190,6 +190,33 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		if _, err := renderIssue(ctx, infra.client, row.IssueSlug); err == nil {
 			t.Error("expected an error")
 		}
+		if _, err := editIssue(ctx, infra, row.IssueSlug, "Legacy", ""); err == nil {
+			t.Error("expected an error")
+		}
+	})
+
+	t.Run("the edit dialog with the same values changes nothing", func(t *testing.T) {
+		line, err := editIssue(ctx, infra, backlog.ShortID(), "Backlog", "")
+		if err != nil || !strings.Contains(line, "unchanged") {
+			t.Errorf("line = %q, err = %v", line, err)
+		}
+	})
+
+	t.Run("the edit dialog saves the title and description and the row follows", func(t *testing.T) {
+		line, err := editIssue(ctx, infra, backlog.ShortID(), " Backlog renamed ", "Now described")
+		if err != nil || !strings.Contains(line, "Edited issue "+backlog.ShortID()) {
+			t.Fatalf("line = %q, err = %v", line, err)
+		}
+		rec, err := issuepkg.Load(ctx, rig.client, backlog.ID)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if rec.Title != "Backlog renamed" || rec.Description != "Now described" {
+			t.Errorf("record = %+v", rec)
+		}
+		if row := bySlug(t, "")[backlog.ShortID()]; row.Title != "Backlog renamed" {
+			t.Errorf("row = %+v", row)
+		}
 	})
 }
 

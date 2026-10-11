@@ -87,9 +87,29 @@ func runEdit(ctx context.Context, client *git.Client, p recordPrompter, args []s
 		newDescription = *flags.description
 	}
 
+	changed, err := applyEdit(ctx, client, &rec, newTitle, newDescription, m)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		fmt.Fprintf(client.IO().Out, "Issue %s unchanged\n", rec.DisplayID())
+
+		return nil
+	}
+	fmt.Fprintf(client.IO().Out, "Edited issue %s: %s\n", rec.DisplayID(), strings.TrimSpace(newTitle))
+
+	return nil
+}
+
+// applyEdit records the new title and description of rec, one op per field
+// that changed, pushes the issue and gives the mirror the change. It reports
+// whether anything changed.
+func applyEdit(
+	ctx context.Context, client *git.Client, rec *issuepkg.Record, newTitle, newDescription string, m *issuepkg.Mirror,
+) (bool, error) {
 	newTitle = strings.TrimSpace(newTitle)
 	if newTitle == "" {
-		return errors.New("issue title is required")
+		return false, errors.New("issue title is required")
 	}
 
 	var ops []issuepkg.Op
@@ -101,20 +121,17 @@ func runEdit(ctx context.Context, client *git.Client, p recordPrompter, args []s
 	}
 
 	if len(ops) == 0 {
-		fmt.Fprintf(client.IO().Out, "Issue %s unchanged\n", rec.DisplayID())
-
-		return nil
+		return false, nil
 	}
 
 	for i := range ops {
 		if err := issuepkg.Append(ctx, client, rec.ID, &ops[i]); err != nil {
-			return fmt.Errorf("edit issue: %w", err)
+			return false, fmt.Errorf("edit issue: %w", err)
 		}
 	}
 
 	pushIssue(ctx, client, rec.ID)
 	syncOne(ctx, client, m, rec.ID)
-	fmt.Fprintf(client.IO().Out, "Edited issue %s: %s\n", rec.DisplayID(), newTitle)
 
-	return nil
+	return true, nil
 }
