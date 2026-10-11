@@ -2,6 +2,8 @@ package issue
 
 import (
 	"errors"
+	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/tui"
 	"slices"
 	"strings"
 	"testing"
@@ -551,6 +553,78 @@ func TestEditCmd_Flags(t *testing.T) {
 		got, err := issuepkg.Load(ctx, rig.client, rec.ID)
 		if err != nil || got.Description != "" || got.Title != "T" {
 			t.Errorf("record = %+v (%v)", got, err)
+		}
+	})
+}
+
+// `git zf issue` with no subcommand is the list. Without a terminal on stdin
+// (a test, a script) the table is printed instead of opening the TUI.
+func TestIssueRootCmd_ListsByDefault(t *testing.T) {
+	rig := newRecordRig(t, "alice", "")
+	rec, err := issuepkg.Create(t.Context(), rig.client, issuepkg.NewIssue{Title: "Default list", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	t.Chdir(rig.dir)
+
+	root := New(rig.cfg).GetRootCmd()
+	root.SetArgs([]string{})
+	root.SetOut(rig.stdout)
+	root.SetErr(rig.stderr)
+	execErr := root.ExecuteContext(t.Context())
+
+	t.Run("the command succeeds", func(t *testing.T) {
+		if execErr != nil {
+			t.Fatalf("Execute: %v", execErr)
+		}
+	})
+	t.Run("the table lists the issue", func(t *testing.T) {
+		if out := rig.stdout.String(); !strings.Contains(out, rec.ShortID()) || !strings.Contains(out, "Default list") {
+			t.Errorf("stdout = %q", out)
+		}
+	})
+}
+
+// The keys of the issue table run the record commands once the table has
+// exited, then the table reopens; a start does not reopen it.
+func TestListAction(t *testing.T) {
+	t.Parallel()
+
+	rig := newRecordRig(t, "alice", "")
+	ctx := t.Context()
+	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Keyed", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	infra := issueListInfra{client: rig.client, stderr: rig.stderr}
+	row := &issuepkg.Row{IssueSlug: rec.ShortID()}
+
+	t.Run("c closes the record under the cursor and reopens", func(t *testing.T) {
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, tui.IssuePickClose, row)
+		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
+		if !reopen || err != nil || loadErr != nil || got.State != issuepkg.StateClosed {
+			t.Errorf("reopen = %v, err = %v, state = %q (%v)", reopen, err, got.State, loadErr)
+		}
+	})
+	t.Run("n creates an issue from the form and reopens", func(t *testing.T) {
+		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From the table", BranchType: "fix"}}
+		reopen, err := New(rig.cfg).listAction(ctx, infra, p, tui.IssuePickNew, nil)
+		recs, _, listErr := issuepkg.List(ctx, rig.client)
+		if !reopen || err != nil || listErr != nil || !slices.ContainsFunc(recs, func(r issuepkg.Record) bool { return r.Title == "From the table" }) {
+			t.Errorf("reopen = %v, err = %v, records = %+v (%v)", reopen, err, recs, listErr)
+		}
+	})
+	t.Run("a form left with esc reopens without an error", func(t *testing.T) {
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, tui.IssuePickNew, nil)
+		if !reopen || err != nil {
+			t.Errorf("reopen = %v, err = %v", reopen, err)
+		}
+	})
+	t.Run("nothing picked does not reopen", func(t *testing.T) {
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, tui.IssuePickNone, nil)
+		if reopen || err != nil {
+			t.Errorf("reopen = %v, err = %v", reopen, err)
 		}
 	})
 }

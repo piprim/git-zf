@@ -43,7 +43,7 @@ Every command is interactive by default. Passing a flag skips the corresponding 
 
 ### Menu
 
-`git zf` without a subcommand opens a menu of the workflow commands — **Commit**, **Issue**, **Branch**, **Review**, **Log** — and runs the one you pick with its interactive defaults. `git zf issue`, `git zf branch` and `git zf review` do the same one level down. Esc / ctrl+c leaves the menu quietly, and when stdin is not a terminal (scripts, CI) the menu is skipped and the usual `--help` text is printed. Setup commands (`init`, `install`, `uninstall`, `config`, `completion`, `version`) are not in the menu.
+`git zf` without a subcommand opens a menu of the workflow commands — **Commit**, **Issue**, **Branch**, **Review**, **Log** — and runs the one you pick with its interactive defaults. `git zf branch` and `git zf review` do the same one level down; `git zf issue` opens the issue table (`git zf issue list`). Esc / ctrl+c leaves the menu quietly, and when stdin is not a terminal (scripts, CI) the menu is skipped and the usual `--help` text is printed. Setup commands (`init`, `install`, `uninstall`, `config`, `completion`, `version`) are not in the menu.
 
 ### Commit
 
@@ -76,7 +76,7 @@ $ git zf issue sync             # fetch, merge and push the repository issues
 
 Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
-**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured. Otherwise the list is the issues stored in the repository plus the tracked branches. Columns: Issue ID · [Project] · Title · Branch · Local Status · Issue Status · Created. Labels follow the title in brackets. Created is the issue's creation date, or its branch's for a row with no issue behind it. `∅` means no branch started yet; `N.A.` means the row has neither a tracker nor a repository issue.
+**`issue list`** — list issues enriched with local branch data. The tracker is the primary source when configured. Otherwise the list is the issues stored in the repository plus the tracked branches. Columns: Issue ID · [Project] · Title · Branch · Local Status · Issue Status · Created. Labels follow the title in brackets. Created is the issue's creation date, or its branch's for a row with no issue behind it. `∅` means no branch started yet; `N.A.` means the row has neither a tracker nor a repository issue. In the table, enter shows the issue and `e` edits it in place; `s` starts it, `n` creates an issue, `c` twice closes the one under the cursor (as `issue close <id>`; the first press asks for the second, there is no undo), `l` edits its labels and `r` syncs, each running once the table has exited and reopening it afterwards (a start leaves you on the new branch).
 
 In the TUI: **`/`** filters rows (any column, case-insensitive), **`tab`** cycles the status filter (Open → Closed → All), **`p`** opens the project picker, **`q`** quits. Flags: `--status open|closed|all`, `--stdout` (plain table), `--json`.
 

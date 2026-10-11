@@ -262,7 +262,7 @@ func TestRunIssueList(t *testing.T) {
 
 		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if _, err := runList(t.Context(), &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+		if _, _, err := runList(t.Context(), &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 
@@ -282,7 +282,7 @@ func TestRunIssueList(t *testing.T) {
 
 		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 
@@ -300,7 +300,7 @@ func TestRunIssueList(t *testing.T) {
 		s := newListClient(t)
 		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		if !strings.Contains(buf.String(), "No issues found") {
@@ -316,7 +316,7 @@ func TestRunIssueList(t *testing.T) {
 		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		for name, flags := range map[string]issueListFlags{"json": {jsonOut: true}, "stdout": {stdout: true}} {
 			t.Run(name, func(t *testing.T) {
-				row, err := runList(t.Context(), &bytes.Buffer{}, infra, flags)
+				_, row, err := runList(t.Context(), &bytes.Buffer{}, infra, flags)
 				if err != nil || row != nil {
 					t.Errorf("row = %+v, err = %v", row, err)
 				}
@@ -333,7 +333,7 @@ func TestRunIssueList(t *testing.T) {
 		}}
 		infra := issueListInfra{client: s, tracker: tk, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		if !strings.Contains(buf.String(), "∅") {

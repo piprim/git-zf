@@ -134,7 +134,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("json output carries labels and state", func(t *testing.T) {
 		var buf bytes.Buffer
-		if _, err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+		if _, _, err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		var rows []issuepkg.Row
@@ -154,7 +154,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("json output has an empty label list, never null, for a row without a repo issue", func(t *testing.T) {
 		var buf bytes.Buffer
-		if _, err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+		if _, _, err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		if strings.Contains(buf.String(), `"labels":null`) {
@@ -164,7 +164,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("stdout table shows labels next to the title and the issue status header", func(t *testing.T) {
 		var buf bytes.Buffer
-		if _, err := runList(ctx, &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, _, err := runList(ctx, &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		out := buf.String()

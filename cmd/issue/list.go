@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
@@ -18,6 +20,7 @@ import (
 	"github.com/piprim/git-zf/tty"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 type issueListFlags struct {
@@ -58,6 +61,9 @@ func (ir Issue) getIssueListCmd() *cobra.Command {
 
 func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 	ctx := cmd.Context()
+	// No terminal on stdin (a script, a test): the table is printed, the TUI
+	// cannot open /dev/tty.
+	flags.stdout = flags.stdout || !term.IsTerminal(int(os.Stdin.Fd()))
 	var (
 		t   tracker.Tracker
 		err error
@@ -81,21 +87,58 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		mirror:  issueflow.MirrorOf(ir.appConfig, t),
 	}
 
-	row, err := runList(ctx, os.Stdout, infra, flags)
-	if err != nil || row == nil {
-		return err
+	for {
+		pick, row, err := runList(ctx, cmd.OutOrStdout(), infra, flags)
+		if err != nil {
+			return err
+		}
+		reopen, err := ir.listAction(ctx, infra, huhRecordPrompter{}, pick, row)
+		if !reopen {
+			return err
+		}
+		if err != nil {
+			fmt.Fprintln(infra.stderr, "error:", err)
+		}
 	}
-
-	// The table's program has exited: the start forms get the terminal.
-	deps := infra.deps()
-	deps.Cfg = ir.appConfig
-
-	return issueflow.StartRow(ctx, deps, issueflow.NewHuhStartPrompter(), row)
 }
 
-// runList prints or shows the issues. It returns the row picked with s in
-// the table, nil when none: the stdout and JSON outputs never pick.
-func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issueListFlags) (*issuepkg.Row, error) {
+// listAction runs the command behind a key of the table once its program
+// has exited and the forms get the terminal. It reports whether the table
+// reopens: a start leaves the operator on the new branch, and a form left
+// with esc is no error.
+func (ir Issue) listAction(
+	ctx context.Context, infra issueListInfra, p recordPrompter, pick tui.IssuePick, row *issuepkg.Row,
+) (reopen bool, err error) {
+	switch pick {
+	case tui.IssuePickRow:
+		deps := infra.deps()
+		deps.Cfg = ir.appConfig
+
+		return false, issueflow.StartRow(ctx, deps, issueflow.NewHuhStartPrompter(), row)
+	case tui.IssuePickNew:
+		err = runNew(ctx, infra.client, ir.appConfig, issuepkg.NewIssue{}, p, infra.mirror)
+	case tui.IssuePickClose:
+		err = runCloseByID(ctx, infra.client, row.IssueSlug, infra.mirror)
+	case tui.IssuePickLabel:
+		err = runLabel(ctx, infra.client, p, []string{row.IssueSlug}, infra.mirror)
+	case tui.IssuePickSync:
+		err = runSync(ctx, infra.client, infra.mirror)
+	case tui.IssuePickNone:
+		return false, nil
+	}
+	if errors.Is(err, huh.ErrUserAborted) {
+		return true, nil
+	}
+
+	return true, err
+}
+
+// runList prints or shows the issues. It returns how the table was quit
+// and, for a key that acts on a row, the row under the cursor; the stdout
+// and JSON outputs never pick.
+func runList(
+	ctx context.Context, w io.Writer, infra issueListInfra, flags issueListFlags,
+) (tui.IssuePick, *issuepkg.Row, error) {
 	// The TUI filters by status inside the table model, so it needs every row.
 	status := flags.status
 	if !flags.jsonOut && !flags.stdout {
@@ -104,27 +147,27 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 
 	rows, err := buildRows(ctx, infra, status)
 	if err != nil {
-		return nil, fmt.Errorf("build issue rows: %w", err)
+		return tui.IssuePickNone, nil, fmt.Errorf("build issue rows: %w", err)
 	}
 
 	if flags.jsonOut {
 		if err := json.NewEncoder(w).Encode(normalizeRows(rows)); err != nil {
-			return nil, fmt.Errorf("encode json: %w", err)
+			return tui.IssuePickNone, nil, fmt.Errorf("encode json: %w", err)
 		}
 
-		return nil, nil
+		return tui.IssuePickNone, nil, nil
 	}
 
 	if len(rows) == 0 {
 		fmt.Fprintln(w, "No issues found.")
 
-		return nil, nil
+		return tui.IssuePickNone, nil, nil
 	}
 
 	if flags.stdout {
 		tty.RenderIssueTable(w, rows)
 
-		return nil, nil
+		return tui.IssuePickNone, nil, nil
 	}
 
 	actions := tui.IssueActions{
@@ -141,21 +184,22 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 	}
 	m, err := tui.IssueTableModel(rows, flags.status, actions)
 	if err != nil {
-		return nil, fmt.Errorf("failed to construct issue table: %w", err)
+		return tui.IssuePickNone, nil, fmt.Errorf("failed to construct issue table: %w", err)
 	}
 	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	if err != nil {
-		return nil, fmt.Errorf("run table: %w", err)
+		return tui.IssuePickNone, nil, fmt.Errorf("run table: %w", err)
 	}
-	if pick, slug := tui.PickedIssue(final); pick == tui.IssuePickRow {
-		for i := range rows {
-			if rows[i].IssueSlug == slug {
-				return &rows[i], nil
-			}
-		}
+	pick, slug := tui.PickedIssue(final)
+	if slug == "" {
+		return pick, nil, nil
+	}
+	i := slices.IndexFunc(rows, func(r issuepkg.Row) bool { return r.IssueSlug == slug })
+	if i < 0 {
+		return tui.IssuePickNone, nil, nil
 	}
 
-	return nil, nil
+	return pick, &rows[i], nil
 }
 
 // resolveRow loads the issue of a table row; a row that is not an issue

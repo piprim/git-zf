@@ -236,10 +236,22 @@ stripping colors; a graph-only line (`|/`) has none and enter ignores it, so a
 command's format must start with the hash. The built-in commands live in
 `config/default.toml`; a user `[[log.cmds]]` array replaces them wholesale.
 
+`L` on a merge at the tip of a local branch replaces it by one commit holding
+its tree (`git.LinearizePlan`, `LinearizeMerge`, `PushLinearized` in
+`git/linearize.go`): the plan fetches the branch's remote and refuses a merge
+under the tip or an upstream that moved; the push that follows is leased on the
+hash the plan fetched. The view runs each step as a `tea.Cmd` and asks y/n in
+the hint (`LogActions.Plan`, `tui.Linearization`); `cmd/log.planLinearize`
+words the questions.
+
+    mise exec -- go test ./git/... -run "TestLinearize" -v
+    mise exec -- go test ./tui/... -run "TestLogModel_Linearize" -v
+    mise exec -- go test ./cmd/log/... -run "TestPlanLinearize" -v
+
 ### Testing the menus
 
-`git zf` (no subcommand), `git zf review`, `git zf branch` and `git zf issue`
-open an action menu built on
+`git zf` (no subcommand), `git zf review` and `git zf branch` open an action
+menu built on
 `cmdutil.RunMenu` (`cmd/cmdutil/menu.go`): it takes the parent command, a
 title, the ordered subcommands to offer, and a `MenuPrompter`. The picked
 subcommand's `RunE` runs with the *parent* command (cobra v1.1.3 has no
@@ -252,7 +264,14 @@ stdin → the group's help is printed; Esc → quiet exit.
 
 To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`),
 `Review.menuSubs` (`cmd/review/review.go`) or the slice in `GetRootCmd` of
-`cmd/branch/branch.go` / `cmd/issue/issue.go`, and extend the matching test. A
+`cmd/branch/branch.go`, and extend the matching test. `git zf issue` has no
+menu: it runs `issue list` (`TestIssueRootCmd_ListsByDefault`), whose table
+prints to stdout when stdin is not a terminal. The table's keys `s`, `n`,
+`c` (pressed twice: a close has no undo), `l` and `r` quit it with a
+`tui.IssuePick` (`TestIssueTable_ActionKeys`);
+`listAction` (`cmd/issue/list.go`, `TestListAction`) runs the command behind
+the key with the terminal free and the list loop reopens the table. To add a
+key, add its `IssuePick`, its case in `updateNormal` and in `listAction`. A
 subcommand offered by a menu reads its string flags with `cmdutil.StringFlag`,
 never `cmd.Flags().GetString`: the parent command does not define them.
 
@@ -294,7 +313,7 @@ Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.to
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (4696 symbols, 19773 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (5155 symbols, 22093 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

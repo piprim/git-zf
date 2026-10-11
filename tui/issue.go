@@ -161,9 +161,12 @@ type IssueActions struct {
 type IssuePick int
 
 const (
-	IssuePickNone IssuePick = iota // q or ctrl+c: nothing picked
-	IssuePickRow                   // s or enter: the slug is the row's issue
-	IssuePickNew                   // n: a new issue
+	IssuePickNone  IssuePick = iota // q or ctrl+c: nothing picked
+	IssuePickRow                    // s or enter: the slug is the row's issue
+	IssuePickNew                    // n: a new issue
+	IssuePickClose                  // c: close the row's issue (list mode)
+	IssuePickLabel                  // l: label the row's issue (list mode)
+	IssuePickSync                   // r: sync the issues (list mode)
 )
 
 // PickedIssue reports how the table was quit and, for IssuePickRow, the
@@ -179,8 +182,9 @@ func PickedIssue(m tea.Model) (IssuePick, string) {
 
 // IssueTableModel is the issue table. In list mode enter opens the row's
 // issue in a dialog that replaces the table, e opens its edit form (esc
-// closes either) and s picks the row and quits; in pick mode (actions.Pick)
-// enter and s pick, n asks for a new issue.
+// closes either), and s, c, l, n and r quit with the action picked (start,
+// close or label the row, a new issue, a sync: see PickedIssue); in pick
+// mode (actions.Pick) enter and s pick, n asks for a new issue.
 func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueActions) (tea.Model, error) {
 	projects := issue.UniqueProjects(rows)
 	includeProj := len(projects) > 1
@@ -346,6 +350,9 @@ type issueTableModel struct {
 	editSlug, editTitle, editDescription string
 	// notice is the line under the table until the next key.
 	notice string
+	// armClose is the slug a first c armed: a second c closes it, any other
+	// key disarms. A close has no undo and no reopen command.
+	armClose string
 	// pick and pickedSlug are how the table was quit: see PickedIssue.
 	pick       IssuePick
 	pickedSlug string
@@ -371,6 +378,9 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		m.notice = ""
+		if key.String() != "c" {
+			m.armClose = ""
+		}
 		if m.picking {
 			return m.updatePicking(key)
 		}
@@ -485,21 +495,21 @@ func (m *issueTableModel) openDialog() {
 	m.viewing = true
 }
 
-// pickRow quits with the row under the cursor picked; nothing happens on an
-// empty table, and a start (actions.Start) refuses a closed issue (closed
-// record, merged branch) with a notice.
-func (m *issueTableModel) pickRow() (tea.Model, tea.Cmd, bool) {
+// pickRow quits with the row under the cursor picked for pick; nothing
+// happens on an empty table, and a start (IssuePickRow with actions.Start)
+// refuses a closed issue (closed record, merged branch) with a notice.
+func (m *issueTableModel) pickRow(pick IssuePick) (tea.Model, tea.Cmd, bool) {
 	c := m.table.Cursor()
 	if c < 0 || c >= len(m.visible) {
 		return m, nil, true
 	}
 	row := &m.visible[c]
-	if m.actions.Start && !row.MatchesStatus(statusOpen) {
+	if pick == IssuePickRow && m.actions.Start && !row.MatchesStatus(statusOpen) {
 		m.notice = row.IssueSlug + " is closed: not started"
 
 		return m, nil, true
 	}
-	m.pick, m.pickedSlug = IssuePickRow, row.IssueSlug
+	m.pick, m.pickedSlug = pick, row.IssueSlug
 
 	return m, tea.Quit, true
 }
@@ -563,21 +573,46 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		return m, tea.Quit, true
 	case "enter":
 		if m.actions.Pick {
-			return m.pickRow()
+			return m.pickRow(IssuePickRow)
 		}
 		m.openDialog()
 
 		return m, nil, true
 	case "s":
-		return m.pickRow()
+		return m.pickRow(IssuePickRow)
 	case "n":
-		if m.actions.Pick && m.actions.NewIssue {
+		if !m.actions.Pick || m.actions.NewIssue {
 			m.pick = IssuePickNew
 
 			return m, tea.Quit, true
 		}
 
 		return m, nil, true
+	case "l":
+		if m.actions.Pick {
+			return m, nil, true
+		}
+
+		return m.pickRow(IssuePickLabel)
+	case "c":
+		c := m.table.Cursor()
+		if m.actions.Pick || c < 0 || c >= len(m.visible) {
+			return m, nil, true
+		}
+		if slug := m.visible[c].IssueSlug; m.armClose != slug {
+			m.armClose, m.notice = slug, "c again closes "+slug+" (no undo)"
+
+			return m, nil, true
+		}
+
+		return m.pickRow(IssuePickClose)
+	case "r":
+		if m.actions.Pick {
+			return m, nil, true
+		}
+		m.pick = IssuePickSync
+
+		return m, tea.Quit, true
 	case "e":
 		return m, m.openEdit(), true
 	case "m":
@@ -696,7 +731,7 @@ func (m *issueTableModel) View() string {
 
 // hint is the key line under the table, for the mode.
 func (m *issueTableModel) hint() string {
-	keys := "enter: show · e: edit · s: start"
+	keys := "enter: show · e: edit · s: start · n: new · c: close · l: label · r: sync"
 	if m.actions.Pick {
 		keys = "enter: pick"
 		if m.actions.NewIssue {

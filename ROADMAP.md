@@ -13,7 +13,7 @@
    No menu entry or picker. The command takes exactly one name and is not in the git zf branch menu. A picker over in-progress branches is a small addition
 5. `git zf issue new` should propose to start the issue now (yes/no).
 6. `git zf issue list` show the issues. Allow to pick one and open a view the same `git zf shwo <id>`
-7. `git zf issue` must show the list by default. The action `Close`, 'New', `Edit`, `Label` and `Sync` can be called throught key-binding.
+7. [done] `git zf issue` must show the list by default. The action `Close`, 'New', `Edit`, `Label` and `Sync` can be called throught key-binding.
 
 ## To be discuss
 
