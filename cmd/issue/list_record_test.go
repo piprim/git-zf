@@ -171,6 +171,26 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("the dialog renders a row's issue as show does", func(t *testing.T) {
+		row := bySlug(t, "")[backlog.ShortID()]
+		out, err := renderIssue(ctx, infra.client, row.IssueSlug)
+		if err != nil {
+			t.Fatalf("renderIssue: %v", err)
+		}
+		for _, want := range []string{"Backlog", "ID: " + backlog.ID} {
+			if !strings.Contains(out, want) {
+				t.Errorf("show misses %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("a row without a repo issue is an error", func(t *testing.T) {
+		row := bySlug(t, "")["JIRA-7"]
+		if _, err := renderIssue(ctx, infra.client, row.IssueSlug); err == nil {
+			t.Error("expected an error")
+		}
+	})
 }
 
 // A started issue is listed with the title of its record, so an `issue edit`

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/piprim/git-zf/branch"
@@ -116,7 +117,8 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 		return nil
 	}
 
-	m, err := tui.IssueTableModel(rows, flags.status)
+	show := func(slug string) (string, error) { return renderIssue(ctx, infra.client, slug) }
+	m, err := tui.IssueTableModel(rows, flags.status, show)
 	if err != nil {
 		return fmt.Errorf("failed to construct issue table: %w", err)
 	}
@@ -125,6 +127,21 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 	}
 
 	return nil
+}
+
+// renderIssue renders the issue of a table row as `issue show` does, for the
+// list's dialog; a row that is not an issue stored in the repository is an
+// error.
+func renderIssue(ctx context.Context, client *git.Client, slug string) (string, error) {
+	rec, err := issuepkg.Resolve(ctx, client, slug)
+	if err != nil {
+		return "", fmt.Errorf("resolve issue %s: %w", slug, err)
+	}
+
+	var b strings.Builder
+	renderRecord(&b, &rec)
+
+	return b.String(), nil
 }
 
 // buildRows lists the issue rows matching status, as the TUI's status tab

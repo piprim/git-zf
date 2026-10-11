@@ -6,6 +6,7 @@ import (
 
 	btable "github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -162,10 +163,20 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 	)
 }
 
-func IssueTableModel(rows []issue.Row, initialStatus string) (tea.Model, error) {
+// IssueShower renders the issue of a row, by its slug, as `issue show` does;
+// its error is shown in place of the issue.
+type IssueShower func(slug string) (string, error)
+
+// IssueTableModel is the `issue list` table. Enter opens the row's issue in a
+// dialog rendered by show (nil: enter does nothing); esc closes it.
+func IssueTableModel(rows []issue.Row, initialStatus string, show IssueShower) (tea.Model, error) {
 	projects := issue.UniqueProjects(rows)
 	includeProj := len(projects) > 1
 	cols := buildIssueTableColumns(rows)
+	width := 0
+	for _, c := range cols {
+		width += c.Width + 2
+	}
 
 	status := initialStatus
 	if status == "" {
@@ -194,6 +205,9 @@ func IssueTableModel(rows []issue.Row, initialStatus string) (tea.Model, error) 
 		statusFilter:  status,
 		projects:      projects,
 		projectFilter: projectAll,
+		visible:       filterRows(rows, status, "", projectAll, includeProj),
+		show:          show,
+		dialog:        viewport.New(width, issueTableHeight),
 	}, nil
 }
 
@@ -221,8 +235,20 @@ func buildIssueTableColumns(rows []issue.Row) []btable.Column {
 // status, project, and free-text search. includeProject controls whether the
 // Project cell is emitted (must match the table's column count).
 func applyFilters(rows []issue.Row, status, text, project string, includeProject bool) []btable.Row {
+	kept := filterRows(rows, status, text, project, includeProject)
+	out := make([]btable.Row, len(kept))
+	for i := range kept {
+		out[i] = issue.RowCells(&kept[i], includeProject)
+	}
+
+	return out
+}
+
+// filterRows is applyFilters on the issue rows: the rows the table shows, in
+// its order.
+func filterRows(rows []issue.Row, status, text, project string, includeProject bool) []issue.Row {
 	q := strings.ToLower(text)
-	out := make([]btable.Row, 0, len(rows))
+	out := make([]issue.Row, 0, len(rows))
 
 	for i := range rows {
 		r := &rows[i]
@@ -251,7 +277,7 @@ func applyFilters(rows []issue.Row, status, text, project string, includeProject
 			}
 		}
 
-		out = append(out, row)
+		out = append(out, *r)
 	}
 
 	return out
@@ -287,16 +313,29 @@ type issueTableModel struct {
 	projectFilter string
 	picking       bool
 	pickCursor    int
+	// visible mirrors the table's rows: the one under the cursor is shown.
+	visible []issue.Row
+	show    IssueShower
+	// viewing is set while the dialog replaces the table.
+	viewing bool
+	dialog  viewport.Model
 }
 
 func (*issueTableModel) Init() tea.Cmd { return nil }
 
 func (m *issueTableModel) refreshRows() {
 	includeProj := len(m.projects) > 1
+	m.visible = filterRows(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj)
 	m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
 }
 
 func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.dialog.Width = size.Width - 4 // the border and its padding
+	}
+	if m.viewing {
+		return m.updateViewing(msg)
+	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if m.picking {
 			return m.updatePicking(key)
@@ -311,6 +350,39 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.table, cmd = m.table.Update(msg)
 	return m, cmd
+}
+
+func (m *issueTableModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc", "q":
+			m.viewing = false
+
+			return m, nil
+		case "ctrl+c":
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.dialog, cmd = m.dialog.Update(msg)
+
+	return m, cmd
+}
+
+// openDialog shows the issue under the cursor, or the error of loading it.
+func (m *issueTableModel) openDialog() {
+	c := m.table.Cursor()
+	if m.show == nil || c < 0 || c >= len(m.visible) {
+		return
+	}
+	text, err := m.show(m.visible[c].IssueSlug)
+	if err != nil {
+		text = "Error: " + err.Error()
+	}
+	m.dialog.SetContent(text)
+	m.dialog.GotoTop()
+	m.viewing = true
 }
 
 func (m *issueTableModel) updatePicking(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -370,6 +442,10 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	switch key.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit, true
+	case "enter":
+		m.openDialog()
+
+		return m, nil, true
 	case "tab":
 		m.statusFilter = nextStatus(m.statusFilter)
 		m.refreshRows()
@@ -438,18 +514,24 @@ func renderProjectPicker(cursor int, projects []string) string {
 	return "Pick project (↑↓ / j·k, enter: confirm, esc: cancel):\n" + strings.Join(lines, "\n")
 }
 
+var dialogStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+
 func (m *issueTableModel) View() string {
+	if m.viewing {
+		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓ scroll · esc: back"
+	}
+
 	tabs := renderStatusTabs(m.statusFilter)
 
 	if m.picking {
 		return m.table.View() + "\n\n" + tabs + "\n\n" + renderProjectPicker(m.pickCursor, m.projects)
 	}
 
-	hint := "Press / to filter · tab: status · q to quit"
+	hint := "enter: show · / to filter · tab: status · q to quit"
 	proj := ""
 
 	if len(m.projects) > 0 {
-		hint = "Press / to filter · tab: status · p: project · q to quit"
+		hint = "enter: show · / to filter · tab: status · p: project · q to quit"
 		proj = "    Project: " + activeTabStyle.Render(m.projectFilter)
 	}
 

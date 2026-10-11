@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/issue"
@@ -235,6 +239,105 @@ func TestIssueRowToTableRow_Labels(t *testing.T) {
 		row := issue.RowCells(&issue.Row{IssueSlug: "1", Title: "Plain"}, false)
 		if row[1] != "Plain" {
 			t.Errorf("title cell = %q", row[1])
+		}
+	})
+}
+
+func TestIssueTable_EnterOpensDialog(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "A"},
+		{IssueSlug: "B", Title: "B"},
+	}
+	key := func(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
+	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+	newTable := func(t *testing.T, show IssueShower) tea.Model {
+		t.Helper()
+		m, err := IssueTableModel(rows, "open", show)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return m
+	}
+	var shown []string
+	show := func(slug string) (string, error) {
+		shown = append(shown, slug)
+
+		return "ISSUE " + slug + " BODY", nil
+	}
+
+	t.Run("enter shows the row under the cursor in the dialog", func(t *testing.T) {
+		shown = nil
+		m := newTable(t, show)
+		m, _ = m.Update(key(tea.KeyDown))
+		m, cmd := m.Update(key(tea.KeyEnter))
+		if cmd != nil {
+			t.Error("enter must not quit")
+		}
+		if v := m.View(); !strings.Contains(v, "ISSUE B BODY") || !strings.Contains(v, "esc: back") {
+			t.Errorf("view = %q", v)
+		}
+		if !slices.Equal(shown, []string{"B"}) {
+			t.Errorf("shown = %v", shown)
+		}
+	})
+
+	t.Run("esc returns to the table with the cursor kept", func(t *testing.T) {
+		shown = nil
+		m := newTable(t, show)
+		m, _ = m.Update(key(tea.KeyDown))
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = m.Update(key(tea.KeyEsc))
+		if v := m.View(); !strings.Contains(v, "enter: show") || strings.Contains(v, "ISSUE B BODY") {
+			t.Errorf("view = %q", v)
+		}
+		m, _ = m.Update(key(tea.KeyEnter))
+		if !slices.Equal(shown, []string{"B", "B"}) {
+			t.Errorf("shown = %v", shown)
+		}
+	})
+
+	t.Run("q closes the dialog, it does not quit", func(t *testing.T) {
+		m := newTable(t, show)
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, cmd := m.Update(runeKey('q'))
+		if cmd != nil || strings.Contains(m.View(), "ISSUE A BODY") {
+			t.Errorf("cmd = %v, view = %q", cmd, m.View())
+		}
+	})
+
+	t.Run("enter within the filtered rows shows the matching issue", func(t *testing.T) {
+		shown = nil
+		m := newTable(t, show)
+		m, _ = m.Update(runeKey('/'))
+		m, _ = m.Update(runeKey('B'))
+		m, _ = m.Update(key(tea.KeyEnter)) // leave filtering
+		m, _ = m.Update(key(tea.KeyEnter))
+		if !slices.Equal(shown, []string{"B"}) {
+			t.Errorf("shown = %v", shown)
+		}
+	})
+
+	t.Run("a show error is displayed in the dialog", func(t *testing.T) {
+		m := newTable(t, func(string) (string, error) { return "", errors.New("no such issue") })
+		m, _ = m.Update(key(tea.KeyEnter))
+		if v := m.View(); !strings.Contains(v, "Error: no such issue") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("without a shower enter does nothing", func(t *testing.T) {
+		m := newTable(t, nil)
+		m, cmd := m.Update(key(tea.KeyEnter))
+		if cmd != nil || !strings.Contains(m.View(), "enter: show") {
+			t.Errorf("cmd = %v, view = %q", cmd, m.View())
+		}
+	})
+
+	t.Run("q at the table quits", func(t *testing.T) {
+		m := newTable(t, show)
+		if _, cmd := m.Update(runeKey('q')); cmd == nil {
+			t.Error("expected a quit command")
 		}
 	})
 }
