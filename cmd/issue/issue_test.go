@@ -183,15 +183,70 @@ func TestBuildIssueRows(t *testing.T) {
 
 		infra := issueListInfra{client: db, tracker: tk, stderr: io.Discard}
 
-		rows, err := buildFromTracker(t.Context(), infra)
+		rows, err := buildRows(t.Context(), infra, "")
 		if err != nil {
-			t.Fatalf("buildFromTracker: %v", err)
+			t.Fatalf("buildRows: %v", err)
 		}
 		if len(rows) != 2 {
 			t.Fatalf("got %d rows, want 2", len(rows))
 		}
 		if rows[0].Project != "octo/cat" || rows[1].Project != "octo/dog" {
 			t.Errorf("projects = %q,%q want octo/cat,octo/dog", rows[0].Project, rows[1].Project)
+		}
+	})
+}
+
+func TestBuildRows_TrackerAndRepository(t *testing.T) {
+	t.Parallel()
+
+	s := newListClient(t)
+	ctx := t.Context()
+	branchtest.Seed(t, s, branch.Op{Branch: "T-1@feat@first@uuid-t1", Title: "Stale title"}, branch.StatusInProgress)
+	branchtest.Seed(t, s, branch.Op{Branch: "T-1@fix@again@uuid-t1b", Title: "Stale title"}, branch.StatusInProgress)
+	rec, err := issuepkg.Create(ctx, s, issuepkg.NewIssue{Title: "Local bug", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	tk := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "T-1", Subject: "First", Status: "In Progress", Project: "octo/cat"},
+		{ID: "T-3", Subject: "Third", Status: "New", Project: "octo/cat"},
+	}}
+
+	rows, err := buildRows(ctx, issueListInfra{client: s, tracker: tk, stderr: io.Discard}, "")
+	if err != nil {
+		t.Fatalf("buildRows: %v", err)
+	}
+	bySlug := make(map[string][]issuepkg.Row)
+	for _, r := range rows {
+		bySlug[r.IssueSlug] = append(bySlug[r.IssueSlug], r)
+	}
+
+	t.Run("the issue stored in the repository is listed with the tracker's", func(t *testing.T) {
+		got := bySlug[rec.ShortID()]
+		if len(got) != 1 || got[0].Title != "Local bug" || got[0].State != issuepkg.StateOpen {
+			t.Errorf("rows = %+v", got)
+		}
+	})
+	t.Run("every branch of a tracker issue is a row carrying the tracker's title and status", func(t *testing.T) {
+		got := bySlug["T-1"]
+		if len(got) != 2 {
+			t.Fatalf("rows = %+v", got)
+		}
+		for _, r := range got {
+			if r.Branch == nil || r.Title != "First" || r.TrackerStatus == nil || *r.TrackerStatus != "In Progress" || r.Project != "octo/cat" {
+				t.Errorf("row = %+v", r)
+			}
+		}
+	})
+	t.Run("a tracker issue without a branch is appended once", func(t *testing.T) {
+		got := bySlug["T-3"]
+		if len(got) != 1 || got[0].Branch != nil || got[0].Title != "Third" {
+			t.Errorf("rows = %+v", got)
+		}
+	})
+	t.Run("one row per issue and branch, nothing else", func(t *testing.T) {
+		if len(rows) != 4 {
+			t.Errorf("rows = %+v", rows)
 		}
 	})
 }
@@ -269,10 +324,6 @@ func TestRunIssueList(t *testing.T) {
 			t.Errorf("expected ∅ for missing branch, got: %s", buf.String())
 		}
 	})
-}
-
-func (f *fakeIssueTracker) ListProjectIssues(_ context.Context) ([]tracker.Issue, error) {
-	return nil, nil
 }
 
 func (f *fakeIssueTracker) CreateIssue(_ context.Context, _, _ string) (tracker.Issue, error) {

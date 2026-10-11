@@ -204,30 +204,46 @@ func (e *httpError) Error() string {
 	return fmt.Sprintf("%s %s: unexpected status %d", e.Method, e.Path, e.StatusCode)
 }
 
-// ListIssues fetches open issues assigned to the authenticated user across
-// every repository the token can see via GET /repos/issues/search. It walks
-// pages until an empty one comes back (Forgejo may cap `limit` server-side,
-// so a short page is not a reliable end signal) or maxPages is reached, drops
-// pull requests, and applies the optional client-side Projects filter.
+// ListIssues fetches every open issue of each configured repository, whoever
+// it is assigned to. Without projects, it fetches the open issues assigned to
+// the authenticated user across every repository the token can see, via GET
+// /repos/issues/search. Pages are walked by listPages; pull requests are
+// dropped.
 func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
-	issues, err := a.listPages(ctx, "/repos/issues/search", url.Values{"assigned": {"true"}})
-	if err != nil {
-		return nil, fmt.Errorf("forgejo: list issues: %w", err)
+	if len(a.cfg.Projects) == 0 {
+		issues, err := a.listPages(ctx, "/repos/issues/search", url.Values{"assigned": {"true"}})
+		if err != nil {
+			return nil, fmt.Errorf("forgejo: list issues: %w", err)
+		}
+
+		out := make([]tracker.Issue, len(issues))
+		for i := range issues {
+			proj := ""
+			if issues[i].Repository != nil {
+				proj = issues[i].Repository.FullName
+			}
+			out[i] = a.toIssue(&issues[i], proj)
+		}
+
+		return out, nil
 	}
 
 	var out []tracker.Issue
 
-	for i := range issues {
-		proj := ""
-		if issues[i].Repository != nil {
-			proj = issues[i].Repository.FullName
+	for _, id := range a.cfg.IDs() {
+		owner, repo, err := splitRepo(id)
+		if err != nil {
+			return nil, err
 		}
 
-		if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.IDs(), proj) {
-			continue
+		issues, err := a.listPages(ctx, issuesPath(owner, repo), url.Values{})
+		if err != nil {
+			return nil, fmt.Errorf("forgejo: list issues of %s: %w", id, err)
 		}
 
-		out = append(out, a.toIssue(&issues[i], proj))
+		for i := range issues {
+			out = append(out, a.toIssue(&issues[i], owner+"/"+repo))
+		}
 	}
 
 	return out, nil
@@ -294,28 +310,12 @@ func (a *forgejoAdapter) projectIssuesPath() (path, project string, err error) {
 		return "", "", err
 	}
 
-	return fmt.Sprintf("/repos/%s/%s/issues", url.PathEscape(owner), url.PathEscape(repo)), owner + "/" + repo, nil
+	return issuesPath(owner, repo), owner + "/" + repo, nil
 }
 
-// ListProjectIssues fetches every open issue of the configured repository,
-// whoever it is assigned to, the way ListIssues walks pages.
-func (a *forgejoAdapter) ListProjectIssues(ctx context.Context) ([]tracker.Issue, error) {
-	path, project, err := a.projectIssuesPath()
-	if err != nil {
-		return nil, err
-	}
-
-	issues, err := a.listPages(ctx, path, url.Values{})
-	if err != nil {
-		return nil, fmt.Errorf("forgejo: list issues of %s: %w", project, err)
-	}
-
-	out := make([]tracker.Issue, len(issues))
-	for i := range issues {
-		out[i] = a.toIssue(&issues[i], project)
-	}
-
-	return out, nil
+// issuesPath returns "/repos/{owner}/{repo}/issues".
+func issuesPath(owner, repo string) string {
+	return fmt.Sprintf("/repos/%s/%s/issues", url.PathEscape(owner), url.PathEscape(repo))
 }
 
 // CreateIssue creates an issue in the configured repository.
@@ -360,9 +360,14 @@ func (a *forgejoAdapter) ownerRepo() (owner, repo string, err error) {
 		return "", "", fmt.Errorf("forgejo: exactly one project must be configured (got %d)", len(a.cfg.Projects))
 	}
 
-	owner, repo, ok := strings.Cut(a.cfg.Projects[0].ID, "/")
+	return splitRepo(a.cfg.Projects[0].ID)
+}
+
+// splitRepo splits a project ID into its owner and repository.
+func splitRepo(id string) (owner, repo string, err error) {
+	owner, repo, ok := strings.Cut(id, "/")
 	if !ok || owner == "" || repo == "" {
-		return "", "", fmt.Errorf("forgejo: invalid project %q (expected owner/repo)", a.cfg.Projects[0].ID)
+		return "", "", fmt.Errorf("forgejo: invalid project %q (expected owner/repo)", id)
 	}
 
 	return owner, repo, nil

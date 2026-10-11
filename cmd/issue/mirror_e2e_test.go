@@ -212,7 +212,6 @@ func TestMirror_ListReadsTheRepository(t *testing.T) {
 	rig, ft, m := newMirrorRig(t)
 	ctx := t.Context()
 	ft.ProjectIssues = []tracker.Issue{fromTracker("42", "From tracker", "In Progress")}
-	ft.Issues = []tracker.Issue{{TrackerType: "fake", ID: "99", Subject: "Assigned to me"}}
 	if err := runNew(ctx, rig.client, rig.cfg, issuepkg.NewIssue{Title: "Local bug"}, nil, nil); err != nil {
 		t.Fatalf("runNew: %v", err)
 	}
@@ -245,25 +244,45 @@ func TestMirror_ListReadsTheRepository(t *testing.T) {
 			t.Errorf("ID cell = %q", cell)
 		}
 	})
-	t.Run("the assigned-to-me listing is not used", func(t *testing.T) {
-		if _, ok := bySlug["99"]; ok || len(rows) != 2 {
-			t.Errorf("rows = %+v", rows)
+	t.Run("the tracker is listed once, by the reconcile", func(t *testing.T) {
+		if len(rows) != 2 || ft.ListCalls != 1 {
+			t.Errorf("rows = %+v, listings = %d", rows, ft.ListCalls)
 		}
 	})
 }
 
-func TestMirror_ListWithTheMirrorOffIsUnchanged(t *testing.T) {
+func TestMirror_ListWithTheMirrorOffListsTheTrackerWithoutImporting(t *testing.T) {
 	t.Parallel()
 
 	rig, ft, _ := newMirrorRig(t)
+	ctx := t.Context()
 	ft.ProjectIssues = []tracker.Issue{fromTracker("42", "From tracker", "open")}
-	ft.Issues = []tracker.Issue{{TrackerType: "fake", ID: "99", Subject: "Assigned to me", Status: "open"}}
+	if err := runNew(ctx, rig.client, rig.cfg, issuepkg.NewIssue{Title: "Local bug"}, nil, nil); err != nil {
+		t.Fatalf("runNew: %v", err)
+	}
+	local := rig.onlyRecord(t)
 
-	rows, err := buildRows(t.Context(), issueListInfra{tracker: ft, stderr: rig.stderr, client: rig.client}, "")
+	rows, err := buildRows(ctx, issueListInfra{tracker: ft, stderr: rig.stderr, client: rig.client}, "")
+	bySlug := make(map[string]issuepkg.Row, len(rows))
+	for _, r := range rows {
+		bySlug[r.IssueSlug] = r
+	}
 
-	t.Run("only the assigned-to-me listing is shown and nothing is imported", func(t *testing.T) {
-		if err != nil || len(rows) != 1 || rows[0].IssueSlug != "99" || ft.ListProjectCalls != 0 {
-			t.Errorf("rows = %+v, err = %v, project listings = %d", rows, err, ft.ListProjectCalls)
+	t.Run("the tracker's issue and the local issue are both listed", func(t *testing.T) {
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("rows = %+v, err = %v", rows, err)
+		}
+		if row, ok := bySlug["42"]; !ok || row.Title != "From tracker" || row.TrackerStatus == nil || *row.TrackerStatus != "open" {
+			t.Errorf("tracker row = %+v (found %v)", row, ok)
+		}
+		if row, ok := bySlug[local.ShortID()]; !ok || row.Title != "Local bug" {
+			t.Errorf("local row = %+v (found %v)", row, ok)
+		}
+	})
+	t.Run("nothing is imported or exported", func(t *testing.T) {
+		records, _, err := issuepkg.List(ctx, rig.client)
+		if err != nil || len(records) != 1 || records[0].Tracker != nil || len(ft.RecordedCreates) != 0 {
+			t.Errorf("records = %+v, err = %v, creates = %+v", records, err, ft.RecordedCreates)
 		}
 	})
 }
@@ -330,7 +349,7 @@ func TestMirror_ShowByTrackerNumber(t *testing.T) {
 	ctx := t.Context()
 	ft.ProjectIssues = []tracker.Issue{fromTracker("42", "From tracker", "open")}
 	reconcileIssues(ctx, rig.client, m)
-	calls := ft.ListProjectCalls
+	calls := ft.ListCalls
 	rig.stdout.Reset()
 
 	err := runShow(ctx, rig.client, &scriptedRecordPrompter{}, []string{"42"}, false)
@@ -347,8 +366,8 @@ func TestMirror_ShowByTrackerNumber(t *testing.T) {
 		}
 	})
 	t.Run("show does not call the tracker", func(t *testing.T) {
-		if ft.ListProjectCalls != calls {
-			t.Errorf("project listings = %d, want %d", ft.ListProjectCalls, calls)
+		if ft.ListCalls != calls {
+			t.Errorf("project listings = %d, want %d", ft.ListCalls, calls)
 		}
 	})
 }
@@ -382,8 +401,8 @@ func TestMirror_EditReachesTheTrackerAtOnce(t *testing.T) {
 		}
 	})
 	t.Run("the tracker has the new title, with no project listing", func(t *testing.T) {
-		if onTracker.Subject != "B" || ft.ListProjectCalls != 1 {
-			t.Errorf("tracker title = %q, listings = %d", onTracker.Subject, ft.ListProjectCalls)
+		if onTracker.Subject != "B" || ft.ListCalls != 1 {
+			t.Errorf("tracker title = %q, listings = %d", onTracker.Subject, ft.ListCalls)
 		}
 	})
 	t.Run("the record is settled: a reconcile writes nothing", func(t *testing.T) {

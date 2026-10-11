@@ -35,6 +35,9 @@ type MirrorResult struct {
 	Imported, Exported int
 	Pulled, Pushed     int      // state changes: tracker → repo, repo → tracker
 	Warnings           []string // one line per issue that could not be handled
+	// Listed is the tracker's listing the run worked from, for a command
+	// that shows it: the tracker is asked once.
+	Listed []tracker.Issue
 }
 
 type stateMove int
@@ -65,10 +68,11 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 		return res, nil
 	}
 
-	listed, err := m.Tracker.ListProjectIssues(ctx)
+	listed, err := m.Tracker.ListIssues(ctx)
 	if err != nil {
 		return res, fmt.Errorf("list tracker issues: %w", err)
 	}
+	res.Listed = listed
 
 	// The fold warnings of List are not reported here: the command prints
 	// them from its own read, and would otherwise print them twice.

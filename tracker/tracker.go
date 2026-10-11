@@ -71,7 +71,10 @@ var ErrIssueNotFound = errors.New("tracker: issue not found")
 
 // Tracker is the contract every adapter must satisfy.
 type Tracker interface {
-	// ListIssues retrieves the issues from the tracker
+	// ListIssues retrieves the open issues: every open issue of each
+	// configured project, whoever it is assigned to, or, without a project,
+	// the open issues assigned to the authenticated user across the tracker.
+	// It is the one listing of the commands and of the issue mirror.
 	ListIssues(ctx context.Context) ([]Issue, error)
 	// ListStatuses returns the available status names for the tracker.
 	ListStatuses(ctx context.Context) ([]string, error)
@@ -96,9 +99,6 @@ type Tracker interface {
 	ListLabels(ctx context.Context) ([]string, error)
 	// ListComments returns the issue's comments, oldest first.
 	ListComments(ctx context.Context, issueID string) ([]Comment, error)
-	// ListProjectIssues retrieves every open issue of the single configured
-	// project, whoever it is assigned to. It is the issue mirror's listing.
-	ListProjectIssues(ctx context.Context) ([]Issue, error)
 	// CreateIssue creates an issue in the single configured project and
 	// returns it with the ID and status the tracker gave it.
 	CreateIssue(ctx context.Context, title, description string) (Issue, error)

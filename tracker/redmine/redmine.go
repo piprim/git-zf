@@ -82,19 +82,18 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 	return &redmineAdapter{cfg: cfg, http: &http.Client{}}, nil
 }
 
-// ListIssues fetches open issues. With cfg.Projects set, it asks each project
-// (a slug or a numeric ID) for its open issues, whoever they are assigned to.
-// Without projects, it fetches the open issues assigned to the authenticated
-// user across the whole tracker.
+// ListIssues fetches the open issues of each configured project (a slug or a
+// numeric ID), whoever they are assigned to. Without projects, it fetches the
+// open issues assigned to the authenticated user across the whole tracker.
 func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
 	if len(a.cfg.Projects) == 0 {
-		return a.fetchIssues(ctx, "/issues.json?assigned_to_id=me&status_id=open&limit=100", "")
+		return a.listPages(ctx, "/issues.json?assigned_to_id=me&status_id=open", "")
 	}
 
 	var out []tracker.Issue
 
 	for _, p := range a.cfg.IDs() {
-		issues, err := a.fetchIssues(ctx, "/projects/"+url.PathEscape(p)+"/issues.json?status_id=open&limit=100", p)
+		issues, err := a.listPages(ctx, "/projects/"+url.PathEscape(p)+"/issues.json?status_id=open", p)
 		if err != nil {
 			return nil, fmt.Errorf("project %q: %w", p, err)
 		}
@@ -105,17 +104,26 @@ func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 	return out, nil
 }
 
-// fetchIssues GETs one page of issues from path. Every issue is reported under
-// project; when project is empty, the name comes from the issue itself.
-//
-// ponytail: one page of 100; walk offset/total_count if a listing outgrows it.
-func (a *redmineAdapter) fetchIssues(ctx context.Context, path, project string) ([]tracker.Issue, error) {
-	var payload issuesResponse
-	if _, err := a.getJSON(ctx, path, &payload); err != nil {
-		return nil, fmt.Errorf("fetch redmine issues: %w", err)
+// listPages GETs the issues of path, walking offset until total_count. Every
+// issue is reported under project; when project is empty, the name comes
+// from the issue itself.
+func (a *redmineAdapter) listPages(ctx context.Context, path, project string) ([]tracker.Issue, error) {
+	var out []tracker.Issue
+
+	for offset := 0; ; offset += projectPageSize {
+		var payload issuesResponse
+		if _, err := a.getJSON(ctx, fmt.Sprintf("%s&limit=%d&offset=%d", path, projectPageSize, offset), &payload); err != nil {
+			return nil, fmt.Errorf("fetch redmine issues: %w", err)
+		}
+
+		out = append(out, toIssues(payload.Issues, project)...)
+
+		if len(payload.Issues) == 0 || offset+len(payload.Issues) >= payload.TotalCount {
+			break
+		}
 	}
 
-	return toIssues(payload.Issues, project), nil
+	return out, nil
 }
 
 // toIssues converts Redmine issues. Every issue is reported under project;
@@ -266,35 +274,6 @@ func (a *redmineAdapter) project() (string, error) {
 	}
 
 	return a.cfg.Projects[0].ID, nil
-}
-
-// ListProjectIssues fetches every open issue of the configured project,
-// whoever it is assigned to, walking offset until total_count.
-func (a *redmineAdapter) ListProjectIssues(ctx context.Context) ([]tracker.Issue, error) {
-	p, err := a.project()
-	if err != nil {
-		return nil, err
-	}
-
-	var out []tracker.Issue
-
-	for offset := 0; ; offset += projectPageSize {
-		path := fmt.Sprintf("/projects/%s/issues.json?status_id=open&limit=%d&offset=%d",
-			url.PathEscape(p), projectPageSize, offset)
-
-		var payload issuesResponse
-		if _, err := a.getJSON(ctx, path, &payload); err != nil {
-			return nil, fmt.Errorf("redmine: list issues of %q: %w", p, err)
-		}
-
-		out = append(out, toIssues(payload.Issues, p)...)
-
-		if len(payload.Issues) == 0 || offset+len(payload.Issues) >= payload.TotalCount {
-			break
-		}
-	}
-
-	return out, nil
 }
 
 // CreateIssue creates an issue in the configured project via POST /issues.json.

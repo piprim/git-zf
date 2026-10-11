@@ -380,23 +380,23 @@ func TestListIssues(t *testing.T) {
 		}
 	})
 
-	t.Run("filters issues to the configured projects", func(t *testing.T) {
+	t.Run("lists every open issue of the configured repository", func(t *testing.T) {
 		t.Parallel()
 
 		mux := http.NewServeMux()
-		mux.HandleFunc("GET /api/v1/repos/issues/search", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("GET /api/v1/repos/issues/search", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "the assigned listing must not be used", http.StatusBadRequest)
+		})
+		mux.HandleFunc("GET /api/v1/repos/a/b/issues", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 
-			if r.URL.Query().Get("page") != "1" {
+			if r.URL.Query().Get("page") != "1" || r.URL.Query().Get("state") != "open" {
 				fmt.Fprint(w, `[]`)
 
 				return
 			}
 
-			fmt.Fprint(w, `[
-				{"number": 1, "title": "keep", "state": "open", "repository": {"full_name": "a/b"}},
-				{"number": 2, "title": "drop", "state": "open", "repository": {"full_name": "c/d"}}
-			]`)
+			fmt.Fprint(w, `[{"number": 1, "title": "keep", "state": "open"}]`)
 		})
 
 		srv := httptest.NewServer(mux)
@@ -409,12 +409,8 @@ func TestListIssues(t *testing.T) {
 			t.Fatalf("ListIssues: %v", err)
 		}
 
-		if len(issues) != 1 {
-			t.Fatalf("got %d issues, want 1", len(issues))
-		}
-
-		if issues[0].ID != "1" || issues[0].Project != "a/b" {
-			t.Errorf("issue = %+v, want id=1 project=a/b", issues[0])
+		if len(issues) != 1 || issues[0].ID != "1" || issues[0].Project != "a/b" {
+			t.Errorf("issues = %+v, want id=1 project=a/b", issues)
 		}
 	})
 
@@ -834,7 +830,7 @@ func newMirrorAdapter(t *testing.T, handler http.HandlerFunc) *forgejoAdapter {
 	return a
 }
 
-func TestListProjectIssues(t *testing.T) {
+func TestListIssues_Project(t *testing.T) {
 	t.Parallel()
 
 	a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
@@ -858,11 +854,11 @@ func TestListProjectIssues(t *testing.T) {
 		}
 	})
 
-	got, err := a.ListProjectIssues(t.Context())
+	got, err := a.ListIssues(t.Context())
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
-			t.Fatalf("ListProjectIssues: %v", err)
+			t.Fatalf("ListIssues: %v", err)
 		}
 	})
 	t.Run("pull requests are dropped and pages are walked until an empty one", func(t *testing.T) {
@@ -925,8 +921,8 @@ func TestMirrorCalls_ServerError(t *testing.T) {
 		http.Error(w, "down", http.StatusInternalServerError)
 	})
 
-	t.Run("ListProjectIssues reports the status", func(t *testing.T) {
-		if _, err := a.ListProjectIssues(t.Context()); err == nil || !strings.Contains(err.Error(), "500") {
+	t.Run("ListIssues reports the status", func(t *testing.T) {
+		if _, err := a.ListIssues(t.Context()); err == nil || !strings.Contains(err.Error(), "500") {
 			t.Errorf("err = %v", err)
 		}
 	})
@@ -1188,7 +1184,7 @@ func TestListComments(t *testing.T) {
 	})
 }
 
-func TestListProjectIssues_Content(t *testing.T) {
+func TestListIssues_ProjectContent(t *testing.T) {
 	t.Parallel()
 
 	t.Run("the listing carries labels, updated time and the open state", func(t *testing.T) {
@@ -1203,9 +1199,9 @@ func TestListProjectIssues_Content(t *testing.T) {
 			fmt.Fprint(w, `[`+strings.Replace(forgejoIssue42, `"closed"`, `"open"`, 1)+`]`)
 		})
 
-		got, err := a.ListProjectIssues(t.Context())
+		got, err := a.ListIssues(t.Context())
 		if err != nil || len(got) != 1 || got[0].Closed || !slices.Equal(got[0].Labels, []string{"bug", "ui"}) || got[0].UpdatedAt.IsZero() {
-			t.Errorf("ListProjectIssues = %+v, %v", got, err)
+			t.Errorf("ListIssues = %+v, %v", got, err)
 		}
 	})
 }

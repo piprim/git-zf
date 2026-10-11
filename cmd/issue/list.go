@@ -194,22 +194,59 @@ func buildRows(ctx context.Context, infra issueListInfra, status string) ([]issu
 	return slices.DeleteFunc(rows, func(r issuepkg.Row) bool { return !r.MatchesStatus(status) }), nil
 }
 
+// buildAllRows lists the tracked branches, the tracker's open issues and the
+// issues stored in the repository, merged into one row per issue, the same
+// way with the mirror on or off. The tracker is asked once: with the mirror
+// on, the reconcile's listing is the one shown.
 func buildAllRows(ctx context.Context, infra issueListInfra) ([]issuepkg.Row, error) {
-	if infra.tracker != nil && infra.mirror == nil {
-		rows, err := buildFromTracker(ctx, infra)
-		if err == nil {
-			return rows, nil
-		}
-
-		fmt.Fprintf(infra.stderr, "warning: tracker unavailable, falling back to the repository: %v\n", err)
-	}
-
 	rows, err := buildFromBranches(ctx, infra.client)
 	if err != nil {
-		return rows, err
+		return nil, err
 	}
 
-	return mergeRepoIssues(ctx, infra, rows)
+	fetchIssues(ctx, infra.client)
+	issues := reconcileIssues(ctx, infra.client, infra.mirror).Listed
+	if infra.mirror == nil && infra.tracker != nil {
+		if issues, err = infra.tracker.ListIssues(ctx); err != nil {
+			fmt.Fprintf(infra.stderr, "warning: tracker unavailable, listing the repository alone: %v\n", err)
+		}
+	}
+
+	return mergeRepoIssues(ctx, infra, mergeTrackerIssues(issues, rows))
+}
+
+// mergeTrackerIssues adds the tracker's open issues to the branch rows: a row
+// whose branch names a tracker issue gets its title, project, status and
+// creation date, and every other issue is appended.
+func mergeTrackerIssues(issues []tracker.Issue, rows []issuepkg.Row) []issuepkg.Row {
+	byID := make(map[string]*tracker.Issue, len(issues))
+	for i := range issues {
+		byID[issues[i].ID] = &issues[i]
+	}
+
+	seen := make(map[string]bool, len(rows))
+	for i := range rows {
+		iss, ok := byID[rows[i].IssueSlug]
+		if !ok {
+			continue
+		}
+		seen[iss.ID] = true
+		status := iss.Status
+		rows[i].Title, rows[i].Project, rows[i].TrackerStatus, rows[i].CreatedAt = iss.Subject, iss.Project, &status, iss.CreatedAt
+	}
+
+	for i := range issues {
+		iss := &issues[i]
+		if seen[iss.ID] {
+			continue
+		}
+		status := iss.Status
+		rows = append(rows, issuepkg.Row{
+			IssueSlug: iss.ID, Title: iss.Subject, Project: iss.Project, TrackerStatus: &status, CreatedAt: iss.CreatedAt,
+		})
+	}
+
+	return rows
 }
 
 // mergeRepoIssues enriches the branch rows with the issues stored in the
@@ -217,9 +254,6 @@ func buildAllRows(ctx context.Context, infra issueListInfra) ([]issuepkg.Row, er
 // every record without a branch row is appended, so the backlog shows up
 // before anyone starts a branch.
 func mergeRepoIssues(ctx context.Context, infra issueListInfra, rows []issuepkg.Row) ([]issuepkg.Row, error) {
-	fetchIssues(ctx, infra.client)
-	reconcileIssues(ctx, infra.client, infra.mirror)
-
 	records, warnings, err := issuepkg.List(ctx, infra.client)
 	if err != nil {
 		return nil, fmt.Errorf("list repo issues: %w", err)
@@ -239,7 +273,11 @@ func mergeRepoIssues(ctx context.Context, infra issueListInfra, rows []issuepkg.
 	out := rows
 	started := make(map[string]bool, len(out))
 	for i := range out {
-		rec, ok := byID[out[i].Branch.IssueID]
+		var rec *issuepkg.Record
+		ok := false
+		if out[i].Branch != nil {
+			rec, ok = byID[out[i].Branch.IssueID]
+		}
 		if !ok {
 			rec, ok = byDisplayID[out[i].IssueSlug]
 		}
@@ -285,44 +323,6 @@ func trackerNumber(rec *issuepkg.Record) string {
 	}
 
 	return rec.Tracker.ID
-}
-
-func buildFromTracker(ctx context.Context, infra issueListInfra) ([]issuepkg.Row, error) {
-	issues, err := infra.tracker.ListIssues(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list tracker issues: %w", err)
-	}
-
-	branches, err := branch.ListRows(ctx, infra.client, branch.StatusAll)
-	if err != nil {
-		return nil, fmt.Errorf("list branches: %w", err)
-	}
-
-	// Rows come newest first: an issue with several branches shows its latest.
-	branchMap := make(map[string]branch.Row, len(branches))
-	for i := range branches {
-		if _, seen := branchMap[branches[i].IssueSlug]; !seen {
-			branchMap[branches[i].IssueSlug] = branches[i]
-		}
-	}
-
-	rows := make([]issuepkg.Row, len(issues))
-	for i, iss := range issues {
-		status := iss.Status
-		row := issuepkg.Row{
-			IssueSlug:     iss.ID,
-			Title:         iss.Subject,
-			Project:       iss.Project,
-			TrackerStatus: &status,
-			CreatedAt:     iss.CreatedAt,
-		}
-		if b, ok := branchMap[iss.ID]; ok {
-			row.Branch = &b
-		}
-		rows[i] = row
-	}
-
-	return rows, nil
 }
 
 func buildFromBranches(ctx context.Context, c *git.Client) ([]issuepkg.Row, error) {

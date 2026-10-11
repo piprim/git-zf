@@ -38,7 +38,7 @@ func newMirrorAdapter(t *testing.T, handler http.HandlerFunc) *redmineAdapter {
 	return ra
 }
 
-func TestListProjectIssues(t *testing.T) {
+func TestListIssues_Project(t *testing.T) {
 	t.Parallel()
 
 	// 101 open issues: one more than a page.
@@ -68,11 +68,11 @@ func TestListProjectIssues(t *testing.T) {
 		fmt.Fprint(w, page(1, 101))
 	})
 
-	got, err := a.ListProjectIssues(t.Context())
+	got, err := a.ListIssues(t.Context())
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
-			t.Fatalf("ListProjectIssues: %v", err)
+			t.Fatalf("ListIssues: %v", err)
 		}
 	})
 	t.Run("every page is read", func(t *testing.T) {
@@ -164,9 +164,6 @@ func TestCreateIssue_Errors(t *testing.T) {
 			}
 			if _, err := a.CreateIssue(t.Context(), "Bug", ""); err == nil || !strings.Contains(err.Error(), "exactly one project") {
 				t.Errorf("CreateIssue err = %v", err)
-			}
-			if _, err := a.ListProjectIssues(t.Context()); err == nil || !strings.Contains(err.Error(), "exactly one project") {
-				t.Errorf("ListProjectIssues err = %v", err)
 			}
 		})
 	}
@@ -365,9 +362,9 @@ func TestRedmineContent(t *testing.T) {
 			fmt.Fprint(w, `{"issues":[{"id":42,"subject":"T","status":{"id":1,"name":"New","is_closed":false},"created_on":"2026-09-01T08:00:00Z","updated_on":"2026-09-02T09:00:00Z"}],"total_count":1}`)
 		})
 
-		got, err := a.ListProjectIssues(t.Context())
+		got, err := a.ListIssues(t.Context())
 		if err != nil || len(got) != 1 || got[0].Closed || !slices.Equal(got[0].Labels, []string{"New"}) || got[0].UpdatedAt.IsZero() {
-			t.Errorf("ListProjectIssues = %+v, %v", got, err)
+			t.Errorf("ListIssues = %+v, %v", got, err)
 		}
 	})
 }

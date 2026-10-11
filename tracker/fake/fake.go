@@ -27,7 +27,6 @@ func init() {
 // after Close() returns. Construct via New() to satisfy the registry signature.
 type Tracker struct {
 	mu               sync.Mutex
-	Issues           []tracker.Issue
 	Statuses         []string
 	RecordedUpdates  []Update
 	RecordedComments []Comment
@@ -40,17 +39,17 @@ type Tracker struct {
 	// Errors[id] != nil → IsIssueClosed returns (false, Errors[id]) — for transport-error scenarios.
 	Errors map[string]error
 
-	// ProjectIssues is what ListProjectIssues returns: the project's open
-	// issues. CreateIssue, SetIssueOpen, CloseIssue and ReopenIssue keep it
-	// and Closed in step, so the fake behaves like one tracker over time.
+	// ProjectIssues is what ListIssues returns: the project's open issues.
+	// CreateIssue, SetIssueOpen, CloseIssue and ReopenIssue keep it and
+	// Closed in step, so the fake behaves like one tracker over time.
 	ProjectIssues []tracker.Issue
-	// ListErr and CreateErr, when non-nil, are returned by ListProjectIssues
-	// and CreateIssue.
+	// ListErr and CreateErr, when non-nil, are returned by ListIssues and
+	// CreateIssue.
 	ListErr, CreateErr error
-	// ListProjectCalls counts the ListProjectIssues calls.
-	ListProjectCalls int
-	RecordedCreates  []Create
-	RecordedOpens    []Open
+	// ListCalls counts the ListIssues calls.
+	ListCalls       int
+	RecordedCreates []Create
+	RecordedOpens   []Open
 	// ClosingStatuses are the status names that close an issue when
 	// UpdateIssueStatus applies them. Any other name becomes the issue's
 	// listed status.
@@ -111,17 +110,6 @@ func New(_ config.IssueTrackerConfig) (tracker.Tracker, error) {
 	}, nil
 }
 
-// ListIssues returns a snapshot of the configured issues.
-func (t *Tracker) ListIssues(_ context.Context) ([]tracker.Issue, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	out := make([]tracker.Issue, len(t.Issues))
-	copy(out, t.Issues)
-
-	return out, nil
-}
-
 // ListStatuses returns a snapshot of the configured status names.
 func (t *Tracker) ListStatuses(_ context.Context) ([]string, error) {
 	t.mu.Lock()
@@ -179,12 +167,12 @@ type Open struct {
 	Open    bool
 }
 
-// ListProjectIssues returns a snapshot of the open issues.
-func (t *Tracker) ListProjectIssues(_ context.Context) ([]tracker.Issue, error) {
+// ListIssues returns a snapshot of the project's open issues.
+func (t *Tracker) ListIssues(_ context.Context) ([]tracker.Issue, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.ListProjectCalls++
+	t.ListCalls++
 	if t.ListErr != nil {
 		return nil, t.ListErr
 	}

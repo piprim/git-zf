@@ -1150,14 +1150,14 @@ func TestSyncOne(t *testing.T) {
 
 		c, ft, m, rec := importOne(t)
 		ctx := t.Context()
-		listings := ft.ListProjectCalls
+		listings := ft.ListCalls
 		if err := Append(ctx, c, rec.ID, &Op{Type: OpSetTitle, Value: "B"}); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
 		res, err := m.SyncOne(ctx, c, rec.ID)
 		onTracker, _ := ft.GetIssue(ctx, "42")
-		if err != nil || res.Pushed != 1 || onTracker.Subject != "B" || ft.ListProjectCalls != listings {
-			t.Errorf("res = %+v, err = %v, tracker title = %q, listings %d → %d", res, err, onTracker.Subject, listings, ft.ListProjectCalls)
+		if err != nil || res.Pushed != 1 || onTracker.Subject != "B" || ft.ListCalls != listings {
+			t.Errorf("res = %+v, err = %v, tracker title = %q, listings %d → %d", res, err, onTracker.Subject, listings, ft.ListCalls)
 		}
 	})
 
@@ -1400,5 +1400,18 @@ func TestReconcile_RespelledPushSettles(t *testing.T) {
 				t.Errorf("ops %d → %d, edits = %+v", before, opCount(t, c, rec.ID), ft.RecordedEdits)
 			}
 		})
+	})
+}
+
+func TestReconcile_ResultCarriesTheListing(t *testing.T) {
+	t.Parallel()
+
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "From tracker")}}
+	res := mustReconcile(t, newTestMirror(ft), newRepo(t, "alice", ""))
+
+	t.Run("the listing the run worked from is returned", func(t *testing.T) {
+		if len(res.Listed) != 1 || res.Listed[0].ID != "42" || res.Listed[0].Subject != "From tracker" {
+			t.Errorf("res.Listed = %+v", res.Listed)
+		}
 	})
 }

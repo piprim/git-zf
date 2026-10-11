@@ -177,7 +177,7 @@ func TestRunIssueStart_TrackerErrorFallbackCreatesRepoIssue(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	rig.tracker.Issues = nil // empty list ⇒ NotifyTrackerError ⇒ manual path
+	rig.tracker.ProjectIssues = nil // empty list ⇒ NotifyTrackerError ⇒ manual path
 
 	prompter := &scriptedStartPrompter{
 		UseTracker:    true,
@@ -502,7 +502,7 @@ func TestRunIssueStart_ImportedRecordStartsAsTrackerIssue(t *testing.T) {
 
 	rig := newStartRig(t)
 	ctx := t.Context()
-	rig.tracker.Issues = nil // empty list ⇒ NotifyTrackerError ⇒ repo picker
+	rig.tracker.ProjectIssues = nil // empty list ⇒ NotifyTrackerError ⇒ repo picker
 
 	source := &fake.Tracker{ProjectIssues: []tracker.Issue{{
 		TrackerType: "fake", ID: "42", Subject: "From tracker", Status: "open",

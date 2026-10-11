@@ -154,16 +154,21 @@ func TestListIssues(t *testing.T) {
 		}
 	})
 
-	t.Run("filters issues to the configured project", func(t *testing.T) {
+	t.Run("lists every open issue of the configured repository", func(t *testing.T) {
 		t.Parallel()
 
 		mux := http.NewServeMux()
 		mux.HandleFunc("/issues", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "the assigned listing must not be used", http.StatusBadRequest)
+		})
+		mux.HandleFunc("/repos/a/b/issues", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("state") != "open" {
+				http.Error(w, "unexpected "+r.URL.String(), http.StatusBadRequest)
+
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `[
-				{"number": 1, "title": "keep", "state": "open", "repository": {"full_name": "a/b"}},
-				{"number": 2, "title": "drop", "state": "open", "repository": {"full_name": "c/d"}}
-			]`)
+			fmt.Fprint(w, `[{"number": 1, "title": "keep", "state": "open"}]`)
 		})
 
 		srv := httptest.NewServer(mux)
@@ -175,11 +180,8 @@ func TestListIssues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ListIssues: %v", err)
 		}
-		if len(issues) != 1 {
-			t.Fatalf("got %d issues, want 1", len(issues))
-		}
-		if issues[0].ID != "1" || issues[0].Project != "a/b" {
-			t.Errorf("issue = %+v, want id=1 project=a/b", issues[0])
+		if len(issues) != 1 || issues[0].ID != "1" || issues[0].Project != "a/b" {
+			t.Errorf("issues = %+v, want id=1 project=a/b", issues)
 		}
 	})
 }
@@ -512,7 +514,7 @@ func withProjects(ids ...string) []config.TrackerProject {
 	return out
 }
 
-func TestListProjectIssues(t *testing.T) {
+func TestListIssues_Project(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
@@ -533,11 +535,11 @@ func TestListProjectIssues(t *testing.T) {
 		]`)
 	})
 
-	got, err := a.ListProjectIssues(t.Context())
+	got, err := a.ListIssues(t.Context())
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
-			t.Fatalf("ListProjectIssues: %v", err)
+			t.Fatalf("ListIssues: %v", err)
 		}
 	})
 	t.Run("pull requests are dropped and every page is read", func(t *testing.T) {
@@ -792,7 +794,7 @@ func TestListComments(t *testing.T) {
 	})
 }
 
-func TestListProjectIssues_Content(t *testing.T) {
+func TestListIssues_ProjectContent(t *testing.T) {
 	t.Parallel()
 
 	t.Run("the listing carries labels, updated time and the open state", func(t *testing.T) {
@@ -802,9 +804,9 @@ func TestListProjectIssues_Content(t *testing.T) {
 			fmt.Fprint(w, `[`+strings.Replace(ghIssue42, `"closed"`, `"open"`, 1)+`]`)
 		})
 
-		got, err := a.ListProjectIssues(t.Context())
+		got, err := a.ListIssues(t.Context())
 		if err != nil || len(got) != 1 || got[0].Closed || !slices.Equal(got[0].Labels, []string{"bug", "ui"}) || got[0].UpdatedAt.IsZero() {
-			t.Errorf("ListProjectIssues = %+v, %v", got, err)
+			t.Errorf("ListIssues = %+v, %v", got, err)
 		}
 	})
 }

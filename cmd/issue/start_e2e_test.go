@@ -179,7 +179,7 @@ func TestRunIssueStart_BranchHappyPath_WithTracker(t *testing.T) {
 	rig := newStartRig(t)
 	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: ""}
 
-	rig.tracker.Issues = []tracker.Issue{
+	rig.tracker.ProjectIssues = []tracker.Issue{
 		{ID: "ABC-3", Subject: "Implement OAuth", TrackerType: "fake"},
 	}
 
@@ -482,7 +482,7 @@ func TestRunIssueStart_NoTrackerStatusUpdate(t *testing.T) {
 	rig := newStartRig(t)
 	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: ""}
 
-	rig.tracker.Issues = []tracker.Issue{
+	rig.tracker.ProjectIssues = []tracker.Issue{
 		{ID: "ABC-9", Subject: "Add lints", TrackerType: "fake"},
 	}
 

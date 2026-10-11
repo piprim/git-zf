@@ -46,10 +46,35 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 	return &githubAdapter{client: c, cfg: cfg}, nil
 }
 
-// ListIssues fetches open issues assigned to the authenticated user across all
-// accessible repositories, paginates through every page, drops pull requests,
-// and applies the optional client-side Projects filter.
+// ListIssues fetches every open issue of each configured repository, whoever
+// it is assigned to. Without projects, it fetches the open issues assigned to
+// the authenticated user across all accessible repositories. It paginates
+// through every page and drops pull requests.
 func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
+	if len(a.cfg.Projects) == 0 {
+		return a.listAssigned(ctx)
+	}
+
+	var out []tracker.Issue
+
+	for _, id := range a.cfg.IDs() {
+		owner, repo, err := splitRepo(id)
+		if err != nil {
+			return nil, err
+		}
+
+		issues, err := a.listRepo(ctx, owner, repo)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, issues...)
+	}
+
+	return out, nil
+}
+
+func (a *githubAdapter) listAssigned(ctx context.Context) ([]tracker.Issue, error) {
 	opt := &gogithub.IssueListOptions{
 		Filter:      "assigned",
 		State:       statusOpen,
@@ -65,16 +90,39 @@ func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error)
 		}
 
 		for _, iss := range page {
-			if iss.IsPullRequest() {
-				continue
+			if !iss.IsPullRequest() {
+				out = append(out, toIssue(iss, iss.GetRepository().GetFullName()))
 			}
+		}
 
-			proj := iss.GetRepository().GetFullName()
-			if len(a.cfg.Projects) > 0 && !slices.Contains(a.cfg.IDs(), proj) {
-				continue
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opt.ListOptions.Page = resp.NextPage
+	}
+
+	return out, nil
+}
+
+func (a *githubAdapter) listRepo(ctx context.Context, owner, repo string) ([]tracker.Issue, error) {
+	opt := &gogithub.IssueListByRepoOptions{
+		State:       statusOpen,
+		ListOptions: gogithub.ListOptions{PerPage: issuesPerPage},
+	}
+
+	var out []tracker.Issue
+
+	for {
+		page, resp, err := a.client.Issues.ListByRepo(ctx, owner, repo, opt)
+		if err != nil {
+			return nil, fmt.Errorf("github: list issues of %s/%s: %w", owner, repo, err)
+		}
+
+		for _, iss := range page {
+			if !iss.IsPullRequest() {
+				out = append(out, toIssue(iss, owner+"/"+repo))
 			}
-
-			out = append(out, toIssue(iss, proj))
 		}
 
 		if resp.NextPage == 0 {
@@ -106,43 +154,6 @@ func toIssue(iss *gogithub.Issue, project string) tracker.Issue {
 		UpdatedAt:   iss.GetUpdatedAt().Time,
 		Closed:      iss.GetState() == statusClosed,
 	}.Clean()
-}
-
-// ListProjectIssues fetches every open issue of the configured repository,
-// whoever it is assigned to, page after page, and drops pull requests.
-func (a *githubAdapter) ListProjectIssues(ctx context.Context) ([]tracker.Issue, error) {
-	owner, repo, err := a.ownerRepo()
-	if err != nil {
-		return nil, err
-	}
-
-	opt := &gogithub.IssueListByRepoOptions{
-		State:       statusOpen,
-		ListOptions: gogithub.ListOptions{PerPage: issuesPerPage},
-	}
-
-	var out []tracker.Issue
-
-	for {
-		page, resp, err := a.client.Issues.ListByRepo(ctx, owner, repo, opt)
-		if err != nil {
-			return nil, fmt.Errorf("github: list issues of %s/%s: %w", owner, repo, err)
-		}
-
-		for _, iss := range page {
-			if !iss.IsPullRequest() {
-				out = append(out, toIssue(iss, owner+"/"+repo))
-			}
-		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-
-		opt.ListOptions.Page = resp.NextPage
-	}
-
-	return out, nil
 }
 
 // CreateIssue creates an issue in the configured repository.
@@ -183,9 +194,14 @@ func (a *githubAdapter) ownerRepo() (owner, repo string, err error) {
 		return "", "", errors.New("github: exactly one project must be configured (got " + strconv.Itoa(len(a.cfg.Projects)) + ")")
 	}
 
-	owner, repo, ok := strings.Cut(a.cfg.Projects[0].ID, "/")
+	return splitRepo(a.cfg.Projects[0].ID)
+}
+
+// splitRepo splits a project ID into its owner and repository.
+func splitRepo(id string) (owner, repo string, err error) {
+	owner, repo, ok := strings.Cut(id, "/")
 	if !ok || owner == "" || repo == "" {
-		return "", "", fmt.Errorf("github: invalid project %q (expected owner/repo)", a.cfg.Projects[0].ID)
+		return "", "", fmt.Errorf("github: invalid project %q (expected owner/repo)", id)
 	}
 
 	return owner, repo, nil

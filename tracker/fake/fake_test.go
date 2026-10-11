@@ -36,9 +36,9 @@ func TestFake_Mirror(t *testing.T) {
 		if len(ft.RecordedCreates) != 1 || ft.RecordedCreates[0] != (Create{Title: "Bug", Description: "Steps"}) {
 			t.Errorf("RecordedCreates = %+v", ft.RecordedCreates)
 		}
-		listed, _ := ft.ListProjectIssues(ctx)
-		if len(listed) != 1 || listed[0].ID != "1" || ft.ListProjectCalls != 1 {
-			t.Errorf("listed = %+v, calls = %d", listed, ft.ListProjectCalls)
+		listed, _ := ft.ListIssues(ctx)
+		if len(listed) != 1 || listed[0].ID != "1" || ft.ListCalls != 1 {
+			t.Errorf("listed = %+v, calls = %d", listed, ft.ListCalls)
 		}
 	})
 
@@ -49,14 +49,14 @@ func TestFake_Mirror(t *testing.T) {
 		if err := ft.SetIssueOpen(ctx, "42", false); err != nil {
 			t.Fatalf("SetIssueOpen: %v", err)
 		}
-		listed, _ := ft.ListProjectIssues(ctx)
+		listed, _ := ft.ListIssues(ctx)
 		closed, _ := ft.IsIssueClosed(ctx, "42")
 		if len(listed) != 0 || !closed {
 			t.Errorf("after close: listed = %+v, closed = %v", listed, closed)
 		}
 
 		ft.ReopenIssue("42")
-		listed, _ = ft.ListProjectIssues(ctx)
+		listed, _ = ft.ListIssues(ctx)
 		closed, _ = ft.IsIssueClosed(ctx, "42")
 		if len(listed) != 1 || closed {
 			t.Errorf("after reopen: listed = %+v, closed = %v", listed, closed)
@@ -84,7 +84,7 @@ func TestFake_Mirror(t *testing.T) {
 		_ = ft.UpdateIssueStatus(ctx, "42", "Closed")
 		_ = ft.UpdateIssueStatus(ctx, "43", "In Progress")
 
-		listed, _ := ft.ListProjectIssues(ctx)
+		listed, _ := ft.ListIssues(ctx)
 		if len(listed) != 1 || listed[0].ID != "43" || listed[0].Status != "In Progress" {
 			t.Errorf("listed = %+v", listed)
 		}
@@ -95,8 +95,8 @@ func TestFake_Mirror(t *testing.T) {
 
 		boom := errors.New("boom")
 		ft := &Tracker{ListErr: boom, CreateErr: boom}
-		if _, err := ft.ListProjectIssues(ctx); !errors.Is(err, boom) {
-			t.Errorf("ListProjectIssues err = %v", err)
+		if _, err := ft.ListIssues(ctx); !errors.Is(err, boom) {
+			t.Errorf("ListIssues err = %v", err)
 		}
 		if _, err := ft.CreateIssue(ctx, "x", ""); !errors.Is(err, boom) {
 			t.Errorf("CreateIssue err = %v", err)
@@ -188,7 +188,7 @@ func TestFake_Content(t *testing.T) {
 
 		ft := &Tracker{StatusIsLabel: true, Statuses: []string{"New", "Closed"}, ClosingStatuses: []string{"Closed"},
 			ProjectIssues: []tracker.Issue{{ID: "1", Status: "New"}}}
-		listed, _ := ft.ListProjectIssues(ctx)
+		listed, _ := ft.ListIssues(ctx)
 		names, _ := ft.ListLabels(ctx)
 		if !tracker.SingleLabel(ft) || !slices.Equal(listed[0].Labels, []string{"New"}) || !slices.Equal(names, []string{"New", "Closed"}) {
 			t.Errorf("single = %v, labels = %q, names = %q", tracker.SingleLabel(ft), listed[0].Labels, names)
