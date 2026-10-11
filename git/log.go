@@ -5,26 +5,15 @@ import (
 	"strings"
 )
 
-// logGraphArgs are the `git log` arguments of the commit graph of `git zf
-// log`: every ref but git-zf's own, one line per commit.
-var logGraphArgs = []string{
-	"log", "--exclude=*zf/*", "--graph", "--oneline", "--all", "--decorate",
-	"--pretty=tformat:%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen%cd (%cr) %C(bold blue)<%an by %cn>%Creset",
-	"--abbrev-commit", "--date=iso", "--date-order",
+// PrintLog runs `git <args>`, a log command, writing to the client's output,
+// colored when it is a terminal.
+func (c *Client) PrintLog(ctx context.Context, args ...string) error {
+	return c.runInteractive(ctx, c.root, append(args, "--color=auto")...)
 }
 
-// PrintLog writes the commit graph to the client's output, colored when it is
-// a terminal. extra are further `git log` arguments, such as a revision range
-// or -n.
-func (c *Client) PrintLog(ctx context.Context, extra ...string) error {
-	return c.runInteractive(ctx, c.root, append(append(logGraphArgs, extra...), "--color=auto")...)
-}
-
-// LogGraph returns the colored lines of the commit graph, newest first. extra
-// are as for PrintLog.
-func (c *Client) LogGraph(ctx context.Context, extra ...string) ([]string, error) {
-	args := append(append(logGraphArgs, extra...), "--color=always")
-	out, err := c.gitCmd(ctx, args...).Output()
+// Log runs `git <args>`, a log command, and returns its colored lines.
+func (c *Client) Log(ctx context.Context, args ...string) ([]string, error) {
+	out, err := c.gitCmd(ctx, append(args, "--color=always")...).Output()
 	if err != nil {
 		return nil, gitStderr(err)
 	}

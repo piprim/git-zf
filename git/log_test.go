@@ -49,14 +49,18 @@ func newLogRepo(t *testing.T) (*Client, string) {
 	return client, dir
 }
 
-func TestLogGraph(t *testing.T) {
+// graphArgs is a short form of the default graph command of `git zf log`.
+var graphArgs = []string{"log", "--exclude=*zf/*", "--graph", "--oneline", "--all", "--decorate",
+	"--pretty=tformat:%Cred%h%Creset - %s", "--date-order"}
+
+func TestLog(t *testing.T) {
 	t.Parallel()
 
 	client, _ := newLogRepo(t)
 
-	lines, err := client.LogGraph(t.Context())
+	lines, err := client.Log(t.Context(), graphArgs...)
 	if err != nil {
-		t.Fatalf("LogGraph: %v", err)
+		t.Fatalf("Log: %v", err)
 	}
 	all := strings.Join(lines, "\n")
 
@@ -82,7 +86,7 @@ func TestLogGraph(t *testing.T) {
 	})
 
 	t.Run("extra arguments reach git log", func(t *testing.T) {
-		one, err := client.LogGraph(t.Context(), "-n", "1")
+		one, err := client.Log(t.Context(), append(graphArgs, "-n", "1")...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +96,7 @@ func TestLogGraph(t *testing.T) {
 	})
 
 	t.Run("a bad argument is an error carrying git's message", func(t *testing.T) {
-		_, err := client.LogGraph(t.Context(), "--no-such-flag")
+		_, err := client.Log(t.Context(), "log", "--no-such-flag")
 		if err == nil || !strings.Contains(err.Error(), "no-such-flag") {
 			t.Errorf("err = %v", err)
 		}
@@ -144,7 +148,7 @@ func TestPrintLog(t *testing.T) {
 	var out bytes.Buffer
 	client.io = &pkg.IO{In: strings.NewReader(""), Out: &out, Err: io.Discard}
 
-	if err := client.PrintLog(t.Context(), "-n", "1"); err != nil {
+	if err := client.PrintLog(t.Context(), append(graphArgs, "-n", "1")...); err != nil {
 		t.Fatalf("PrintLog: %v", err)
 	}
 

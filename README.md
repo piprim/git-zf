@@ -43,7 +43,7 @@ Every command is interactive by default. Passing a flag skips the corresponding 
 
 ### Menu
 
-`git zf` without a subcommand opens a menu of the workflow commands — **Commit**, **Issue**, **Branch**, **Review** — and runs the one you pick with its interactive defaults. `git zf issue`, `git zf branch` and `git zf review` do the same one level down. Esc / ctrl+c leaves the menu quietly, and when stdin is not a terminal (scripts, CI) the menu is skipped and the usual `--help` text is printed. Setup commands (`init`, `install`, `uninstall`, `config`, `completion`, `version`) are not in the menu.
+`git zf` without a subcommand opens a menu of the workflow commands — **Commit**, **Issue**, **Branch**, **Review**, **Log** — and runs the one you pick with its interactive defaults. `git zf issue`, `git zf branch` and `git zf review` do the same one level down. Esc / ctrl+c leaves the menu quietly, and when stdin is not a terminal (scripts, CI) the menu is skipped and the usual `--help` text is printed. Setup commands (`init`, `install`, `uninstall`, `config`, `completion`, `version`) are not in the menu.
 
 ### Commit
 
@@ -243,6 +243,30 @@ without an approval that `git verify-commit` accepts and that covers the commit
 being merged. When the close is refused, `git zf review request` starts a new
 round on the approved branch.
 
+### Log
+
+```
+$ git zf log                    # browse the commit graph of every branch and tag
+$ git zf log -- -n 100          # arguments after -- go to git log
+$ git zf log -- main..feature   # a revision range
+$ git zf log | less -R          # without a terminal: the plain git log output
+```
+
+An interactive view of `git log`, without git-zf's own refs (`refs/zf/*`). Enter opens the commit under the cursor in a dialog with its stat, raw file list and patch; esc returns. `/` filters the lines as you type (enter keeps the filter, esc clears it), ←→ scroll long lines, `q` quits.
+
+The view runs one of several log commands and shows the name of the current one. Six are built in, each with a digit shortcut:
+
+| Key | Name | Shows |
+|---|---|---|
+| 1 | `graph` | every branch and tag as a graph, with both dates and the committer (the default) |
+| 2 | `branch` | the current branch and what was merged into it |
+| 3 | `linear` | a flat list of every commit but the merges, across branches |
+| 4 | `first-parent` | the current branch, one line per merged feature |
+| 5 | `recent` | what moved in the last two weeks, across branches |
+| 6 | `tags` | tagged commits only |
+
+`c` picks a command by name. The commands are configured under `[log]` (see [Log commands](#log-commands)).
+
 ### Init
 
 ```
@@ -377,6 +401,22 @@ propose = true   # false disables the post-action "push now?" proposal everywher
 ```
 
 `--push` / `--no-push` on a command override the proposal for that run.
+
+### Log commands
+
+```toml
+[log]
+default-cmd = "graph"            # the command `git zf log` opens with
+
+[[log.cmds]]
+name = "mine"                    # shown in the view and offered by `c`
+key = 7                          # 1-9 switches to it; 0 or omitted = no shortcut
+cmd = "git log --exclude='*zf/*' --all --author='Jane' --oneline --decorate --pretty=tformat:'%Cred%h%Creset %s %Cgreen(%cr)%Creset'"
+```
+
+`cmd` is a shell command line starting with `git log` (the `git` may be left out); it is split like a shell would, so a quoted `--pretty` format works. Every line it prints must start with the commit hash, after the graph characters, for enter to find the commit: put `%h` or `%H` first in a custom format. Colors are handled by the view (`--color` is appended), and the arguments given after `--` on the command line are appended too.
+
+A `[[log.cmds]]` array in a config file replaces the whole built-in list, like `commit-message.items`, so copy the entries you keep from [`config/default.toml`](config/default.toml). Names and keys must be unique, keys are 0 to 9, and `default-cmd` must name one of the entries (it falls back to the first when empty).
 
 ### Tracker integration
 

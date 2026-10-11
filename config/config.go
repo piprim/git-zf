@@ -183,6 +183,7 @@ type AppConfig struct {
 	Push          PushConfig          `json:"push"           toml:"push"`
 	Review        ReviewConfig        `json:"review"         toml:"review"`
 	IssueTracker  IssueTrackerConfig  `json:"issue-tracker"  toml:"issue-tracker"`
+	Log           LogConfig           `json:"log"            toml:"log"`
 }
 
 // Load parses the embedded default.toml, then overlays each existing file in
@@ -217,6 +218,9 @@ func Load(paths ...string) (*AppConfig, error) {
 	cfg.ProgName = ProgName
 
 	if err := cfg.IssueTracker.normalize(); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := cfg.Log.normalize(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 

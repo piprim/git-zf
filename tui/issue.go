@@ -599,8 +599,9 @@ func renderStatusTabs(current string) string {
 	return strings.Join(parts, "  ")
 }
 
-func renderProjectPicker(cursor int, projects []string) string {
-	opts := projectPickerOptions(projects)
+// renderPicker is an inline list of options under title, the one at cursor
+// highlighted.
+func renderPicker(title string, cursor int, opts []string) string {
 	lines := make([]string, len(opts))
 
 	for i, o := range opts {
@@ -611,7 +612,7 @@ func renderProjectPicker(cursor int, projects []string) string {
 		}
 	}
 
-	return "Pick project (↑↓ / j·k, enter: confirm, esc: cancel):\n" + strings.Join(lines, "\n")
+	return title + " (↑↓ / j·k, enter: confirm, esc: cancel):\n" + strings.Join(lines, "\n")
 }
 
 var dialogStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
@@ -627,7 +628,7 @@ func (m *issueTableModel) View() string {
 	tabs := renderStatusTabs(m.statusFilter)
 
 	if m.picking {
-		return m.table.View() + "\n\n" + tabs + "\n\n" + renderProjectPicker(m.pickCursor, m.projects)
+		return m.table.View() + "\n\n" + tabs + "\n\n" + renderPicker("Pick project", m.pickCursor, projectPickerOptions(m.projects))
 	}
 
 	hint := "enter: show · e: edit · / to filter · tab: status · m: mine · q to quit"

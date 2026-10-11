@@ -48,15 +48,27 @@ func newLogRig(t *testing.T) (*git.Client, *bytes.Buffer) {
 	return client, out
 }
 
+// defaults is the built-in log configuration.
+func defaults(t *testing.T) config.LogConfig {
+	t.Helper()
+
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "none.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return cfg.Log
+}
+
 func TestRunLog_NoTTY(t *testing.T) {
 	t.Parallel()
 
 	client, out := newLogRig(t)
-	if err := runLog(t.Context(), client, []string{"-n", "1"}, false); err != nil {
+	if err := runLog(t.Context(), client, defaults(t), []string{"-n", "1"}, false); err != nil {
 		t.Fatalf("runLog: %v", err)
 	}
 
-	t.Run("prints the graph to stdout like git log", func(t *testing.T) {
+	t.Run("prints the default command's graph to stdout like git log", func(t *testing.T) {
 		if got := out.String(); !strings.HasPrefix(got, "* ") || !strings.Contains(got, "feat: second commit") {
 			t.Errorf("out = %q", got)
 		}
@@ -65,6 +77,18 @@ func TestRunLog_NoTTY(t *testing.T) {
 	t.Run("extra arguments reach git log", func(t *testing.T) {
 		if strings.Contains(out.String(), "chore: init") {
 			t.Errorf("out = %q", out.String())
+		}
+	})
+
+	t.Run("default-cmd picks the command", func(t *testing.T) {
+		client, out := newLogRig(t)
+		cfg := defaults(t)
+		cfg.DefaultCmd = "linear"
+		if err := runLog(t.Context(), client, cfg, nil, false); err != nil {
+			t.Fatalf("runLog: %v", err)
+		}
+		if got := out.String(); strings.HasPrefix(got, "* ") || !strings.Contains(got, "chore: init") {
+			t.Errorf("out = %q", got)
 		}
 	})
 }
