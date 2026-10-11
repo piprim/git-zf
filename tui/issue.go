@@ -151,6 +151,10 @@ type IssueActions struct {
 	// under the cursor and quit. With NewIssue, n picks "new issue".
 	Pick     bool
 	NewIssue bool
+	// Start is set when a pick starts a branch (s in the list, the start
+	// flow's table): a closed issue is then refused with a notice. The
+	// record picker leaves it unset and picks closed records too.
+	Start bool
 }
 
 // IssuePick is how the issue table was quit.
@@ -479,15 +483,15 @@ func (m *issueTableModel) openDialog() {
 }
 
 // pickRow quits with the row under the cursor picked; nothing happens on an
-// empty table, and a closed issue (closed record, merged branch) is refused
-// with a notice.
+// empty table, and a start (actions.Start) refuses a closed issue (closed
+// record, merged branch) with a notice.
 func (m *issueTableModel) pickRow() (tea.Model, tea.Cmd, bool) {
 	c := m.table.Cursor()
 	if c < 0 || c >= len(m.visible) {
 		return m, nil, true
 	}
 	row := &m.visible[c]
-	if !row.MatchesStatus(statusOpen) {
+	if m.actions.Start && !row.MatchesStatus(statusOpen) {
 		m.notice = row.IssueSlug + " is closed: not started"
 
 		return m, nil, true

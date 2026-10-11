@@ -139,7 +139,7 @@ func (p *HuhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tr
 // the cursor, n asks for a new issue, q gives up (huh.ErrUserAborted, as the
 // huh picker's Esc was).
 func (*HuhStartPrompter) PickRow(ctx context.Context, rows []issuepkg.Row) (*issuepkg.Row, error) {
-	m, err := tui.IssueTableModel(rows, issuepkg.StateOpen, tui.IssueActions{Pick: true, NewIssue: true})
+	m, err := tui.IssueTableModel(rows, issuepkg.StateOpen, tui.IssueActions{Pick: true, NewIssue: true, Start: true})
 	if err != nil {
 		return nil, fmt.Errorf("issue table: %w", err)
 	}

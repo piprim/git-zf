@@ -665,7 +665,7 @@ func TestIssueTable_PickRefusesAClosedRow(t *testing.T) {
 		return ok
 	}
 
-	for name, mode := range map[string]IssueActions{"list mode": {}, "pick mode": {Pick: true}} {
+	for name, mode := range map[string]IssueActions{"list mode": {Start: true}, "start pick mode": {Pick: true, NewIssue: true, Start: true}} {
 		t.Run(name+": s on a closed record shows a notice and stays", func(t *testing.T) {
 			m, err := IssueTableModel(rows, "all", mode)
 			if err != nil {
@@ -679,8 +679,20 @@ func TestIssueTable_PickRefusesAClosedRow(t *testing.T) {
 		})
 	}
 
+	t.Run("the record picker (Pick without Start) picks a closed row", func(t *testing.T) {
+		m, err := IssueTableModel(rows, "all", IssueActions{Pick: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, cmd := m.Update(runeKey('s'))
+		pick, slug := PickedIssue(m)
+		if !quits(cmd) || pick != IssuePickRow || slug != "A" {
+			t.Errorf("quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
+		}
+	})
+
 	t.Run("s on a merged branch row shows a notice and stays", func(t *testing.T) {
-		m, err := IssueTableModel(rows, "all", IssueActions{})
+		m, err := IssueTableModel(rows, "all", IssueActions{Start: true})
 		if err != nil {
 			t.Fatal(err)
 		}

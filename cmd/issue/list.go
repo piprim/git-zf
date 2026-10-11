@@ -137,6 +137,7 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 		Edit: func(slug, title, description string) (string, error) {
 			return editIssue(ctx, infra, slug, title, description)
 		},
+		Start: true, // s starts the issue under the cursor
 	}
 	m, err := tui.IssueTableModel(rows, flags.status, actions)
 	if err != nil {

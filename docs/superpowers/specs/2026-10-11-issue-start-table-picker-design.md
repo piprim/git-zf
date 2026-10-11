@@ -47,6 +47,10 @@ type IssueActions struct {
 	// under the cursor and quit. With NewIssue, n picks "new issue".
 	Pick     bool
 	NewIssue bool
+	// Start is set when a pick starts a branch (s in the list, the start
+	// flow's table): a closed issue is then refused with a notice. The
+	// record picker leaves it unset and picks closed records too.
+	Start bool
 }
 ```
 
@@ -55,7 +59,9 @@ quits. Pick mode only: `enter` does what `s` does, `n` (with `NewIssue`)
 records "new issue" and quits; show and edit are off (their actions are
 nil). List mode keeps enter for show and `e` for edit. The hint line names
 the keys of the mode. `issue start` and `branch new` run the table with
-`Pick` and `NewIssue`; the record picker of section 5 with `Pick` alone.
+`Pick`, `NewIssue` and `Start`; the list with `Start`; the record picker
+of section 5 with `Pick` alone. A start refuses a closed record or a
+merged branch row with a notice; the record picker offers every state.
 
 What was picked is read after the program returns:
 
