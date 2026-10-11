@@ -13,6 +13,7 @@ import (
 	init_cmd "github.com/piprim/git-zf/cmd/init"
 	"github.com/piprim/git-zf/cmd/install"
 	"github.com/piprim/git-zf/cmd/issue"
+	logcmd "github.com/piprim/git-zf/cmd/log"
 	"github.com/piprim/git-zf/cmd/review"
 	"github.com/piprim/git-zf/cmd/uninstall"
 	"github.com/piprim/git-zf/cmd/version"
@@ -31,7 +32,7 @@ var (
 	// menu that `git zf` opens when run without a subcommand. Setup commands
 	// (install, uninstall, init, config, completion, version) are deliberately
 	// absent: they are one-shot and stay CLI-only, listed by --help.
-	rootMenu = []string{"commit", "issue", "branch", "review"}
+	rootMenu = []string{"commit", "issue", "branch", "review", "log"}
 )
 
 // GetRootCmd builds and returns the root Cobra command.
@@ -72,6 +73,7 @@ func GetRootCmd() (*cobra.Command, error) {
 	cf := cfgcmd.New(appConfig)
 	rv := review.New(appConfig)
 	it := init_cmd.New()
+	lg := logcmd.New(appConfig)
 
 	rootCmd.AddCommand(
 		completion.Cmd(),
@@ -84,6 +86,7 @@ func GetRootCmd() (*cobra.Command, error) {
 		cf.GetRootCmd(),
 		rv.GetRootCmd(),
 		it.GetRootCmd(),
+		lg.GetRootCmd(),
 	)
 
 	return rootCmd, nil

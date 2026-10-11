@@ -216,6 +216,26 @@ When adding a review op type, add its constant and its case in `apply`
 (`review/record.go`) with a table case in `TestFold`. Unknown types must keep
 being skipped.
 
+### Testing the log view
+
+`git zf log` runs one of the log commands of `[log]` (`config.LogConfig`,
+`config/log.go`: a shell line split with shlex, validated in `normalize`) in a
+bubbletea list (`tui.LogModel`): enter shows the commit's stat and patch
+(`git.ShowCommit`) in a dialog that scrolls both ways, `/` filters the lines
+like the issue table does, 1-9 and `c` switch the command (`LogActions.Load`).
+Without a TTY on stdout the default command is printed as `git log` would
+(`git.PrintLog`). Arguments after `--` reach `git log`.
+
+    mise exec -- go test ./config/... -run "TestLoad_Log|TestLogCmd" -v
+    mise exec -- go test ./git/... -run "TestLog|TestShowCommit|TestPrintLog" -v
+    mise exec -- go test ./tui/... -run "TestCommitHash|TestLogModel" -v
+    mise exec -- go test ./cmd/log/... -v
+
+The hash of a graph line is read by `commitHash` (`tui/log.go`) after
+stripping colors; a graph-only line (`|/`) has none and enter ignores it, so a
+command's format must start with the hash. The built-in commands live in
+`config/default.toml`; a user `[[log.cmds]]` array replaces them wholesale.
+
 ### Testing the menus
 
 `git zf` (no subcommand), `git zf review`, `git zf branch` and `git zf issue`

@@ -79,3 +79,46 @@ propose = true
 
 [review]
 require-signed = false
+
+# `git zf log`: the commands of the view. 1-9 switch to the command with that
+# key, c picks one by name. A command must start every line with the hash
+# (after the graph characters) for enter to open the commit. A `[[log.cmds]]`
+# array in a user file replaces this whole list.
+[log]
+default-cmd = "graph"
+
+[[log.cmds]]
+# every branch and tag as a graph
+name = "graph"
+key = 1
+cmd = "git log --exclude='*zf/*' --graph --oneline --all --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen%cd (%cr) %C(bold blue)<%an by %cn>%Creset' --abbrev-commit --date=iso --date-order"
+
+[[log.cmds]]
+# the current branch and what was merged into it
+name = "branch"
+key = 2
+cmd = "git log --exclude='*zf/*' --graph --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit --date-order"
+
+[[log.cmds]]
+# a flat list of every commit but the merges, across branches
+name = "linear"
+key = 3
+cmd = "git log --exclude='*zf/*' --all --no-merges --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit --date-order"
+
+[[log.cmds]]
+# the current branch one line per merged feature
+name = "first-parent"
+key = 4
+cmd = "git log --first-parent --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit"
+
+[[log.cmds]]
+# what moved in the last two weeks, across branches
+name = "recent"
+key = 5
+cmd = "git log --exclude='*zf/*' --graph --oneline --all --decorate --since='2 weeks ago' --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen%cd (%cr) %C(bold blue)<%an by %cn>%Creset' --abbrev-commit --date=iso --date-order"
+
+[[log.cmds]]
+# tagged commits only
+name = "tags"
+key = 6
+cmd = "git log --no-walk --tags --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit"

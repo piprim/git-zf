@@ -210,6 +210,9 @@ func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueAction
 	fi.Placeholder = "type to filter…"
 	fi.CharLimit = 64
 
+	dialog := viewport.New(width, issueTableHeight)
+	dialog.SetHorizontalStep(horizontalStep)
+
 	return &issueTableModel{
 		table:         t,
 		allRows:       rows,
@@ -219,7 +222,7 @@ func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueAction
 		projectFilter: projectAll,
 		visible:       filterRows(rows, status, "", projectAll, includeProj, false),
 		actions:       actions,
-		dialog:        viewport.New(width, issueTableHeight),
+		dialog:        dialog,
 	}, nil
 }
 
@@ -635,8 +638,9 @@ func renderStatusTabs(current string) string {
 	return strings.Join(parts, "  ")
 }
 
-func renderProjectPicker(cursor int, projects []string) string {
-	opts := projectPickerOptions(projects)
+// renderPicker is an inline list of options under title, the one at cursor
+// highlighted.
+func renderPicker(title string, cursor int, opts []string) string {
 	lines := make([]string, len(opts))
 
 	for i, o := range opts {
@@ -647,7 +651,7 @@ func renderProjectPicker(cursor int, projects []string) string {
 		}
 	}
 
-	return "Pick project (↑↓ / j·k, enter: confirm, esc: cancel):\n" + strings.Join(lines, "\n")
+	return title + " (↑↓ / j·k, enter: confirm, esc: cancel):\n" + strings.Join(lines, "\n")
 }
 
 var dialogStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
@@ -657,13 +661,13 @@ func (m *issueTableModel) View() string {
 		return dialogStyle.Render(m.form.View()) + "\n\nenter: save · esc: cancel"
 	}
 	if m.viewing {
-		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓ scroll · e: edit · esc: back"
+		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓←→ scroll · e: edit · esc: back"
 	}
 
 	tabs := renderStatusTabs(m.statusFilter)
 
 	if m.picking {
-		return m.table.View() + "\n\n" + tabs + "\n\n" + renderProjectPicker(m.pickCursor, m.projects)
+		return m.table.View() + "\n\n" + tabs + "\n\n" + renderPicker("Pick project", m.pickCursor, projectPickerOptions(m.projects))
 	}
 
 	hint := m.hint()
