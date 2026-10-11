@@ -717,19 +717,29 @@ func (m *issueTableModel) View() string {
 		mine = "  " + activeTabStyle.Render("[ Mine ]")
 	}
 
-	view := m.table.View() + "\n\n" + tabs + mine + proj
-
+	filters := m.table.View() + "\n\n" + tabs + mine + proj + "    "
 	if m.filtering {
-		return view + "    /" + m.filter.View() + "  (esc: clear  enter: confirm)"
+		return filters + "/" + m.filter.View() + "  (esc: clear  enter: confirm)"
 	}
+	view := filters + m.filterHint() + "\n" + hint
 	if m.notice != "" {
-		return view + "    " + hint + "\n" + m.notice
+		return view + "\n" + m.notice
 	}
 
-	return view + "    " + hint
+	return view
 }
 
-// hint is the key line under the table, for the mode.
+// filterHint is the keys of the filters, on their line.
+func (m *issueTableModel) filterHint() string {
+	keys := "tab: status"
+	if len(m.projects) > 0 {
+		keys += " · p: project"
+	}
+
+	return keys + " · m: mine · /: filter"
+}
+
+// hint is the key line under the filters, for the mode.
 func (m *issueTableModel) hint() string {
 	keys := "enter: show · e: edit · s: start · n: new · c: close · l: label · r: sync"
 	if m.actions.Pick {
@@ -738,12 +748,8 @@ func (m *issueTableModel) hint() string {
 			keys += " · n: new issue"
 		}
 	}
-	keys += " · / to filter · tab: status"
-	if len(m.projects) > 0 {
-		keys += " · p: project"
-	}
 
-	return keys + " · m: mine · q to quit"
+	return keys + " · q: quit"
 }
 
 // BranchPicker presents a list of branches under title (close and the review

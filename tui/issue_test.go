@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 
@@ -655,6 +657,19 @@ func TestIssueTable_Pick(t *testing.T) {
 		}
 		if !strings.Contains(record, "enter: pick ·") || strings.Contains(record, "n: new issue") {
 			t.Errorf("record hint wrong in %q", record)
+		}
+	})
+
+	t.Run("the filters and the keys are two lines under 90 columns", func(t *testing.T) {
+		lines := strings.Split(newTable(t, IssueActions{Show: show}).View(), "\n")
+		filters, keys := lines[len(lines)-2], lines[len(lines)-1]
+		if !strings.Contains(filters, "Open") || !strings.Contains(filters, "tab: status · m: mine · /: filter") {
+			t.Errorf("filters line = %q", filters)
+		}
+		for _, l := range []string{filters, keys} {
+			if w := ansi.StringWidth(l); w >= 90 {
+				t.Errorf("%d columns: %q", w, l)
+			}
 		}
 	})
 

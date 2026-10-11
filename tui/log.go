@@ -447,8 +447,7 @@ func (m *logModel) View() string {
 		return head + m.status
 	}
 
-	return head + "↑↓ move · ←→ scroll · enter: show · / to filter · 1-9: command · c: pick · " +
-		"L: linearize merge · q to quit"
+	return head + "↑↓←→ move · enter: show · /: filter · 1-9: command · c: pick · L: linearize · q: quit"
 }
 
 // describe is the description of c as a suffix of its name, empty without one.
