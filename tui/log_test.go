@@ -248,7 +248,7 @@ func TestLogModel(t *testing.T) {
 func TestLogModel_Commands(t *testing.T) {
 	key, runeKey := logKey, logRuneKey
 	cmds := []config.LogCmd{
-		{Name: "graph", Key: 1},
+		{Name: "graph", Key: 1, Description: "every branch as a graph"},
 		{Name: "linear", Key: 3},
 		{Name: "tags"}, // no shortcut
 	}
@@ -271,6 +271,26 @@ func TestLogModel_Commands(t *testing.T) {
 		Show: func(hash string) (string, error) { return "COMMIT " + hash, nil },
 	}
 	newLog := func() tea.Model { return LogModel(graphLines, cmds, 0, actions) }
+
+	t.Run("the header shows the description after the name", func(t *testing.T) {
+		if v := newLog().View(); !strings.Contains(v, "graph — every branch as a graph") {
+			t.Errorf("view %q lacks the description", v)
+		}
+	})
+
+	t.Run("a command without a description shows its name alone", func(t *testing.T) {
+		m, _ := newLog().Update(runeKey('3'))
+		if v := m.View(); !strings.Contains(v, "Log: linear\n") {
+			t.Errorf("view %q", v)
+		}
+	})
+
+	t.Run("the picker shows the descriptions", func(t *testing.T) {
+		m, _ := newLog().Update(runeKey('c'))
+		if v := m.View(); !strings.Contains(v, "> graph — every branch as a graph") || !strings.Contains(v, "  linear\n") {
+			t.Errorf("view %q", v)
+		}
+	})
 
 	t.Run("the hint offers the digits and c", func(t *testing.T) {
 		if v := newLog().View(); !strings.Contains(v, "1-9: command") || !strings.Contains(v, "c: pick") {

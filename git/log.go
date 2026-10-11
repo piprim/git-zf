@@ -22,10 +22,11 @@ func (c *Client) Log(ctx context.Context, args ...string) ([]string, error) {
 }
 
 // ShowCommit returns the colored patch of one commit with its stat and raw
-// file list, for the dialog of `git zf log`.
+// file list, for the dialog of `git zf log`. A merge is diffed against its
+// first parent: what it brought onto the branch.
 func (c *Client) ShowCommit(ctx context.Context, hash string) (string, error) {
 	out, err := c.gitCmd(ctx, "log", "-1", "--decorate", "--graph", "--stat", "--raw", "-p",
-		"--ignore-space-change", "--color=always", hash, "--").Output()
+		"--diff-merges=first-parent", "--ignore-space-change", "--color=always", hash, "--").Output()
 	if err != nil {
 		return "", gitStderr(err)
 	}

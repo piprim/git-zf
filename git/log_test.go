@@ -134,6 +134,34 @@ func TestShowCommit(t *testing.T) {
 		}
 	})
 
+	t.Run("a merge shows what it brought onto the branch", func(t *testing.T) {
+		run := func(args ...string) {
+			t.Helper()
+			cmd := exec.CommandContext(t.Context(), "git", args...)
+			cmd.Dir = dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		run("checkout", "-b", "topic")
+		if err := os.WriteFile(filepath.Join(dir, "merged.txt"), []byte("merged\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run("add", "merged.txt")
+		run("commit", "-m", "feat: on topic")
+		run("checkout", "-")
+		run("merge", "--no-ff", "-m", "Merge branch 'topic'", "topic")
+
+		out, err := client.ShowCommit(t.Context(), "HEAD")
+		if err != nil {
+			t.Fatalf("ShowCommit: %v", err)
+		}
+		plain := ansi.Strip(out)
+		if !strings.Contains(plain, "+merged") || !strings.Contains(plain, "merged.txt | 1 +") {
+			t.Errorf("out = %q", plain)
+		}
+	})
+
 	t.Run("a file named like the hash does not make it ambiguous", func(t *testing.T) {
 		h := strings.TrimSpace(string(head))
 		if err := os.WriteFile(filepath.Join(dir, h), []byte("x"), 0o644); err != nil {

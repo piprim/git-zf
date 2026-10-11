@@ -37,6 +37,14 @@ func TestLoad_LogDefaults(t *testing.T) {
 		}
 	})
 
+	t.Run("every command has a description", func(t *testing.T) {
+		for _, c := range cfg.Log.Cmds {
+			if c.Description == "" {
+				t.Errorf("cmd %q has no description", c.Name)
+			}
+		}
+	})
+
 	t.Run("every command is a git log command that splits cleanly", func(t *testing.T) {
 		for _, c := range cfg.Log.Cmds {
 			args, err := c.Args()

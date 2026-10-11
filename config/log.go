@@ -13,7 +13,9 @@ import (
 // enter to find the commit.
 type LogCmd struct {
 	Name string `json:"name" toml:"name"`
-	Cmd  string `json:"cmd"  toml:"cmd"`
+	// Description is a few words shown next to the name in the log view.
+	Description string `json:"description" toml:"description"`
+	Cmd         string `json:"cmd"         toml:"cmd"`
 	// Key is the digit (1-9) that switches to this command in the log view;
 	// 0 is no shortcut.
 	Key int `json:"key" toml:"key"`

@@ -410,6 +410,7 @@ default-cmd = "graph"            # the command `git zf log` opens with
 
 [[log.cmds]]
 name = "mine"                    # shown in the view and offered by `c`
+description = "my commits"       # optional, shown after the name
 key = 7                          # 1-9 switches to it; 0 or omitted = no shortcut
 cmd = "git log --exclude='*zf/*' --all --author='Jane' --oneline --decorate --pretty=tformat:'%Cred%h%Creset %s %Cgreen(%cr)%Creset'"
 ```

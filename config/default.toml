@@ -88,37 +88,37 @@ require-signed = false
 default-cmd = "graph"
 
 [[log.cmds]]
-# every branch and tag as a graph
 name = "graph"
+description = "every branch and tag as a graph"
 key = 1
 cmd = "git log --exclude='*zf/*' --graph --oneline --all --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen%cd (%cr) %C(bold blue)<%an by %cn>%Creset' --abbrev-commit --date=iso --date-order"
 
 [[log.cmds]]
-# the current branch and what was merged into it
 name = "branch"
+description = "the current branch and what was merged into it"
 key = 2
 cmd = "git log --exclude='*zf/*' --graph --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit --date-order"
 
 [[log.cmds]]
-# a flat list of every commit but the merges, across branches
 name = "linear"
+description = "a flat list of every commit but the merges, across branches"
 key = 3
 cmd = "git log --exclude='*zf/*' --all --no-merges --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit --date-order"
 
 [[log.cmds]]
-# the current branch one line per merged feature
 name = "first-parent"
+description = "the current branch one line per merged feature"
 key = 4
 cmd = "git log --first-parent --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit"
 
 [[log.cmds]]
-# what moved in the last two weeks, across branches
 name = "recent"
+description = "what moved in the last two weeks, across branches"
 key = 5
 cmd = "git log --exclude='*zf/*' --graph --oneline --all --decorate --since='2 weeks ago' --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen%cd (%cr) %C(bold blue)<%an by %cn>%Creset' --abbrev-commit --date=iso --date-order"
 
 [[log.cmds]]
-# tagged commits only
 name = "tags"
+description = "tagged commits only"
 key = 6
 cmd = "git log --no-walk --tags --oneline --decorate --pretty=tformat:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset %C(bold blue)<%an>%Creset' --abbrev-commit"

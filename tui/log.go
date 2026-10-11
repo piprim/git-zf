@@ -302,18 +302,28 @@ func (m *logModel) View() string {
 		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓←→ scroll · esc: back"
 	}
 
-	head := "Log: " + activeTabStyle.Render(m.cmds[m.current].Name) + "\n\n" + m.list.View() + "\n\n"
+	head := "Log: " + activeTabStyle.Render(m.cmds[m.current].Name) + inactiveTabStyle.Render(describe(m.cmds[m.current])) +
+		"\n\n" + m.list.View() + "\n\n"
 	switch {
 	case m.filtering:
 		return head + "/" + m.filter.View() + "  (esc: clear  enter: confirm)"
 	case m.picking:
 		names := make([]string, len(m.cmds))
 		for i, c := range m.cmds {
-			names[i] = c.Name
+			names[i] = c.Name + describe(c)
 		}
 
 		return head + renderPicker("Pick command", m.pickCursor, names)
 	}
 
 	return head + "↑↓ move · ←→ scroll · enter: show · / to filter · 1-9: command · c: pick · q to quit"
+}
+
+// describe is the description of c as a suffix of its name, empty without one.
+func describe(c config.LogCmd) string {
+	if c.Description == "" {
+		return ""
+	}
+
+	return " — " + c.Description
 }
