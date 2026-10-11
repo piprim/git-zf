@@ -25,6 +25,8 @@ const (
 type githubAdapter struct {
 	client *gogithub.Client
 	cfg    config.IssueTrackerConfig
+	// meLogin is the authenticated user's login once me looked it up.
+	meLogin string
 }
 
 // New creates a GitHub adapter from cfg.
@@ -47,12 +49,13 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 }
 
 // ListIssues fetches every open issue of each configured repository, whoever
-// it is assigned to. Without projects, it fetches the open issues assigned to
-// the authenticated user across all accessible repositories. It paginates
+// it is assigned to. Without projects, it fetches the open issues involving
+// the authenticated user (assigned, created, mentioned or subscribed) across
+// all accessible repositories: GitHub has no wider listing. It paginates
 // through every page and drops pull requests.
 func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
 	if len(a.cfg.Projects) == 0 {
-		return a.listAssigned(ctx)
+		return a.listInvolving(ctx)
 	}
 
 	var out []tracker.Issue
@@ -74,9 +77,9 @@ func (a *githubAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error)
 	return out, nil
 }
 
-func (a *githubAdapter) listAssigned(ctx context.Context) ([]tracker.Issue, error) {
+func (a *githubAdapter) listInvolving(ctx context.Context) ([]tracker.Issue, error) {
 	opt := &gogithub.IssueListOptions{
-		Filter:      "assigned",
+		Filter:      "all",
 		State:       statusOpen,
 		ListOptions: gogithub.ListOptions{PerPage: issuesPerPage},
 	}
@@ -93,6 +96,9 @@ func (a *githubAdapter) listAssigned(ctx context.Context) ([]tracker.Issue, erro
 			if !iss.IsPullRequest() {
 				out = append(out, toIssue(iss, iss.GetRepository().GetFullName()))
 			}
+		}
+		if err := a.flagAssigned(ctx, page, out); err != nil {
+			return nil, err
 		}
 
 		if resp.NextPage == 0 {
@@ -124,6 +130,9 @@ func (a *githubAdapter) listRepo(ctx context.Context, owner, repo string) ([]tra
 				out = append(out, toIssue(iss, owner+"/"+repo))
 			}
 		}
+		if err := a.flagAssigned(ctx, page, out); err != nil {
+			return nil, err
+		}
 
 		if resp.NextPage == 0 {
 			break
@@ -133,6 +142,42 @@ func (a *githubAdapter) listRepo(ctx context.Context, owner, repo string) ([]tra
 	}
 
 	return out, nil
+}
+
+// flagAssigned sets AssignedToMe on the issues of out converted from page.
+// The authenticated user is looked up once, and only when an issue of the
+// page has an assignee.
+func (a *githubAdapter) flagAssigned(ctx context.Context, page []*gogithub.Issue, out []tracker.Issue) error {
+	assigned := false
+	for _, iss := range page {
+		assigned = assigned || len(iss.Assignees) > 0
+	}
+	if !assigned {
+		return nil
+	}
+	if a.meLogin == "" {
+		me, _, err := a.client.Users.Get(ctx, "")
+		if err != nil {
+			return fmt.Errorf("github: current user: %w", err)
+		}
+		a.meLogin = me.GetLogin()
+	}
+
+	byNumber := make(map[string]*gogithub.Issue, len(page))
+	for _, iss := range page {
+		byNumber[strconv.Itoa(iss.GetNumber())] = iss
+	}
+	for i := range out {
+		iss, ok := byNumber[out[i].ID]
+		if !ok {
+			continue
+		}
+		for _, u := range iss.Assignees {
+			out[i].AssignedToMe = out[i].AssignedToMe || u.GetLogin() == a.meLogin
+		}
+	}
+
+	return nil
 }
 
 // toIssue converts a GitHub issue of project (an "owner/repo").

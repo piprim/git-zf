@@ -117,6 +117,42 @@ func TestListIssues(t *testing.T) {
 		}
 	})
 
+	t.Run("without a project lists the issues involving the user and flags the assigned ones", func(t *testing.T) {
+		t.Parallel()
+
+		var gotFilter string
+		mux := http.NewServeMux()
+		mux.HandleFunc("/issues", func(w http.ResponseWriter, r *http.Request) {
+			gotFilter = r.URL.Query().Get("filter")
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `[
+				{"number": 1, "title": "mine", "state": "open", "repository": {"full_name": "o/r"}, "assignees": [{"login": "me"}]},
+				{"number": 2, "title": "theirs", "state": "open", "repository": {"full_name": "o/r"}, "assignees": [{"login": "them"}]},
+				{"number": 3, "title": "nobody's", "state": "open", "repository": {"full_name": "o/r"}}
+			]`)
+		})
+		mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"login": "me"}`)
+		})
+
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		a := newTestAdapter(t, srv, nil)
+
+		issues, err := a.ListIssues(t.Context())
+		if err != nil {
+			t.Fatalf("ListIssues: %v", err)
+		}
+		if gotFilter != "all" {
+			t.Errorf("filter = %q, want all", gotFilter)
+		}
+		if len(issues) != 3 || !issues[0].AssignedToMe || issues[1].AssignedToMe || issues[2].AssignedToMe {
+			t.Errorf("issues = %+v, want only the first assigned to me", issues)
+		}
+	})
+
 	t.Run("follows pagination link headers", func(t *testing.T) {
 		t.Parallel()
 

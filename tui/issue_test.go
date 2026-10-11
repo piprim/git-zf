@@ -23,7 +23,7 @@ func TestApplyFilters(t *testing.T) {
 	}
 
 	t.Run("open status includes no-branch and in-progress rows", func(t *testing.T) {
-		got := applyFilters(allRows(), "open", "", projectAll, false)
+		got := applyFilters(allRows(), "open", "", projectAll, false, false)
 		if len(got) != 2 {
 			t.Fatalf("want 2 rows, got %d", len(got))
 		}
@@ -33,7 +33,7 @@ func TestApplyFilters(t *testing.T) {
 	})
 
 	t.Run("closed status returns only merged rows", func(t *testing.T) {
-		got := applyFilters(allRows(), "closed", "", projectAll, false)
+		got := applyFilters(allRows(), "closed", "", projectAll, false, false)
 		if len(got) != 1 {
 			t.Fatalf("want 1 row, got %d", len(got))
 		}
@@ -43,7 +43,7 @@ func TestApplyFilters(t *testing.T) {
 	})
 
 	t.Run("all status returns every row regardless of branch state", func(t *testing.T) {
-		got := applyFilters(allRows(), "all", "", projectAll, false)
+		got := applyFilters(allRows(), "all", "", projectAll, false, false)
 		if len(got) != 3 {
 			t.Fatalf("want 3 rows, got %d", len(got))
 		}
@@ -54,7 +54,7 @@ func TestApplyFilters(t *testing.T) {
 			{IssueSlug: "ABC-1", Title: "Fix login", Branch: &branch.Row{Status: branch.StatusInProgress}},
 			{IssueSlug: "ABC-2", Title: "Update signup", Branch: &branch.Row{Status: branch.StatusInProgress}},
 		}
-		got := applyFilters(rows, "open", "login", projectAll, false)
+		got := applyFilters(rows, "open", "login", projectAll, false, false)
 		if len(got) != 1 {
 			t.Fatalf("want 1 row, got %d", len(got))
 		}
@@ -68,7 +68,7 @@ func TestApplyFilters(t *testing.T) {
 			{IssueSlug: "X-1", Title: "Fix auth", Branch: &branch.Row{Status: branch.StatusInProgress}},
 			{IssueSlug: "X-2", Title: "Fix auth", Branch: &branch.Row{Status: branch.StatusMerged}},
 		}
-		got := applyFilters(rows, "open", "auth", projectAll, false)
+		got := applyFilters(rows, "open", "auth", projectAll, false, false)
 		if len(got) != 1 {
 			t.Fatalf("want 1 row, got %d", len(got))
 		}
@@ -85,7 +85,7 @@ func TestApplyFilters(t *testing.T) {
 			{IssueSlug: "B", Title: "b", Project: "octo/dog"},
 			{IssueSlug: "C", Title: "c", Project: "octo/cat"},
 		}
-		got := applyFilters(rows, statusOpen, "", "octo/cat", false)
+		got := applyFilters(rows, statusOpen, "", "octo/cat", false, false)
 		if len(got) != 2 {
 			t.Fatalf("got %d rows, want 2", len(got))
 		}
@@ -101,7 +101,7 @@ func TestApplyFilters(t *testing.T) {
 			{IssueSlug: "A", Project: "octo/cat"},
 			{IssueSlug: "B", Project: "octo/dog"},
 		}
-		got := applyFilters(rows, statusOpen, "", projectAll, false)
+		got := applyFilters(rows, statusOpen, "", projectAll, false, false)
 		if len(got) != 2 {
 			t.Fatalf("got %d rows with projectAll, want 2", len(got))
 		}
@@ -240,6 +240,53 @@ func TestIssueRowToTableRow_Labels(t *testing.T) {
 		row := issue.RowCells(&issue.Row{IssueSlug: "1", Title: "Plain"}, false)
 		if row[1] != "Plain" {
 			t.Errorf("title cell = %q", row[1])
+		}
+	})
+}
+
+func TestFilterRows_Mine(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "A", AssignedToMe: true},
+		{IssueSlug: "B", Title: "B"},
+	}
+
+	t.Run("mine keeps only the issues assigned to the user", func(t *testing.T) {
+		got := filterRows(rows, "open", "", projectAll, false, true)
+		if len(got) != 1 || got[0].IssueSlug != "A" {
+			t.Errorf("rows = %+v", got)
+		}
+	})
+
+	t.Run("off, every issue stays", func(t *testing.T) {
+		if got := filterRows(rows, "open", "", projectAll, false, false); len(got) != 2 {
+			t.Errorf("rows = %+v", got)
+		}
+	})
+}
+
+func TestIssueTable_MineToggle(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "Only A is mine", AssignedToMe: true},
+		{IssueSlug: "B", Title: "B is not"},
+	}
+	m, err := IssueTableModel(rows, "open", IssueActions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mKey := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}}
+
+	t.Run("m keeps the issues assigned to the user and lights the tab", func(t *testing.T) {
+		m, _ = m.Update(mKey)
+		v := m.View()
+		if strings.Contains(v, "B is not") || !strings.Contains(v, "Only A is mine") || !strings.Contains(v, "[ Mine ]") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("m again shows every issue", func(t *testing.T) {
+		m, _ = m.Update(mKey)
+		if v := m.View(); !strings.Contains(v, "B is not") || strings.Contains(v, "[ Mine ]") {
+			t.Errorf("view = %q", v)
 		}
 	})
 }

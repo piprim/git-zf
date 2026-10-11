@@ -61,6 +61,9 @@ type issue struct {
 	CreatedAt time.Time `json:"created_at"`
 	//nolint:tagliatelle // Forgejo wire format
 	UpdatedAt time.Time `json:"updated_at"`
+	Assignees []struct {
+		Login string `json:"login"`
+	} `json:"assignees"`
 }
 
 // comment is the subset of the Forgejo Comment object we consume.
@@ -80,6 +83,7 @@ type forgejoAdapter struct {
 	apiBase     string        // "<instance root>/api/v1", no trailing slash
 	trackerType string        // cfg.Type as configured ("forgejo" or "gitea")
 	proxyAuth   *url.Userinfo // credentials from the URL's userinfo; nil when absent
+	meLogin     string        // the authenticated user's login once me looked it up
 }
 
 // New creates a Forgejo adapter from cfg. URL is the instance root (e.g.
@@ -205,27 +209,17 @@ func (e *httpError) Error() string {
 }
 
 // ListIssues fetches every open issue of each configured repository, whoever
-// it is assigned to. Without projects, it fetches the open issues assigned to
-// the authenticated user across every repository the token can see, via GET
-// /repos/issues/search. Pages are walked by listPages; pull requests are
-// dropped.
+// it is assigned to. Without projects, it fetches every open issue the token
+// can see across the instance, via GET /repos/issues/search. Pages are walked
+// by listPages; pull requests are dropped.
 func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
 	if len(a.cfg.Projects) == 0 {
-		issues, err := a.listPages(ctx, "/repos/issues/search", url.Values{"assigned": {"true"}})
+		issues, err := a.listPages(ctx, "/repos/issues/search", url.Values{})
 		if err != nil {
 			return nil, fmt.Errorf("forgejo: list issues: %w", err)
 		}
 
-		out := make([]tracker.Issue, len(issues))
-		for i := range issues {
-			proj := ""
-			if issues[i].Repository != nil {
-				proj = issues[i].Repository.FullName
-			}
-			out[i] = a.toIssue(&issues[i], proj)
-		}
-
-		return out, nil
+		return a.toIssues(ctx, issues, "")
 	}
 
 	var out []tracker.Issue
@@ -241,8 +235,45 @@ func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 			return nil, fmt.Errorf("forgejo: list issues of %s: %w", id, err)
 		}
 
-		for i := range issues {
-			out = append(out, a.toIssue(&issues[i], owner+"/"+repo))
+		converted, err := a.toIssues(ctx, issues, owner+"/"+repo)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, converted...)
+	}
+
+	return out, nil
+}
+
+// toIssues converts a listing. Every issue is reported under project; when
+// project is empty, the name comes from the issue's repository. The
+// authenticated user is looked up once, and only when an issue has an
+// assignee, to set AssignedToMe.
+func (a *forgejoAdapter) toIssues(ctx context.Context, issues []issue, project string) ([]tracker.Issue, error) {
+	assigned := false
+	for i := range issues {
+		assigned = assigned || len(issues[i].Assignees) > 0
+	}
+	if assigned && a.meLogin == "" {
+		var me struct {
+			Login string `json:"login"`
+		}
+		if err := a.doJSON(ctx, http.MethodGet, "/user", nil, &me); err != nil {
+			return nil, fmt.Errorf("forgejo: current user: %w", err)
+		}
+		a.meLogin = me.Login
+	}
+
+	out := make([]tracker.Issue, len(issues))
+	for i := range issues {
+		proj := project
+		if proj == "" && issues[i].Repository != nil {
+			proj = issues[i].Repository.FullName
+		}
+		out[i] = a.toIssue(&issues[i], proj)
+		for _, u := range issues[i].Assignees {
+			out[i].AssignedToMe = out[i].AssignedToMe || u.Login == a.meLogin
 		}
 	}
 

@@ -167,7 +167,7 @@ func newTestAdapter(t *testing.T, srv *httptest.Server, cfg config.IssueTrackerC
 func TestListIssues(t *testing.T) {
 	t.Parallel()
 
-	t.Run("returns assigned open issues excluding pull requests", func(t *testing.T) {
+	t.Run("returns open issues excluding pull requests", func(t *testing.T) {
 		t.Parallel()
 
 		var gotAuth string
@@ -222,7 +222,7 @@ func TestListIssues(t *testing.T) {
 			t.Errorf(`Authorization = %q, want "token test-token"`, gotAuth)
 		}
 
-		for k, v := range map[string]string{"state": "open", "assigned": "true", "type": "issues"} {
+		for k, v := range map[string]string{"state": "open", "type": "issues"} {
 			if gotQuery.Get(k) != v {
 				t.Errorf("query %s = %q, want %q", k, gotQuery.Get(k), v)
 			}
@@ -377,6 +377,49 @@ func TestListIssues(t *testing.T) {
 
 		if len(issues) != maxPages {
 			t.Errorf("got %d issues, want %d (one per page, capped)", len(issues), maxPages)
+		}
+	})
+
+	t.Run("without a project lists every issue the token sees and flags the user's", func(t *testing.T) {
+		t.Parallel()
+
+		var gotQuery url.Values
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /api/v1/repos/issues/search", func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			w.Header().Set("Content-Type", "application/json")
+
+			if r.URL.Query().Get("page") != "1" {
+				fmt.Fprint(w, `[]`)
+
+				return
+			}
+
+			fmt.Fprint(w, `[
+				{"number": 1, "title": "mine", "state": "open", "repository": {"full_name": "o/r"}, "assignees": [{"login": "me"}]},
+				{"number": 2, "title": "theirs", "state": "open", "repository": {"full_name": "o/r"}, "assignees": [{"login": "them"}]},
+				{"number": 3, "title": "nobody's", "state": "open", "repository": {"full_name": "o/r"}}
+			]`)
+		})
+		mux.HandleFunc("GET /api/v1/user", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"login": "me"}`)
+		})
+
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		a := newTestAdapter(t, srv, config.IssueTrackerConfig{})
+
+		issues, err := a.ListIssues(t.Context())
+		if err != nil {
+			t.Fatalf("ListIssues: %v", err)
+		}
+		if gotQuery.Has("assigned") {
+			t.Errorf("query = %v, want no assigned filter", gotQuery)
+		}
+		if len(issues) != 3 || !issues[0].AssignedToMe || issues[1].AssignedToMe || issues[2].AssignedToMe {
+			t.Errorf("issues = %+v, want only the first assigned to me", issues)
 		}
 	})
 

@@ -57,6 +57,16 @@ type issue struct {
 	//nolint:tagliatelle // Redmine wire format
 	UpdatedOn time.Time `json:"updated_on"`
 	Journals  []journal `json:"journals"`
+	//nolint:tagliatelle // Redmine wire format
+	AssignedTo *struct {
+		ID int `json:"id"`
+	} `json:"assigned_to"`
+}
+
+type currentUserResponse struct {
+	User struct {
+		ID int `json:"id"`
+	} `json:"user"`
 }
 
 type issuesResponse struct {
@@ -68,6 +78,8 @@ type issuesResponse struct {
 type redmineAdapter struct {
 	cfg  config.IssueTrackerConfig
 	http *http.Client
+	// meID is the authenticated user's ID once me looked it up.
+	meID int
 }
 
 // New creates a Redmine adapter from cfg.
@@ -83,11 +95,11 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 }
 
 // ListIssues fetches the open issues of each configured project (a slug or a
-// numeric ID), whoever they are assigned to. Without projects, it fetches the
-// open issues assigned to the authenticated user across the whole tracker.
+// numeric ID), whoever they are assigned to. Without projects, it fetches
+// every open issue the authenticated user can see across the whole tracker.
 func (a *redmineAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error) {
 	if len(a.cfg.Projects) == 0 {
-		return a.listPages(ctx, "/issues.json?assigned_to_id=me&status_id=open", "")
+		return a.listPages(ctx, "/issues.json?status_id=open", "")
 	}
 
 	var out []tracker.Issue
@@ -116,7 +128,11 @@ func (a *redmineAdapter) listPages(ctx context.Context, path, project string) ([
 			return nil, fmt.Errorf("fetch redmine issues: %w", err)
 		}
 
-		out = append(out, toIssues(payload.Issues, project)...)
+		me, err := a.meFor(ctx, payload.Issues)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, toIssues(payload.Issues, project, me)...)
 
 		if len(payload.Issues) == 0 || offset+len(payload.Issues) >= payload.TotalCount {
 			break
@@ -126,9 +142,30 @@ func (a *redmineAdapter) listPages(ctx context.Context, path, project string) ([
 	return out, nil
 }
 
+// meFor returns the authenticated user's ID when one of issues has an
+// assignee, 0 otherwise: the lookup is made once, and only when it matters.
+func (a *redmineAdapter) meFor(ctx context.Context, issues []issue) (int, error) {
+	assigned := false
+	for i := range issues {
+		assigned = assigned || issues[i].AssignedTo != nil
+	}
+	if !assigned || a.meID != 0 {
+		return a.meID, nil
+	}
+
+	var payload currentUserResponse
+	if _, err := a.getJSON(ctx, "/users/current.json", &payload); err != nil {
+		return 0, fmt.Errorf("redmine: current user: %w", err)
+	}
+	a.meID = payload.User.ID
+
+	return a.meID, nil
+}
+
 // toIssues converts Redmine issues. Every issue is reported under project;
-// when project is empty, the name comes from the issue itself.
-func toIssues(issues []issue, project string) []tracker.Issue {
+// when project is empty, the name comes from the issue itself. me is the
+// authenticated user's ID, 0 when unknown.
+func toIssues(issues []issue, project string, me int) []tracker.Issue {
 	result := make([]tracker.Issue, 0, len(issues))
 	for _, iss := range issues {
 		statusName, closed := "", false
@@ -141,16 +178,17 @@ func toIssues(issues []issue, project string) []tracker.Issue {
 		}
 
 		result = append(result, tracker.Issue{
-			TrackerType: trackerType,
-			ID:          strconv.Itoa(iss.ID),
-			Subject:     iss.Subject,
-			Description: iss.Description,
-			Status:      statusName,
-			Project:     cmp.Or(project, redmineProjectName(iss.Project)),
-			Labels:      labels,
-			CreatedAt:   iss.CreatedOn,
-			UpdatedAt:   iss.UpdatedOn,
-			Closed:      closed,
+			TrackerType:  trackerType,
+			ID:           strconv.Itoa(iss.ID),
+			Subject:      iss.Subject,
+			Description:  iss.Description,
+			Status:       statusName,
+			Project:      cmp.Or(project, redmineProjectName(iss.Project)),
+			Labels:       labels,
+			CreatedAt:    iss.CreatedOn,
+			UpdatedAt:    iss.UpdatedOn,
+			Closed:       closed,
+			AssignedToMe: me != 0 && iss.AssignedTo != nil && iss.AssignedTo.ID == me,
 		}.Clean())
 	}
 
@@ -314,7 +352,7 @@ func (a *redmineAdapter) CreateIssue(ctx context.Context, title, description str
 		return tracker.Issue{}, fmt.Errorf("redmine: decode created issue: %w", err)
 	}
 
-	return toIssues([]issue{payload.Issue}, p)[0], nil
+	return toIssues([]issue{payload.Issue}, p, 0)[0], nil
 }
 
 // SetIssueOpen closes the issue with the tracker's first closed status, or
@@ -441,7 +479,7 @@ func (a *redmineAdapter) GetIssue(ctx context.Context, issueID string) (tracker.
 	}
 	p, _ := a.project()
 
-	return toIssues([]issue{iss}, p)[0], nil
+	return toIssues([]issue{iss}, p, 0)[0], nil
 }
 
 // IsIssueClosed asks Redmine for the issue and reads status.is_closed.

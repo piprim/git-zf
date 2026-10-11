@@ -33,6 +33,8 @@ type Issue struct {
 	UpdatedAt time.Time
 	// Closed reports the tracker's open/closed state.
 	Closed bool
+	// AssignedToMe reports whether the authenticated user is an assignee.
+	AssignedToMe bool
 }
 
 // Clean returns i with the control characters dropped from what the tracker
@@ -72,9 +74,10 @@ var ErrIssueNotFound = errors.New("tracker: issue not found")
 // Tracker is the contract every adapter must satisfy.
 type Tracker interface {
 	// ListIssues retrieves the open issues: every open issue of each
-	// configured project, whoever it is assigned to, or, without a project,
-	// the open issues assigned to the authenticated user across the tracker.
-	// It is the one listing of the commands and of the issue mirror.
+	// configured project, or, without a project, every open issue the
+	// authenticated user can see across the tracker (on GitHub, the ones
+	// involving the user). It is the one listing of the commands and of the
+	// issue mirror.
 	ListIssues(ctx context.Context) ([]Issue, error)
 	// ListStatuses returns the available status names for the tracker.
 	ListStatuses(ctx context.Context) ([]string, error)

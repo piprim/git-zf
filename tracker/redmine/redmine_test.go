@@ -257,15 +257,25 @@ func TestListIssues(t *testing.T) {
 		}
 	})
 
-	t.Run("lists the issues assigned to the user across the tracker when no project is configured", func(t *testing.T) {
+	t.Run("lists every open issue across the tracker when no project is configured, flagging the user's", func(t *testing.T) {
 		t.Parallel()
 
 		got := make(chan url.Values, 1)
+		userCalls := 0
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /issues.json", func(w http.ResponseWriter, r *http.Request) {
 			got <- r.URL.Query()
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"issues":[],"total_count":0,"offset":0,"limit":100}`)
+			fmt.Fprint(w, `{"issues":[
+				{"id":1,"subject":"mine","status":{"id":1,"name":"New"},"assigned_to":{"id":7,"name":"Me"}},
+				{"id":2,"subject":"theirs","status":{"id":1,"name":"New"},"assigned_to":{"id":8,"name":"Them"}},
+				{"id":3,"subject":"nobody's","status":{"id":1,"name":"New"}}
+			],"total_count":3,"offset":0,"limit":100}`)
+		})
+		mux.HandleFunc("GET /users/current.json", func(w http.ResponseWriter, _ *http.Request) {
+			userCalls++
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"user":{"id":7,"login":"me"}}`)
 		})
 
 		srv := httptest.NewServer(mux)
@@ -276,12 +286,19 @@ func TestListIssues(t *testing.T) {
 			t.Fatalf("New: %v", err)
 		}
 
-		if _, err := adapter.ListIssues(t.Context()); err != nil {
+		issues, err := adapter.ListIssues(t.Context())
+		if err != nil {
 			t.Fatalf("ListIssues: %v", err)
 		}
 
-		if q := <-got; q.Get("assigned_to_id") != "me" || q.Get("status_id") != "open" {
-			t.Errorf("query = %v, want assigned_to_id=me and status_id=open", q)
+		if q := <-got; q.Has("assigned_to_id") || q.Get("status_id") != "open" {
+			t.Errorf("query = %v, want status_id=open and no assigned_to_id", q)
+		}
+		if len(issues) != 3 || !issues[0].AssignedToMe || issues[1].AssignedToMe || issues[2].AssignedToMe {
+			t.Errorf("issues = %+v, want only the first assigned to me", issues)
+		}
+		if _, err := adapter.ListIssues(t.Context()); err != nil || userCalls != 1 {
+			t.Errorf("user lookups = %d, err = %v, want one lookup for two listings", userCalls, err)
 		}
 	})
 

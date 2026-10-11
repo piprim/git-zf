@@ -208,7 +208,7 @@ func TestBuildRows_TrackerAndRepository(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	tk := &fakeIssueTracker{issues: []tracker.Issue{
-		{ID: "T-1", Subject: "First", Status: "In Progress", Project: "octo/cat"},
+		{ID: "T-1", Subject: "First", Status: "In Progress", Project: "octo/cat", AssignedToMe: true},
 		{ID: "T-3", Subject: "Third", Status: "New", Project: "octo/cat"},
 	}}
 
@@ -233,14 +233,14 @@ func TestBuildRows_TrackerAndRepository(t *testing.T) {
 			t.Fatalf("rows = %+v", got)
 		}
 		for _, r := range got {
-			if r.Branch == nil || r.Title != "First" || r.TrackerStatus == nil || *r.TrackerStatus != "In Progress" || r.Project != "octo/cat" {
+			if r.Branch == nil || r.Title != "First" || r.TrackerStatus == nil || *r.TrackerStatus != "In Progress" || r.Project != "octo/cat" || !r.AssignedToMe {
 				t.Errorf("row = %+v", r)
 			}
 		}
 	})
 	t.Run("a tracker issue without a branch is appended once", func(t *testing.T) {
 		got := bySlug["T-3"]
-		if len(got) != 1 || got[0].Branch != nil || got[0].Title != "Third" {
+		if len(got) != 1 || got[0].Branch != nil || got[0].Title != "Third" || got[0].AssignedToMe {
 			t.Errorf("rows = %+v", got)
 		}
 	})

@@ -193,7 +193,7 @@ func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueAction
 
 	t := btable.New(
 		btable.WithColumns(cols),
-		btable.WithRows(applyFilters(rows, status, "", projectAll, includeProj)),
+		btable.WithRows(applyFilters(rows, status, "", projectAll, includeProj, false)),
 		btable.WithFocused(true),
 		btable.WithHeight(issueTableHeight),
 	)
@@ -213,7 +213,7 @@ func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueAction
 		statusFilter:  status,
 		projects:      projects,
 		projectFilter: projectAll,
-		visible:       filterRows(rows, status, "", projectAll, includeProj),
+		visible:       filterRows(rows, status, "", projectAll, includeProj, false),
 		actions:       actions,
 		dialog:        viewport.New(width, issueTableHeight),
 	}, nil
@@ -242,8 +242,8 @@ func buildIssueTableColumns(rows []issue.Row) []btable.Column {
 // applyFilters builds the bubbletea table rows, keeping only those matching
 // status, project, and free-text search. includeProject controls whether the
 // Project cell is emitted (must match the table's column count).
-func applyFilters(rows []issue.Row, status, text, project string, includeProject bool) []btable.Row {
-	kept := filterRows(rows, status, text, project, includeProject)
+func applyFilters(rows []issue.Row, status, text, project string, includeProject, mine bool) []btable.Row {
+	kept := filterRows(rows, status, text, project, includeProject, mine)
 	out := make([]btable.Row, len(kept))
 	for i := range kept {
 		out[i] = issue.RowCells(&kept[i], includeProject)
@@ -253,8 +253,8 @@ func applyFilters(rows []issue.Row, status, text, project string, includeProject
 }
 
 // filterRows is applyFilters on the issue rows: the rows the table shows, in
-// its order.
-func filterRows(rows []issue.Row, status, text, project string, includeProject bool) []issue.Row {
+// its order. mine keeps only the issues the tracker assigns to the user.
+func filterRows(rows []issue.Row, status, text, project string, includeProject, mine bool) []issue.Row {
 	q := strings.ToLower(text)
 	out := make([]issue.Row, 0, len(rows))
 
@@ -265,6 +265,10 @@ func filterRows(rows []issue.Row, status, text, project string, includeProject b
 		}
 
 		if project != projectAll && r.Project != project {
+			continue
+		}
+
+		if mine && !r.AssignedToMe {
 			continue
 		}
 
@@ -319,8 +323,10 @@ type issueTableModel struct {
 	statusFilter  string
 	projects      []string
 	projectFilter string
-	picking       bool
-	pickCursor    int
+	// mine keeps only the issues assigned to the user.
+	mine       bool
+	picking    bool
+	pickCursor int
 	// visible mirrors the table's rows: the one under the cursor is shown.
 	visible []issue.Row
 	actions IssueActions
@@ -339,8 +345,8 @@ func (*issueTableModel) Init() tea.Cmd { return nil }
 
 func (m *issueTableModel) refreshRows() {
 	includeProj := len(m.projects) > 1
-	m.visible = filterRows(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj)
-	m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj))
+	m.visible = filterRows(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj, m.mine)
+	m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj, m.mine))
 }
 
 func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -532,6 +538,11 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		return m, nil, true
 	case "e":
 		return m, m.openEdit(), true
+	case "m":
+		m.mine = !m.mine
+		m.refreshRows()
+
+		return m, nil, true
 	case "tab":
 		m.statusFilter = nextStatus(m.statusFilter)
 		m.refreshRows()
@@ -616,15 +627,20 @@ func (m *issueTableModel) View() string {
 		return m.table.View() + "\n\n" + tabs + "\n\n" + renderProjectPicker(m.pickCursor, m.projects)
 	}
 
-	hint := "enter: show · e: edit · / to filter · tab: status · q to quit"
+	hint := "enter: show · e: edit · / to filter · tab: status · m: mine · q to quit"
 	proj := ""
 
 	if len(m.projects) > 0 {
-		hint = "enter: show · e: edit · / to filter · tab: status · p: project · q to quit"
+		hint = "enter: show · e: edit · / to filter · tab: status · p: project · m: mine · q to quit"
 		proj = "    Project: " + activeTabStyle.Render(m.projectFilter)
 	}
 
-	view := m.table.View() + "\n\n" + tabs + proj
+	mine := "  " + inactiveTabStyle.Render("Mine")
+	if m.mine {
+		mine = "  " + activeTabStyle.Render("[ Mine ]")
+	}
+
+	view := m.table.View() + "\n\n" + tabs + mine + proj
 
 	if m.filtering {
 		return view + "    /" + m.filter.View() + "  (esc: clear  enter: confirm)"

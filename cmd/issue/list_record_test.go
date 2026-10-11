@@ -10,6 +10,8 @@ import (
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
 	issuepkg "github.com/piprim/git-zf/issue"
+	"github.com/piprim/git-zf/tracker"
+	"github.com/piprim/git-zf/tracker/fake"
 )
 
 func TestBuildRows_RepoIssues(t *testing.T) {
@@ -174,7 +176,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("the dialog renders a row's issue as show does", func(t *testing.T) {
 		row := bySlug(t, "")[backlog.ShortID()]
-		out, err := renderIssue(ctx, infra.client, row.IssueSlug)
+		out, err := renderIssue(ctx, infra, row.IssueSlug)
 		if err != nil {
 			t.Fatalf("renderIssue: %v", err)
 		}
@@ -185,9 +187,9 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		}
 	})
 
-	t.Run("a row without a repo issue is an error", func(t *testing.T) {
+	t.Run("a row without a repo issue nor a tracker is an error", func(t *testing.T) {
 		row := bySlug(t, "")["JIRA-7"]
-		if _, err := renderIssue(ctx, infra.client, row.IssueSlug); err == nil {
+		if _, err := renderIssue(ctx, infra, row.IssueSlug); err == nil {
 			t.Error("expected an error")
 		}
 		if _, err := editIssue(ctx, infra, row.IssueSlug, "Legacy", ""); err == nil {
@@ -305,6 +307,40 @@ func TestBuildRows_StatusFollowsIssueState(t *testing.T) {
 	t.Run("all lists both", func(t *testing.T) {
 		if got := slugs(t, "all"); len(got) != 2 {
 			t.Errorf("all = %v, want 2 rows", got)
+		}
+	})
+}
+
+func TestRenderIssue_TrackerOnlyRow(t *testing.T) {
+	t.Parallel()
+
+	rig := newRecordRig(t, "alice", "")
+	ctx := t.Context()
+	ft := &fake.Tracker{
+		ProjectIssues: []tracker.Issue{{
+			TrackerType: "fake", ID: "77", Subject: "From the tracker", Description: "Steps to reproduce",
+			Status: "New", Project: "cpro", Labels: []string{"bug"},
+		}},
+		Comments: map[string][]tracker.Comment{"77": {{ID: "1", Author: "bob", Body: "On it"}}},
+	}
+	infra := issueListInfra{stderr: &bytes.Buffer{}, client: rig.client, tracker: ft}
+
+	out, err := renderIssue(ctx, infra, "77")
+
+	t.Run("the tracker's issue is shown with its comments", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("renderIssue: %v", err)
+		}
+		for _, want := range []string{"77  From the tracker", "Status: New", "Project: cpro", "Labels: bug", "Steps to reproduce", "bob", "On it"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output misses %q:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("an issue the tracker does not know is an error", func(t *testing.T) {
+		if _, err := renderIssue(ctx, infra, "78"); err == nil {
+			t.Error("expected an error")
 		}
 	})
 }

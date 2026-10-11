@@ -28,6 +28,8 @@ type Row struct {
 	// CreatedAt is when the issue was created, from its record or the
 	// tracker; zero when neither says (the row then shows its branch's date).
 	CreatedAt time.Time `json:"created_at,omitzero"`
+	// AssignedToMe reports whether the tracker assigns the issue to the user.
+	AssignedToMe bool `json:"assigned_to_me"`
 }
 
 // MatchesStatus reports whether r belongs under status ("open", "closed" or

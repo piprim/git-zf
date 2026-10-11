@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -118,7 +119,7 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 	}
 
 	actions := tui.IssueActions{
-		Show: func(slug string) (string, error) { return renderIssue(ctx, infra.client, slug) },
+		Show: func(slug string) (string, error) { return renderIssue(ctx, infra, slug) },
 		Load: func(slug string) (string, string, error) {
 			rec, err := resolveRow(ctx, infra.client, slug)
 
@@ -151,17 +152,52 @@ func resolveRow(ctx context.Context, client *git.Client, slug string) (issuepkg.
 }
 
 // renderIssue renders the issue of a table row as `issue show` does, for the
-// list's dialog.
-func renderIssue(ctx context.Context, client *git.Client, slug string) (string, error) {
-	rec, err := resolveRow(ctx, client, slug)
-	if err != nil {
+// list's dialog. A row with no issue in the repository is a tracker issue:
+// it is read from the tracker, with its comments.
+func renderIssue(ctx context.Context, infra issueListInfra, slug string) (string, error) {
+	var b strings.Builder
+
+	rec, err := resolveRow(ctx, infra.client, slug)
+	if err == nil {
+		renderRecord(&b, &rec)
+
+		return b.String(), nil
+	}
+	if !errors.Is(err, git.ErrIssueNotFound) || infra.tracker == nil {
 		return "", err
 	}
 
-	var b strings.Builder
-	renderRecord(&b, &rec)
+	iss, err := infra.tracker.GetIssue(ctx, slug)
+	if err != nil {
+		return "", fmt.Errorf("tracker issue %s: %w", slug, err)
+	}
+	comments, err := infra.tracker.ListComments(ctx, slug)
+	if err != nil {
+		return "", fmt.Errorf("tracker issue %s comments: %w", slug, err)
+	}
+	renderTrackerIssue(&b, &iss, comments)
 
 	return b.String(), nil
+}
+
+// renderTrackerIssue prints a tracker issue the way renderRecord prints a
+// record.
+func renderTrackerIssue(w io.Writer, iss *tracker.Issue, comments []tracker.Comment) {
+	fmt.Fprintf(w, "%s  %s\n", iss.ID, iss.Subject)
+	fmt.Fprintf(w, "Status: %s   Project: %s   Created: %s\n",
+		iss.Status, iss.Project, iss.CreatedAt.Local().Format(showTimeLayout))
+	if len(iss.Labels) > 0 {
+		fmt.Fprintf(w, "Labels: %s\n", strings.Join(iss.Labels, ", "))
+	}
+	fmt.Fprintf(w, "Tracker: %s %s #%s (not stored in the repository)\n", iss.TrackerType, iss.Project, iss.ID)
+
+	if iss.Description != "" {
+		fmt.Fprintf(w, "\n%s\n", iss.Description)
+	}
+
+	for _, c := range comments {
+		fmt.Fprintf(w, "\n--- %s  %s\n%s\n", c.CreatedAt.Local().Format(showTimeLayout), c.Author, c.Body)
+	}
 }
 
 // editIssue saves the edit dialog of a table row as `issue edit` does and
@@ -233,6 +269,7 @@ func mergeTrackerIssues(issues []tracker.Issue, rows []issuepkg.Row) []issuepkg.
 		seen[iss.ID] = true
 		status := iss.Status
 		rows[i].Title, rows[i].Project, rows[i].TrackerStatus, rows[i].CreatedAt = iss.Subject, iss.Project, &status, iss.CreatedAt
+		rows[i].AssignedToMe = iss.AssignedToMe
 	}
 
 	for i := range issues {
@@ -243,6 +280,7 @@ func mergeTrackerIssues(issues []tracker.Issue, rows []issuepkg.Row) []issuepkg.
 		status := iss.Status
 		rows = append(rows, issuepkg.Row{
 			IssueSlug: iss.ID, Title: iss.Subject, Project: iss.Project, TrackerStatus: &status, CreatedAt: iss.CreatedAt,
+			AssignedToMe: iss.AssignedToMe,
 		})
 	}
 
