@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
@@ -129,7 +130,7 @@ func labelChoices(ctx context.Context, client *git.Client, m *issuepkg.Mirror, c
 }
 
 func runLabel(ctx context.Context, client *git.Client, p recordPrompter, args []string, m *issuepkg.Mirror) error {
-	fetchIssues(ctx, client)
+	issueflow.FetchIssues(ctx, client)
 
 	var idArgs, tokens []string
 	if len(args) > 0 {

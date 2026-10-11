@@ -705,7 +705,7 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 	}
 
 	existing, _ := branch.Load(ctx, deps.client, picked.IssueSlug)
-	mirror := mirrorOf(deps.cfg, deps.tracker)
+	mirror := issueflow.MirrorOf(deps.cfg, deps.tracker)
 	tracked := existing != nil && existing.TrackerType != ""
 
 	// The issue refs are fetched once, here: whoever closes the branch may
@@ -713,7 +713,7 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 	// closing someone else's branch knows the issue only through the branch
 	// chain).
 	if existing != nil && (existing.IssueID != "" || mirror != nil) {
-		fetchIssues(ctx, deps.client)
+		issueflow.FetchIssues(ctx, deps.client)
 	}
 
 	// Without a mirror the record is closed before the status picker, as it
@@ -740,7 +740,7 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 	// (Redmine's "Resolved") is not overridden. A repo-born record can carry
 	// the tracker type too (its issue was exported), hence the lookup.
 	if tracked && (existing.IssueID == "" || trackerBornRecord(ctx, deps.client, existing)) {
-		reconcileIssues(ctx, deps.client, mirror)
+		issueflow.ReconcileIssues(ctx, deps.client, mirror)
 
 		return
 	}

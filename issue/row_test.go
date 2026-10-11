@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -68,4 +69,35 @@ func TestMatchesStatus_RepoIssueState(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecordRow(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+
+	t.Run("an unlinked record: short ID, its state as status, no tracker number", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Record{ID: "0123456789abcdef0123", Title: "Login", Labels: []string{"ui"}, State: StateOpen, CreatedAt: created}
+		row := RecordRow(&rec)
+		if row.IssueSlug != rec.ShortID() || row.Title != "Login" || !slices.Equal(row.Labels, []string{"ui"}) ||
+			row.State != StateOpen || row.TrackerStatus == nil || *row.TrackerStatus != StateOpen ||
+			row.TrackerID != "" || !row.CreatedAt.Equal(created) || row.Branch != nil {
+			t.Errorf("row = %+v", row)
+		}
+	})
+
+	t.Run("a linked record: the tracker number as slug and ID, the tracker's status", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Record{
+			ID: "0123456789abcdef0123", Title: "Login", State: StateOpen, TrackerStatus: "In Progress",
+			Tracker: &TrackerLink{Type: "fake", Project: "zf", ID: "42"},
+		}
+		row := RecordRow(&rec)
+		if row.IssueSlug != "42" || row.TrackerID != "42" || row.TrackerStatus == nil || *row.TrackerStatus != "In Progress" {
+			t.Errorf("row = %+v", row)
+		}
+	})
 }

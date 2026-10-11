@@ -8,6 +8,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	issuepkg "github.com/piprim/git-zf/issue"
@@ -22,7 +23,7 @@ func mirrorOn(rig *closeTestRig) *issuepkg.Mirror {
 		Projects: []config.TrackerProject{{Name: "zf", ID: "piprim/git-zf"}},
 	}
 
-	return mirrorOf(rig.cfg, rig.tracker)
+	return issueflow.MirrorOf(rig.cfg, rig.tracker)
 }
 
 // closeTrackerBorn closes the rig's branch ABC-1, born from tracker issue

@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 	"time"
@@ -142,4 +143,31 @@ func UniqueProjects(rows []Row) []string {
 	slices.Sort(out)
 
 	return out
+}
+
+// RecordRow is the row of a repo issue that has no branch: what the list
+// shows for a backlog item and what the pickers offer for a record.
+func RecordRow(rec *Record) Row {
+	return Row{
+		IssueSlug: rec.DisplayID(), Title: rec.Title,
+		Labels: rec.Labels, State: rec.State, TrackerStatus: recordStatus(rec),
+		TrackerID: trackerNumber(rec), CreatedAt: rec.CreatedAt,
+	}
+}
+
+// recordStatus is the status shown for a repo issue: the tracker's status
+// name when the issue is mirrored, its open/closed state otherwise.
+func recordStatus(rec *Record) *string {
+	s := cmp.Or(rec.TrackerStatus, rec.State)
+
+	return &s
+}
+
+// trackerNumber is the tracker number of a linked record, "" otherwise.
+func trackerNumber(rec *Record) string {
+	if rec.Tracker == nil {
+		return ""
+	}
+
+	return rec.Tracker.ID
 }

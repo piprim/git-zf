@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
@@ -25,7 +26,7 @@ func newMirrorRig(t *testing.T) (*recordRig, *fake.Tracker, *issuepkg.Mirror) {
 	}
 	ft := &fake.Tracker{}
 
-	return rig, ft, mirrorOf(rig.cfg, ft)
+	return rig, ft, issueflow.MirrorOf(rig.cfg, ft)
 }
 
 func fromTracker(id, title, status string) tracker.Issue {
@@ -48,7 +49,7 @@ func TestMirrorOf(t *testing.T) {
 	t.Run("mirror on gives a mirror named by the tracker type and the name", func(t *testing.T) {
 		t.Parallel()
 
-		m := mirrorOf(on, &fake.Tracker{})
+		m := issueflow.MirrorOf(on, &fake.Tracker{})
 		if m == nil || m.Type != "fake" || m.Project != "zf" {
 			t.Errorf("mirror = %+v", m)
 		}
@@ -56,14 +57,14 @@ func TestMirrorOf(t *testing.T) {
 	t.Run("mirror off gives nil", func(t *testing.T) {
 		t.Parallel()
 
-		if m := mirrorOf(off, &fake.Tracker{}); m != nil {
+		if m := issueflow.MirrorOf(off, &fake.Tracker{}); m != nil {
 			t.Errorf("mirror = %+v, want nil", m)
 		}
 	})
 	t.Run("no tracker gives nil", func(t *testing.T) {
 		t.Parallel()
 
-		if m := mirrorOf(on, nil); m != nil {
+		if m := issueflow.MirrorOf(on, nil); m != nil {
 			t.Errorf("mirror = %+v, want nil", m)
 		}
 	})
@@ -141,7 +142,7 @@ func TestMirror_NewFetchesBeforeReconciling(t *testing.T) {
 			Projects: []config.TrackerProject{{Name: "zf", ID: "piprim/git-zf"}},
 		}
 
-		return rig, mirrorOf(rig.cfg, ft)
+		return rig, issueflow.MirrorOf(rig.cfg, ft)
 	}
 	alice, aliceMirror := clone("alice")
 	bob, bobMirror := clone("bob")
@@ -348,7 +349,7 @@ func TestMirror_ShowByTrackerNumber(t *testing.T) {
 	rig, ft, m := newMirrorRig(t)
 	ctx := t.Context()
 	ft.ProjectIssues = []tracker.Issue{fromTracker("42", "From tracker", "open")}
-	reconcileIssues(ctx, rig.client, m)
+	issueflow.ReconcileIssues(ctx, rig.client, m)
 	calls := ft.ListCalls
 	rig.stdout.Reset()
 

@@ -66,19 +66,6 @@ func IssueConfirm(confirmTitle string, confirmed *bool) *huh.Group {
 	)
 }
 
-// IssueTrackerToggle asks whether to fetch issues from the tracker.
-// trackerFirst=true pre-selects YES (used for `issue start`);
-// trackerFirst=false pre-selects NO (used for `branch new`).
-func IssueTrackerToggle(useTracker *bool, trackerFirst bool, trackerType string) *huh.Group {
-	*useTracker = trackerFirst
-
-	return huh.NewGroup(
-		huh.NewConfirm().
-			Title(fmt.Sprintf("Fetch issues from %s?", trackerType)).
-			Value(useTracker),
-	)
-}
-
 // WorktreeToggle asks whether to create a git worktree or a plain branch.
 // Pre-selected default is false (plain branch).
 func WorktreeToggle(useWorktree *bool) *huh.Group {
@@ -91,9 +78,8 @@ func WorktreeToggle(useWorktree *bool) *huh.Group {
 	)
 }
 
-const issueTrackerPickerHeight = 10
-
-// IssueTrackerPicker shows the live issue list and branch type selector.
+// IssueTrackerPicker asks the branch type of a tracker issue; it lists the
+// issues given (one, from the start flow) and the types.
 func IssueTrackerPicker(
 	issues []tracker.Issue,
 	selected *int,
@@ -122,23 +108,11 @@ func IssueTrackerPicker(
 		huh.NewSelect[int]().
 			Title("Pick an issue:").
 			Options(opts...).
-			Value(selected).
-			Height(issueTrackerPickerHeight),
+			Value(selected),
 		huh.NewSelect[string]().
 			Title("Type:").
 			Options(typeOpts...).
 			Value(branchType),
-	)
-}
-
-// IssueTrackerError shows an error note with a "Continue with manual input" button.
-func IssueTrackerError(msg string) *huh.Group {
-	return huh.NewGroup(
-		huh.NewNote().
-			Title("Tracker error").
-			Description(msg).
-			Next(true).
-			NextLabel("Continue with manual input"),
 	)
 }
 
@@ -173,10 +147,36 @@ type IssueActions struct {
 	Load func(slug string) (title, description string, err error)
 	// Edit saves the edit form and returns the line the table shows.
 	Edit func(slug, title, description string) (string, error)
+	// Pick is set when the table picks an issue: enter and s pick the row
+	// under the cursor and quit. With NewIssue, n picks "new issue".
+	Pick     bool
+	NewIssue bool
 }
 
-// IssueTableModel is the `issue list` table. Enter opens the row's issue in a
-// dialog that replaces the table, e opens its edit form; esc closes either.
+// IssuePick is how the issue table was quit.
+type IssuePick int
+
+const (
+	IssuePickNone IssuePick = iota // q or ctrl+c: nothing picked
+	IssuePickRow                   // s or enter: the slug is the row's issue
+	IssuePickNew                   // n: a new issue
+)
+
+// PickedIssue reports how the table was quit and, for IssuePickRow, the
+// slug of the picked row. m is the model tea.Program.Run returned.
+func PickedIssue(m tea.Model) (IssuePick, string) {
+	t, ok := m.(*issueTableModel)
+	if !ok {
+		return IssuePickNone, ""
+	}
+
+	return t.pick, t.pickedSlug
+}
+
+// IssueTableModel is the issue table. In list mode enter opens the row's
+// issue in a dialog that replaces the table, e opens its edit form (esc
+// closes either) and s picks the row and quits; in pick mode (actions.Pick)
+// enter and s pick, n asks for a new issue.
 func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueActions) (tea.Model, error) {
 	projects := issue.UniqueProjects(rows)
 	includeProj := len(projects) > 1
@@ -339,6 +339,9 @@ type issueTableModel struct {
 	editSlug, editTitle, editDescription string
 	// notice is the line under the table until the next key.
 	notice string
+	// pick and pickedSlug are how the table was quit: see PickedIssue.
+	pick       IssuePick
+	pickedSlug string
 }
 
 func (*issueTableModel) Init() tea.Cmd { return nil }
@@ -475,6 +478,25 @@ func (m *issueTableModel) openDialog() {
 	m.viewing = true
 }
 
+// pickRow quits with the row under the cursor picked; nothing happens on an
+// empty table, and a closed issue (closed record, merged branch) is refused
+// with a notice.
+func (m *issueTableModel) pickRow() (tea.Model, tea.Cmd, bool) {
+	c := m.table.Cursor()
+	if c < 0 || c >= len(m.visible) {
+		return m, nil, true
+	}
+	row := &m.visible[c]
+	if !row.MatchesStatus(statusOpen) {
+		m.notice = row.IssueSlug + " is closed: not started"
+
+		return m, nil, true
+	}
+	m.pick, m.pickedSlug = IssuePickRow, row.IssueSlug
+
+	return m, tea.Quit, true
+}
+
 func (m *issueTableModel) updatePicking(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	opts := projectPickerOptions(m.projects)
 	switch key.String() {
@@ -533,7 +555,20 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	case "q", "ctrl+c":
 		return m, tea.Quit, true
 	case "enter":
+		if m.actions.Pick {
+			return m.pickRow()
+		}
 		m.openDialog()
+
+		return m, nil, true
+	case "s":
+		return m.pickRow()
+	case "n":
+		if m.actions.Pick && m.actions.NewIssue {
+			m.pick = IssuePickNew
+
+			return m, tea.Quit, true
+		}
 
 		return m, nil, true
 	case "e":
@@ -627,11 +662,10 @@ func (m *issueTableModel) View() string {
 		return m.table.View() + "\n\n" + tabs + "\n\n" + renderProjectPicker(m.pickCursor, m.projects)
 	}
 
-	hint := "enter: show · e: edit · / to filter · tab: status · m: mine · q to quit"
+	hint := m.hint()
 	proj := ""
 
 	if len(m.projects) > 0 {
-		hint = "enter: show · e: edit · / to filter · tab: status · p: project · m: mine · q to quit"
 		proj = "    Project: " + activeTabStyle.Render(m.projectFilter)
 	}
 
@@ -650,6 +684,23 @@ func (m *issueTableModel) View() string {
 	}
 
 	return view + "    " + hint
+}
+
+// hint is the key line under the table, for the mode.
+func (m *issueTableModel) hint() string {
+	keys := "enter: show · e: edit · s: start"
+	if m.actions.Pick {
+		keys = "enter: pick"
+		if m.actions.NewIssue {
+			keys += " · n: new issue"
+		}
+	}
+	keys += " · / to filter · tab: status"
+	if len(m.projects) > 0 {
+		keys += " · p: project"
+	}
+
+	return keys + " · m: mine · q to quit"
 }
 
 // BranchPicker presents a list of branches under title (close and the review

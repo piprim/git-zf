@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/spf13/cobra"
@@ -43,7 +44,7 @@ func (i Issue) commentRunE(cmd *cobra.Command, args []string, message string) er
 }
 
 func runComment(ctx context.Context, client *git.Client, p recordPrompter, args []string, message string, m *issuepkg.Mirror) error {
-	fetchIssues(ctx, client)
+	issueflow.FetchIssues(ctx, client)
 
 	rec, err := resolveRecord(ctx, client, p, args)
 	if err != nil {

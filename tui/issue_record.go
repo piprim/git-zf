@@ -5,14 +5,7 @@ import (
 	"slices"
 
 	"github.com/charmbracelet/huh"
-	"github.com/piprim/git-zf/issue"
 )
-
-// IssueRecordNew is the value IssueRecordPicker stores when the user picks
-// the "New issue…" entry instead of a record.
-const IssueRecordNew = ""
-
-const issueRecordPickerHeight = 10
 
 func requiredText(s string) error {
 	if s == "" {
@@ -68,28 +61,6 @@ func IssueEditForm(title, description *string) *huh.Group {
 		huh.NewText().
 			Title("Description:").
 			Value(description),
-	)
-}
-
-// IssueRecordPicker lists repo issues as "[short-id] title". picked receives
-// the full ID of the chosen record. With offerNew, a first "New issue…" entry
-// stores IssueRecordNew instead.
-func IssueRecordPicker(records []issue.Record, picked *string, offerNew bool) *huh.Group {
-	opts := make([]huh.Option[string], 0, len(records)+1)
-	if offerNew {
-		opts = append(opts, huh.NewOption("New issue…", IssueRecordNew))
-	}
-
-	for i := range records {
-		opts = append(opts, huh.NewOption("["+records[i].DisplayID()+"] "+records[i].Title, records[i].ID))
-	}
-
-	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Pick an issue:").
-			Options(opts...).
-			Value(picked).
-			Height(issueRecordPickerHeight),
 	)
 }
 

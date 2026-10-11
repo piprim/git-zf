@@ -45,18 +45,25 @@ cases live in `cmd/mergeflow/mergeflow_worktree_test.go` (`newWorktreeRig`).
 
 ### Testing the start flow
 
-The issue-start flow (used by both `issue start` and `branch new`) is
-end-to-end tested in `cmd/issue/start_e2e_test.go`. The pattern mirrors the
-close-flow tests: a real on-disk repo, the fake tracker at `tracker/fake/`,
-and a `scriptedStartPrompter` that returns canned answers for every huh form.
+The issue-start flow (used by `issue start`, `branch new` and `s` in
+`issue list`) is end-to-end tested in `cmd/issue/start_e2e_test.go`,
+`start_record_e2e_test.go` and `start_row_e2e_test.go`. The pattern mirrors
+the close-flow tests: a real on-disk repo, the fake tracker at
+`tracker/fake/`, and a `scriptedStartPrompter` that returns canned answers
+for every form. The picker is the `issue list` table over
+`issueflow.ListRows`: a script picks a row by slug (`PickSlug`), asks for a
+new issue (`PickNew`) and reads what it was offered in `OfferedRows`. An
+empty table is skipped: the manual form opens at once.
 
 To exercise just the start-flow tests:
 
-    mise exec -- go test ./cmd/issue/... -run "^TestRunIssueStart_" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestRunIssueStart_|^TestStartRow_" -v
 
-When adding a new toggle, confirm, or picker form, extend `StartPrompter` and
-add a matching E2E test alongside the existing happy-path and failure-mode
-tests.
+`branch new` lists the branches and the repo issues alone
+(`IssueStartFlags.Tracker` false); `issue start` and `issue list` list the
+tracker too. When adding a toggle, confirm or picker form, extend
+`StartPrompter` and add a matching E2E test alongside the existing
+happy-path and failure-mode tests.
 
 ### Testing the prune flow
 

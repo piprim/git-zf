@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,11 +24,27 @@ import (
 // Production code builds it via BuildStartDeps; tests inject directly.
 // Exported because cmd/branch/branch.go's newRunE constructs one too.
 type StartDeps struct {
-	Client             *git.Client
-	Cfg                *config.AppConfig
-	Tracker            tracker.Tracker // nil when cfg.IssueTracker.Type == ""
+	Client  *git.Client
+	Cfg     *config.AppConfig
+	Tracker tracker.Tracker // nil when cfg.IssueTracker.Type == ""
+	// Mirror is non-nil when the issues are mirrored with the tracker; the
+	// listing then comes from the reconcile.
+	Mirror *issue.Mirror
+	// Stderr receives the warnings of the tracker listing and of the repo
+	// issues; nil means Client.IO().Err, where the fetch and the reconcile
+	// always write.
+	Stderr             io.Writer
 	Flags              issue.IssueStartFlags
 	BaseBranchOverride string // set by PickBaseBranch; skips the parent lookup in prepareBranch
+}
+
+// errW is where the warnings go.
+func (d StartDeps) errW() io.Writer {
+	if d.Stderr != nil {
+		return d.Stderr
+	}
+
+	return d.Client.IO().Err
 }
 
 // BuildStartDeps constructs the production StartDeps from a cobra command.
@@ -54,40 +71,83 @@ func BuildStartDeps(
 		}
 
 		deps.Tracker = t
+		deps.Mirror = MirrorOf(cfg, t)
 	}
 
 	return deps, nil
 }
 
-// RunIssueStart is the prompter-driven core of the issue-start flow. Called
-// from cmd/issue's startRunE (production, via a HuhStartPrompter) and from
-// cmd/branch's newRunE (also production). Tests call it directly with a
-// scriptedStartPrompter. TrackerFirst is carried inside deps.Flags.
-//
-// Returns nil on two non-error exits: (1) pickIssue returns (nil, nil) — only
-// possible when a test prompter does so; production prompters always return
-// a non-nil issue or an error — and (2) prompter.ResolveBranchConflict
-// returns (nil, nil) to signal the operator aborted or checked out an
-// existing branch.
-func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) error {
-	allowedBranchTypes := make([]string, 0, len(deps.Cfg.CommitTypes))
+// allowedTypes are the branch types this clone's commit types allow.
+func allowedTypes(deps StartDeps) ([]string, error) {
+	types := make([]string, 0, len(deps.Cfg.CommitTypes))
 	for _, t := range deps.Cfg.CommitTypes {
-		allowedBranchTypes = append(allowedBranchTypes, t.Name)
+		types = append(types, t.Name)
+	}
+	if len(types) == 0 {
+		return nil, errors.New("config: no commit types found")
 	}
 
-	if len(allowedBranchTypes) == 0 {
-		return errors.New("config: no commit types found")
-	}
+	return types, nil
+}
 
-	pickedIssue, err := pickIssue(ctx, deps, prompter, allowedBranchTypes)
+// RunIssueStart is the prompter-driven issue-start flow: the open issues
+// are listed (ListRows), one is picked in the table (PickRow) or a new one
+// is asked for in the manual form, and StartIssue creates its branch.
+// Called from cmd/issue's startRunE and cmd/branch's newRunE with a
+// HuhStartPrompter; tests call it with a scripted one. An empty table is
+// skipped: the manual form opens at once.
+//
+// Returns nil on the non-error exits: the operator aborted at the confirm
+// or in the conflict loop, or a test prompter returned no issue.
+func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) error {
+	types, err := allowedTypes(deps)
 	if err != nil {
 		return err
 	}
 
-	if pickedIssue == nil {
-		return nil
+	rows, err := ListRows(ctx, deps, issue.StateOpen)
+	if err != nil {
+		return fmt.Errorf("list issues: %w", err)
 	}
 
+	var row *issue.Row
+	if len(rows) > 0 {
+		if row, err = prompter.PickRow(ctx, rows); err != nil {
+			return fmt.Errorf("pick issue: %w", err)
+		}
+	}
+
+	var picked *issue.Issue
+	if row == nil {
+		picked, err = newIssueFromUser(ctx, deps.Client, prompter, types)
+	} else {
+		picked, err = issueFromRow(ctx, deps, prompter, row, types)
+	}
+	if err != nil || picked == nil {
+		return err
+	}
+
+	return StartIssue(ctx, deps, prompter, picked)
+}
+
+// StartRow starts the issue of a list row: `s` in `issue list`.
+func StartRow(ctx context.Context, deps StartDeps, prompter StartPrompter, row *issue.Row) error {
+	types, err := allowedTypes(deps)
+	if err != nil {
+		return err
+	}
+
+	picked, err := issueFromRow(ctx, deps, prompter, row, types)
+	if err != nil || picked == nil {
+		return err
+	}
+
+	return StartIssue(ctx, deps, prompter, picked)
+}
+
+// StartIssue creates the branch of a picked issue: base branch, worktree,
+// confirm, create, record, push, tracker status.
+func StartIssue(ctx context.Context, deps StartDeps, prompter StartPrompter, pickedIssue *issue.Issue) error {
 	// When --parent was not explicitly set, offer a base branch picker so the
 	// user can create a sub-task without knowing the flag exists. Candidates are
 	// the union of local branches and remote-tracking branches: on a fresh clone
@@ -122,101 +182,60 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 	return createFlow(ctx, deps, prompter, pickedIssue, creator)
 }
 
-// pickIssue chooses between tracker-driven and user-driven issue input.
-// Returns nil only if a test prompter returns nil; production prompters
-// always return a non-nil issue or an error. The (nil, nil) guard in
-// RunIssueStart exists for test safety.
-func pickIssue(
-	ctx context.Context,
-	deps StartDeps,
-	prompter StartPrompter,
-	allowedBranchTypes []string,
+// issueFromRow converts a picked row. A repo issue (State set) is resolved
+// and goes through the record path; any other row is asked its type with
+// the one-issue form and starts as a tracker issue when the tracker listed
+// it this run (TrackerStatus set), as a manual one otherwise: a branch
+// started with a typed ID stays manual, and branch new never reaches the
+// tracker. The row's branch, if any, is ignored here: the conflict loop
+// deals with an existing branch name.
+func issueFromRow(
+	ctx context.Context, deps StartDeps, p StartPrompter, row *issue.Row, types []string,
 ) (*issue.Issue, error) {
-	// manual is the non-tracker path: an open issue stored in the repository,
-	// a new one, or an ID typed by hand.
-	manual := func() (*issue.Issue, error) {
-		return getFromRepoOrUser(ctx, deps.Client, prompter, allowedBranchTypes)
-	}
-
-	if deps.Tracker == nil {
-		got, err := manual()
-		if err != nil {
-			return nil, fmt.Errorf("issue from user: %w", err)
+	if row.State == "" {
+		src := tracker.Issue{ID: row.IssueSlug, Subject: row.Title}
+		if row.TrackerStatus != nil {
+			src.TrackerType = deps.Cfg.IssueTracker.Type
 		}
+		got, err := p.PickIssueFromTracker(ctx, []tracker.Issue{src}, types)
+		if err != nil {
+			return nil, fmt.Errorf("tracker issue form: %w", err)
+		}
+		if got == nil {
+			return nil, nil
+		}
+		got.Issue = src
 
 		return got, nil
 	}
 
-	useTracker, err := prompter.PickUseTracker(ctx, deps.Cfg.IssueTracker.Type, deps.Flags.TrackerFirst)
+	// A branch started under another slug is joined to its record by the
+	// full ID its chain carries.
+	query := row.IssueSlug
+	if row.Branch != nil && row.Branch.IssueID != "" {
+		query = row.Branch.IssueID
+	}
+	rec, err := issue.Resolve(ctx, deps.Client, query)
 	if err != nil {
-		return nil, fmt.Errorf("pick use tracker: %w", err)
+		return nil, fmt.Errorf("resolve issue %s: %w", row.IssueSlug, err)
+	}
+	if rec.Tracker != nil && rec.Tracker.Born {
+		return fromImportedRecord(ctx, p, &rec, types)
+	}
+	if err := checkRecordType(&rec, types); err != nil {
+		return nil, err
 	}
 
-	if !useTracker {
-		got, err := manual()
-		if err != nil {
-			return nil, fmt.Errorf("issue from user: %w", err)
-		}
-
-		return got, nil
-	}
-
-	got, err := getFromTracker(ctx, prompter, deps.Tracker, allowedBranchTypes, manual)
-	if err != nil {
-		return nil, fmt.Errorf("issue from tracker: %w", err)
-	}
-
-	return got, nil
+	return issueFromRecord(&rec), nil
 }
 
-// getFromRepoOrUser is the manual path. It offers the open issues stored in
-// the repository, when there are any; otherwise, or when the operator picks
-// "New issue…", it opens the manual form. A form answer with an empty issue ID
-// creates a new issue in the repository and uses its ID; a typed ID is used as
-// is, with no record (an issue living in a tracker git-zf does not talk to).
-func getFromRepoOrUser(
-	ctx context.Context, c *git.Client, p StartPrompter, allowedTypes []string,
-) (*issue.Issue, error) {
-	errW := c.IO().Err
-
-	if _, err := issue.Fetch(ctx, c); err != nil {
-		fmt.Fprintf(errW, "warning: could not fetch issues, using local data: %v\n", err)
-	}
-
-	records, warnings, err := issue.List(ctx, c)
-	if err != nil {
-		return nil, fmt.Errorf("list repo issues: %w", err)
-	}
-	for _, w := range warnings {
-		fmt.Fprintln(errW, w)
-	}
-
-	open := make([]issue.Record, 0, len(records))
-	for i := range records {
-		if records[i].State == issue.StateOpen {
-			open = append(open, records[i])
-		}
-	}
-
-	if len(open) > 0 {
-		rec, err := p.PickIssueFromRepo(ctx, open)
-		if err != nil {
-			return nil, fmt.Errorf("repo issue picker: %w", err)
-		}
-		if rec != nil {
-			if rec.Tracker != nil && rec.Tracker.Born {
-				return fromImportedRecord(ctx, p, rec, allowedTypes)
-			}
-
-			if err := checkRecordType(rec, allowedTypes); err != nil {
-				return nil, err
-			}
-
-			return issueFromRecord(rec), nil
-		}
-	}
-
-	got, err := p.PickIssueFromUser(ctx, allowedTypes)
+// newIssueFromUser is the manual form. A typed ID is used as is, with no
+// record (an issue living in a tracker git-zf does not talk to); an empty
+// one prepares a new repo issue, which createFlow publishes once the branch
+// exists, so every abort in between (base picker, confirm, branch conflict,
+// git failure) leaves no issue behind.
+func newIssueFromUser(ctx context.Context, c *git.Client, p StartPrompter, types []string) (*issue.Issue, error) {
+	got, err := p.PickIssueFromUser(ctx, types)
 	if err != nil {
 		return nil, fmt.Errorf("issue input: %w", err)
 	}
@@ -224,10 +243,6 @@ func getFromRepoOrUser(
 		return got, nil
 	}
 
-	// Only prepare the issue here: it gets its ID, which names the branch, but
-	// it does not exist until createFlow publishes it, after the branch was
-	// created. Every abort in between (base picker, confirm, branch conflict,
-	// git failure) then leaves no issue behind.
 	id, err := issue.Prepare(ctx, c, issue.NewIssue{Title: got.Subject, BranchType: got.Type})
 	if err != nil {
 		return nil, fmt.Errorf("prepare repo issue: %w", err)
@@ -239,7 +254,7 @@ func getFromRepoOrUser(
 	return got, nil
 }
 
-// publishRepoIssue makes the issue prepared by getFromRepoOrUser exist and
+// publishRepoIssue makes the issue prepared by newIssueFromUser exist and
 // pushes it. Called once the branch exists; a no-op for an issue that was not
 // prepared by this run (tracker issue, typed ID, existing repo issue).
 // Failures are warnings, like every other post-creation step: the branch is
@@ -310,39 +325,6 @@ func fromImportedRecord(
 	got.Issue, got.RecordID = src, rec.ID
 
 	return got, nil
-}
-
-// getFromTracker fetches issues via t.ListIssues, then either falls back to
-// the manual path (the manual callback) on error/empty-list, or drives the
-// tracker picker (PickIssueFromTracker). All form opening is delegated to p.
-func getFromTracker(
-	ctx context.Context, p StartPrompter, t tracker.Tracker, allowedTypes []string,
-	manual func() (*issue.Issue, error),
-) (*issue.Issue, error) {
-	errMsg := ""
-	issues, listErr := t.ListIssues(ctx)
-	if listErr != nil {
-		errMsg = listErr.Error()
-	}
-
-	if listErr == nil && len(issues) == 0 {
-		errMsg = "no open issues found"
-	}
-
-	if errMsg != "" {
-		if err := p.NotifyTrackerError(ctx, errMsg); err != nil {
-			return nil, fmt.Errorf("notify tracker error: %w", err)
-		}
-
-		return manual()
-	}
-
-	out, err := p.PickIssueFromTracker(ctx, issues, allowedTypes)
-	if err != nil {
-		return nil, fmt.Errorf("tracker picker: %w", err)
-	}
-
-	return out, nil
 }
 
 // resolveUseWorktree consults the config override; falls back to the prompter

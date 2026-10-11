@@ -536,3 +536,158 @@ func TestIssueTable_EditDialog(t *testing.T) {
 		}
 	})
 }
+
+func TestIssueTable_Pick(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "A"},
+		{IssueSlug: "B", Title: "B"},
+	}
+	key := func(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
+	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+	newTable := func(t *testing.T, a IssueActions) tea.Model {
+		t.Helper()
+		m, err := IssueTableModel(rows, "open", a)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return m
+	}
+	quits := func(cmd tea.Cmd) bool {
+		if cmd == nil {
+			return false
+		}
+		_, ok := cmd().(tea.QuitMsg)
+
+		return ok
+	}
+	show := func(slug string) (string, error) { return "ISSUE " + slug + " BODY", nil }
+
+	t.Run("s in list mode quits with the row under the cursor", func(t *testing.T) {
+		m := newTable(t, IssueActions{Show: show})
+		m, _ = m.Update(key(tea.KeyDown))
+		m, cmd := m.Update(runeKey('s'))
+		pick, slug := PickedIssue(m)
+		if !quits(cmd) || pick != IssuePickRow || slug != "B" {
+			t.Errorf("quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
+		}
+	})
+
+	t.Run("enter in list mode still shows the issue", func(t *testing.T) {
+		m := newTable(t, IssueActions{Show: show})
+		m, cmd := m.Update(key(tea.KeyEnter))
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "ISSUE A BODY") {
+			t.Errorf("quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
+		}
+	})
+
+	t.Run("enter in pick mode quits with the row under the cursor", func(t *testing.T) {
+		m := newTable(t, IssueActions{Pick: true})
+		m, cmd := m.Update(key(tea.KeyEnter))
+		pick, slug := PickedIssue(m)
+		if !quits(cmd) || pick != IssuePickRow || slug != "A" {
+			t.Errorf("quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
+		}
+	})
+
+	t.Run("n in pick mode with NewIssue quits asking for a new issue", func(t *testing.T) {
+		m := newTable(t, IssueActions{Pick: true, NewIssue: true})
+		m, cmd := m.Update(runeKey('n'))
+		pick, slug := PickedIssue(m)
+		if !quits(cmd) || pick != IssuePickNew || slug != "" {
+			t.Errorf("quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
+		}
+	})
+
+	t.Run("n in pick mode without NewIssue does nothing", func(t *testing.T) {
+		m := newTable(t, IssueActions{Pick: true})
+		m, cmd := m.Update(runeKey('n'))
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone {
+			t.Errorf("quits = %v, pick = %v", quits(cmd), pick)
+		}
+	})
+
+	t.Run("q quits with nothing picked", func(t *testing.T) {
+		m := newTable(t, IssueActions{Pick: true})
+		m, cmd := m.Update(runeKey('q'))
+		if pick, slug := PickedIssue(m); !quits(cmd) || pick != IssuePickNone || slug != "" {
+			t.Errorf("quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
+		}
+	})
+
+	t.Run("s on a table filtered to nothing does nothing", func(t *testing.T) {
+		m := newTable(t, IssueActions{Pick: true})
+		m, _ = m.Update(runeKey('/'))
+		for _, r := range "zzz" {
+			m, _ = m.Update(runeKey(r))
+		}
+		m, _ = m.Update(key(tea.KeyEnter)) // confirm the filter
+		m, cmd := m.Update(runeKey('s'))
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone {
+			t.Errorf("quits = %v, pick = %v", quits(cmd), pick)
+		}
+	})
+
+	t.Run("the hint names the keys of the mode", func(t *testing.T) {
+		list := newTable(t, IssueActions{Show: show}).View()
+		pick := newTable(t, IssueActions{Pick: true, NewIssue: true}).View()
+		record := newTable(t, IssueActions{Pick: true}).View()
+		if !strings.Contains(list, "enter: show · e: edit · s: start") {
+			t.Errorf("list hint missing in %q", list)
+		}
+		if !strings.Contains(pick, "enter: pick · n: new issue") {
+			t.Errorf("pick hint missing in %q", pick)
+		}
+		if !strings.Contains(record, "enter: pick ·") || strings.Contains(record, "n: new issue") {
+			t.Errorf("record hint wrong in %q", record)
+		}
+	})
+
+	t.Run("PickedIssue on a foreign model is nothing picked", func(t *testing.T) {
+		if pick, slug := PickedIssue(nil); pick != IssuePickNone || slug != "" {
+			t.Errorf("pick = %v, slug = %q", pick, slug)
+		}
+	})
+}
+
+func TestIssueTable_PickRefusesAClosedRow(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "Closed one", State: issue.StateClosed},
+		{IssueSlug: "B", Title: "Merged one", Branch: &branch.Row{IssueSlug: "B", Status: branch.StatusMerged}},
+	}
+	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+	quits := func(cmd tea.Cmd) bool {
+		if cmd == nil {
+			return false
+		}
+		_, ok := cmd().(tea.QuitMsg)
+
+		return ok
+	}
+
+	for name, mode := range map[string]IssueActions{"list mode": {}, "pick mode": {Pick: true}} {
+		t.Run(name+": s on a closed record shows a notice and stays", func(t *testing.T) {
+			m, err := IssueTableModel(rows, "all", mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, cmd := m.Update(runeKey('s'))
+			pick, _ := PickedIssue(m)
+			if quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "A is closed") {
+				t.Errorf("quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
+			}
+		})
+	}
+
+	t.Run("s on a merged branch row shows a notice and stays", func(t *testing.T) {
+		m, err := IssueTableModel(rows, "all", IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m, cmd := m.Update(runeKey('s'))
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "B is closed") {
+			t.Errorf("quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
+		}
+	})
+}

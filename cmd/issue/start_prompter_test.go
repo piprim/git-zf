@@ -2,6 +2,7 @@ package issue
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
@@ -21,15 +22,18 @@ type scriptedStartPrompter struct {
 	IssueFromUser    *issuepkg.Issue
 	IssueFromTracker *issuepkg.Issue
 
-	// IssueFromRepo is returned by PickIssueFromRepo; nil means "New issue…".
-	IssueFromRepo    *issuepkg.Record
-	IssueFromRepoErr error
-	// CapturedRepoRecords records what PickIssueFromRepo was offered; nil ⇒
-	// the picker was never opened.
-	CapturedRepoRecords []issuepkg.Record
+	// PickRow answers: PickSlug names the row to pick among those offered;
+	// PickNew picks "new issue" instead (nil, nil); PickRowErr fails the
+	// pick. A PickSlug that is not offered is an error: the test scripted
+	// a row the flow did not list.
+	PickSlug   string
+	PickNew    bool
+	PickRowErr error
+	// OfferedRows records what PickRow was offered; nil ⇒ the table was
+	// never opened (RunIssueStart skips it when there are no rows).
+	OfferedRows []issuepkg.Row
 
-	// Toggle return values.
-	UseTracker  bool
+	// Toggle return value.
 	UseWorktree bool
 
 	// Confirm return values.
@@ -45,11 +49,6 @@ type scriptedStartPrompter struct {
 	ConflictBranch *branch.Branch
 	ConflictAbort  bool
 
-	// Counter and last message set by NotifyTrackerError so tests can assert
-	// "fallback fired" and what the operator was told.
-	TrackerErrorNotifications int
-	TrackerErrorMessage       string
-
 	// BaseBranch picker return value and error injection.
 	BaseBranch    string
 	BaseBranchErr error
@@ -63,8 +62,6 @@ type scriptedStartPrompter struct {
 	// error immediately.
 	IssueFromUserErr    error
 	IssueFromTrackerErr error
-	TrackerErrorErr     error
-	UseTrackerErr       error
 	UseWorktreeErr      error
 	ConfirmBranchErr    error
 	ConfirmWorktreeErr  error
@@ -88,25 +85,21 @@ func (s *scriptedStartPrompter) PickIssueFromTracker(_ context.Context, _ []trac
 	return s.IssueFromTracker, nil
 }
 
-func (s *scriptedStartPrompter) PickIssueFromRepo(_ context.Context, records []issuepkg.Record) (*issuepkg.Record, error) {
-	s.CapturedRepoRecords = records
-
-	return s.IssueFromRepo, s.IssueFromRepoErr
-}
-
-func (s *scriptedStartPrompter) NotifyTrackerError(_ context.Context, message string) error {
-	s.TrackerErrorNotifications++
-	s.TrackerErrorMessage = message
-
-	return s.TrackerErrorErr
-}
-
-func (s *scriptedStartPrompter) PickUseTracker(_ context.Context, _ string, _ bool) (bool, error) {
-	if s.UseTrackerErr != nil {
-		return false, s.UseTrackerErr
+func (s *scriptedStartPrompter) PickRow(_ context.Context, rows []issuepkg.Row) (*issuepkg.Row, error) {
+	s.OfferedRows = rows
+	if s.PickRowErr != nil {
+		return nil, s.PickRowErr
+	}
+	if s.PickNew {
+		return nil, nil
+	}
+	for i := range rows {
+		if rows[i].IssueSlug == s.PickSlug {
+			return &rows[i], nil
+		}
 	}
 
-	return s.UseTracker, nil
+	return nil, fmt.Errorf("scripted PickRow: no row %q among the %d offered", s.PickSlug, len(rows))
 }
 
 func (s *scriptedStartPrompter) PickUseWorktree(_ context.Context) (bool, error) {

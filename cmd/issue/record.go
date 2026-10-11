@@ -8,8 +8,10 @@ import (
 	"slices"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
@@ -52,13 +54,30 @@ func (huhRecordPrompter) NewIssue(ctx context.Context, allowedTypes []string, in
 	return nil
 }
 
+// PickRecord opens the issue table over records, every state, and returns
+// the full ID of the one picked with enter or s. q is huh.ErrUserAborted.
 func (huhRecordPrompter) PickRecord(ctx context.Context, records []issuepkg.Record) (string, error) {
-	var id string
-	if err := huh.NewForm(tui.IssueRecordPicker(records, &id, false)).RunWithContext(ctx); err != nil {
+	rows := make([]issuepkg.Row, len(records))
+	for i := range records {
+		rows[i] = issuepkg.RecordRow(&records[i])
+	}
+	m, err := tui.IssueTableModel(rows, "all", tui.IssueActions{Pick: true})
+	if err != nil {
 		return "", fmt.Errorf("issue picker: %w", err)
 	}
+	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	if err != nil {
+		return "", fmt.Errorf("issue picker: %w", err)
+	}
+	if pick, slug := tui.PickedIssue(final); pick == tui.IssuePickRow {
+		for i := range records {
+			if records[i].DisplayID() == slug {
+				return records[i].ID, nil
+			}
+		}
+	}
 
-	return id, nil
+	return "", fmt.Errorf("issue picker: %w", huh.ErrUserAborted)
 }
 
 func (huhRecordPrompter) EditIssue(ctx context.Context, title, description *string) error {
@@ -138,22 +157,6 @@ func cleanLabels(labels []string) []string {
 	return out
 }
 
-func printWarnings(w io.Writer, warnings []string) {
-	for _, line := range warnings {
-		fmt.Fprintln(w, line)
-	}
-}
-
-// fetchIssues refreshes the local issue refs from the remote. A failure
-// (offline, auth) is a warning: every command then works on local data. A
-// remote ref that is not an issue chain is left out without a word here:
-// `issue sync` names it and the way out, once, when asked.
-func fetchIssues(ctx context.Context, client *git.Client) {
-	if _, err := issuepkg.Fetch(ctx, client); err != nil && !errors.Is(err, git.ErrForeignChain) {
-		fmt.Fprintf(client.IO().Err, "warning: could not fetch issues, using local data: %v\n", err)
-	}
-}
-
 // pushIssue pushes issue id. A failure is a warning: the op is committed
 // locally and goes out with the next push or `git zf issue sync`.
 func pushIssue(ctx context.Context, client *git.Client, id string) {
@@ -161,17 +164,6 @@ func pushIssue(ctx context.Context, client *git.Client, id string) {
 		fmt.Fprintf(client.IO().Err,
 			"warning: issue saved locally but not pushed (run `git zf issue sync` later): %v\n", err)
 	}
-}
-
-// mirrorOf returns the issue mirror over an already built tracker, or nil
-// when the mirror is off or there is no tracker.
-func mirrorOf(cfg *config.AppConfig, t tracker.Tracker) *issuepkg.Mirror {
-	tc := cfg.IssueTracker
-	if !tc.Mirror || t == nil || len(tc.Projects) != 1 {
-		return nil
-	}
-
-	return &issuepkg.Mirror{Tracker: t, Type: tc.Type, Project: tc.Projects[0].Name}
 }
 
 // openMirror builds the tracker and returns the issue mirror, or nil when the
@@ -189,19 +181,7 @@ func openMirror(cfg *config.AppConfig, errW io.Writer) *issuepkg.Mirror {
 		return nil
 	}
 
-	return mirrorOf(cfg, t)
-}
-
-// reconcileIssues mirrors the issues with the tracker. A failure is a
-// warning: the next run reconciles from the chains. A nil m is a no-op.
-func reconcileIssues(ctx context.Context, client *git.Client, m *issuepkg.Mirror) issuepkg.MirrorResult {
-	res, err := m.Reconcile(ctx, client)
-	if err != nil {
-		fmt.Fprintf(client.IO().Err, "warning: tracker mirror: %v\n", err)
-	}
-	printWarnings(client.IO().Err, res.Warnings)
-
-	return res
+	return issueflow.MirrorOf(cfg, t)
 }
 
 // syncOne gives the tracker one record's change at once, after the record
@@ -212,7 +192,7 @@ func syncOne(ctx context.Context, client *git.Client, m *issuepkg.Mirror, id str
 	if err != nil {
 		fmt.Fprintf(client.IO().Err, "warning: tracker mirror: %v\n", err)
 	}
-	printWarnings(client.IO().Err, res.Warnings)
+	issueflow.PrintWarnings(client.IO().Err, res.Warnings)
 }
 
 // resolveRecord returns the record named by args[0], or opens the picker over
@@ -225,7 +205,7 @@ func resolveRecord(
 		if err != nil {
 			return issuepkg.Record{}, fmt.Errorf("resolve issue: %w", err)
 		}
-		printWarnings(client.IO().Err, rec.Warnings)
+		issueflow.PrintWarnings(client.IO().Err, rec.Warnings)
 
 		return rec, nil
 	}
@@ -234,7 +214,7 @@ func resolveRecord(
 	if err != nil {
 		return issuepkg.Record{}, fmt.Errorf("list issues: %w", err)
 	}
-	printWarnings(client.IO().Err, warnings)
+	issueflow.PrintWarnings(client.IO().Err, warnings)
 
 	if len(records) == 0 {
 		return issuepkg.Record{}, errors.New("no issues in this repository; create one with `git zf issue new`")
@@ -273,7 +253,7 @@ func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State, 
 	}
 
 	pushIssue(ctx, client, id)
-	reconcileIssues(ctx, client, m)
+	issueflow.ReconcileIssues(ctx, client, m)
 }
 
 // runCloseByID closes the repo issue named by query (full ID or unique prefix)
@@ -281,7 +261,7 @@ func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State, 
 // refuses while a branch of the issue is in progress, so that the work is
 // merged (`issue close`) or abandoned (`branch close`) knowingly.
 func runCloseByID(ctx context.Context, client *git.Client, query string, m *issuepkg.Mirror) error {
-	fetchIssues(ctx, client)
+	issueflow.FetchIssues(ctx, client)
 
 	rec, err := resolveRecord(ctx, client, nil, []string{query})
 	if err != nil {
@@ -331,7 +311,7 @@ func runCloseByID(ctx context.Context, client *git.Client, query string, m *issu
 	}
 
 	pushIssue(ctx, client, rec.ID)
-	reconcileIssues(ctx, client, m)
+	issueflow.ReconcileIssues(ctx, client, m)
 	fmt.Fprintf(client.IO().Out, "Closed issue %s: %s\n", rec.DisplayID(), rec.Title)
 
 	return nil

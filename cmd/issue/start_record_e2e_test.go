@@ -45,8 +45,8 @@ func TestRunIssueStart_ManualEmptyIDCreatesRepoIssue(t *testing.T) {
 		}
 	})
 	t.Run("the picker is not opened when the repo has no issue", func(t *testing.T) {
-		if prompter.CapturedRepoRecords != nil {
-			t.Errorf("PickIssueFromRepo was called with %+v", prompter.CapturedRepoRecords)
+		if prompter.OfferedRows != nil {
+			t.Errorf("PickRow was offered %+v", prompter.OfferedRows)
 		}
 	})
 	t.Run("the branch is named after the short ID", func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestRunIssueStart_PicksRepoIssue(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	prompter := &scriptedStartPrompter{IssueFromRepo: &open, ConfirmBranch: true}
+	prompter := &scriptedStartPrompter{PickSlug: open.ShortID(), ConfirmBranch: true}
 
 	runErr := issueflow.RunIssueStart(ctx, rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
 
@@ -96,8 +96,8 @@ func TestRunIssueStart_PicksRepoIssue(t *testing.T) {
 		}
 	})
 	t.Run("only open issues are offered", func(t *testing.T) {
-		if len(prompter.CapturedRepoRecords) != 1 || prompter.CapturedRepoRecords[0].ID != open.ID {
-			t.Errorf("offered = %+v", prompter.CapturedRepoRecords)
+		if len(prompter.OfferedRows) != 1 || prompter.OfferedRows[0].IssueSlug != open.ShortID() {
+			t.Errorf("offered = %+v", prompter.OfferedRows)
 		}
 	})
 	t.Run("the branch is created for the picked issue", func(t *testing.T) {
@@ -134,7 +134,7 @@ func TestRunIssueStart_PickerNewThenTypedID(t *testing.T) {
 	}
 
 	prompter := &scriptedStartPrompter{
-		IssueFromRepo: nil, // "New issue…"
+		PickNew:       true,
 		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{ID: "JIRA-7", Subject: "Typed"}},
 		ConfirmBranch: true,
 	}
@@ -147,8 +147,8 @@ func TestRunIssueStart_PickerNewThenTypedID(t *testing.T) {
 		}
 	})
 	t.Run("the picker was offered", func(t *testing.T) {
-		if len(prompter.CapturedRepoRecords) != 1 {
-			t.Errorf("offered = %+v", prompter.CapturedRepoRecords)
+		if len(prompter.OfferedRows) != 1 {
+			t.Errorf("offered = %+v", prompter.OfferedRows)
 		}
 	})
 	t.Run("the typed ID names the branch", func(t *testing.T) {
@@ -177,24 +177,23 @@ func TestRunIssueStart_TrackerErrorFallbackCreatesRepoIssue(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	rig.tracker.ProjectIssues = nil // empty list ⇒ NotifyTrackerError ⇒ manual path
+	rig.tracker.ProjectIssues = nil // empty tracker, empty repo ⇒ no row ⇒ manual form
 
 	prompter := &scriptedStartPrompter{
-		UseTracker:    true,
 		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{Subject: "Fallback"}},
 		ConfirmBranch: true,
 	}
 
-	err := issueflow.RunIssueStart(t.Context(), rig.deps(issuepkg.IssueStartFlags{TrackerFirst: true}), prompter)
+	err := issueflow.RunIssueStart(t.Context(), rig.deps(issuepkg.IssueStartFlags{Tracker: true}), prompter)
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RunIssueStart: %v", err)
 		}
 	})
-	t.Run("the tracker error was notified", func(t *testing.T) {
-		if prompter.TrackerErrorNotifications != 1 {
-			t.Errorf("notifications = %d", prompter.TrackerErrorNotifications)
+	t.Run("the tracker was asked once", func(t *testing.T) {
+		if rig.tracker.ListCalls != 1 {
+			t.Errorf("ListCalls = %d", rig.tracker.ListCalls)
 		}
 	})
 	t.Run("a repo issue was created and names the branch", func(t *testing.T) {
@@ -273,7 +272,7 @@ func TestRunIssueStart_NonLatinBacklogItem(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	prompter := &scriptedStartPrompter{IssueFromRepo: &rec, ConfirmBranch: true}
+	prompter := &scriptedStartPrompter{PickSlug: rec.ShortID(), ConfirmBranch: true}
 
 	runErr := issueflow.RunIssueStart(ctx, rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
 
@@ -392,7 +391,7 @@ func TestRunIssueStart_RepoIssueWithUnknownTypeIsRefused(t *testing.T) {
 				t.Fatalf("Create: %v", err)
 			}
 
-			prompter := &scriptedStartPrompter{IssueFromRepo: &rec, ConfirmBranch: true}
+			prompter := &scriptedStartPrompter{PickSlug: rec.ShortID(), ConfirmBranch: true}
 			runErr := issueflow.RunIssueStart(ctx, rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
 
 			t.Run("the flow fails naming the issue, its type and the allowed ones", func(t *testing.T) {
@@ -473,7 +472,7 @@ func TestRunIssueStart_ExportedRecordIsNamedByItsNumber(t *testing.T) {
 		t.Fatalf("Load: %+v, %v", exported, err)
 	}
 
-	prompter := &scriptedStartPrompter{IssueFromRepo: &exported, ConfirmBranch: true}
+	prompter := &scriptedStartPrompter{PickSlug: exported.DisplayID(), ConfirmBranch: true}
 
 	runErr := issueflow.RunIssueStart(ctx, rig.noTrackerDeps(issuepkg.IssueStartFlags{}), prompter)
 
@@ -502,7 +501,7 @@ func TestRunIssueStart_ImportedRecordStartsAsTrackerIssue(t *testing.T) {
 
 	rig := newStartRig(t)
 	ctx := t.Context()
-	rig.tracker.ProjectIssues = nil // empty list ⇒ NotifyTrackerError ⇒ repo picker
+	rig.tracker.ProjectIssues = nil // the tracker lists nothing: the imported record is the only row
 
 	source := &fake.Tracker{ProjectIssues: []tracker.Issue{{
 		TrackerType: "fake", ID: "42", Subject: "From tracker", Status: "open",
@@ -519,13 +518,12 @@ func TestRunIssueStart_ImportedRecordStartsAsTrackerIssue(t *testing.T) {
 	imported := records[0]
 
 	prompter := &scriptedStartPrompter{
-		UseTracker:       true,
-		IssueFromRepo:    &imported,
+		PickSlug:         imported.DisplayID(),
 		IssueFromTracker: &issuepkg.Issue{Type: "fix"},
 		ConfirmBranch:    true,
 	}
 
-	runErr := issueflow.RunIssueStart(ctx, rig.deps(issuepkg.IssueStartFlags{TrackerFirst: true}), prompter)
+	runErr := issueflow.RunIssueStart(ctx, rig.deps(issuepkg.IssueStartFlags{Tracker: true}), prompter)
 
 	t.Run("no error", func(t *testing.T) {
 		if runErr != nil {

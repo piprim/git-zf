@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/spf13/cobra"
@@ -46,7 +47,7 @@ func (i Issue) showRunE(cmd *cobra.Command, args []string, jsonOut bool) error {
 }
 
 func runShow(ctx context.Context, client *git.Client, p recordPrompter, args []string, jsonOut bool) error {
-	fetchIssues(ctx, client)
+	issueflow.FetchIssues(ctx, client)
 
 	rec, err := resolveRecord(ctx, client, p, args)
 	if err != nil {

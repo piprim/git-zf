@@ -262,7 +262,7 @@ func TestRunIssueList(t *testing.T) {
 
 		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if err := runList(t.Context(), &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+		if _, err := runList(t.Context(), &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 
@@ -282,7 +282,7 @@ func TestRunIssueList(t *testing.T) {
 
 		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 
@@ -300,11 +300,27 @@ func TestRunIssueList(t *testing.T) {
 		s := newListClient(t)
 		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		if !strings.Contains(buf.String(), "No issues found") {
 			t.Errorf("expected 'No issues found', got: %s", buf.String())
+		}
+	})
+
+	t.Run("the stdout and json outputs pick nothing", func(t *testing.T) {
+		t.Parallel()
+
+		s := newListClient(t)
+		branchtest.Seed(t, s, branch.Op{Branch: "P-1@feat@pick@uuid-p1", Title: "Pick"}, branch.StatusInProgress)
+		infra := issueListInfra{client: s, tracker: nil, stderr: &bytes.Buffer{}}
+		for name, flags := range map[string]issueListFlags{"json": {jsonOut: true}, "stdout": {stdout: true}} {
+			t.Run(name, func(t *testing.T) {
+				row, err := runList(t.Context(), &bytes.Buffer{}, infra, flags)
+				if err != nil || row != nil {
+					t.Errorf("row = %+v, err = %v", row, err)
+				}
+			})
 		}
 	})
 
@@ -317,7 +333,7 @@ func TestRunIssueList(t *testing.T) {
 		}}
 		infra := issueListInfra{client: s, tracker: tk, stderr: &bytes.Buffer{}}
 		var buf bytes.Buffer
-		if err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, err := runList(t.Context(), &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		if !strings.Contains(buf.String(), "∅") {

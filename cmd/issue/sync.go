@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/spf13/cobra"
@@ -50,7 +51,7 @@ func runSync(ctx context.Context, client *git.Client, m *issuepkg.Mirror) error 
 	}
 
 	if m != nil {
-		mr := reconcileIssues(ctx, client, m)
+		mr := issueflow.ReconcileIssues(ctx, client, m)
 		fmt.Fprintf(client.IO().Out, "Tracker mirror: %d imported, %d exported, %d pulled, %d pushed.\n",
 			mr.Imported, mr.Exported, mr.Pulled, mr.Pushed)
 	}

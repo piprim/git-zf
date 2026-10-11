@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
@@ -96,9 +97,9 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 	// The reconcile reads every record: fetched first, or a record another
 	// clone just linked looks unlinked here and is exported a second time.
 	if m != nil {
-		fetchIssues(ctx, client)
+		issueflow.FetchIssues(ctx, client)
 	}
-	reconcileIssues(ctx, client, m)
+	issueflow.ReconcileIssues(ctx, client, m)
 	// The reconcile may have linked the record: name it by its number.
 	if m != nil {
 		if linked, err := issuepkg.Load(ctx, client, rec.ID); err == nil {

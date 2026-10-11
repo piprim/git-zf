@@ -9,6 +9,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
@@ -133,7 +134,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("json output carries labels and state", func(t *testing.T) {
 		var buf bytes.Buffer
-		if err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+		if _, err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		var rows []issuepkg.Row
@@ -153,7 +154,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("json output has an empty label list, never null, for a row without a repo issue", func(t *testing.T) {
 		var buf bytes.Buffer
-		if err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
+		if _, err := runList(ctx, &buf, infra, issueListFlags{jsonOut: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		if strings.Contains(buf.String(), `"labels":null`) {
@@ -163,7 +164,7 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 
 	t.Run("stdout table shows labels next to the title and the issue status header", func(t *testing.T) {
 		var buf bytes.Buffer
-		if err := runList(ctx, &buf, infra, issueListFlags{stdout: true}); err != nil {
+		if _, err := runList(ctx, &buf, infra, issueListFlags{stdout: true}); err != nil {
 			t.Fatalf("runList: %v", err)
 		}
 		out := buf.String()
@@ -341,6 +342,42 @@ func TestRenderIssue_TrackerOnlyRow(t *testing.T) {
 	t.Run("an issue the tracker does not know is an error", func(t *testing.T) {
 		if _, err := renderIssue(ctx, infra, "78"); err == nil {
 			t.Error("expected an error")
+		}
+	})
+}
+
+// branch new lists offline: with the Tracker flag off, ListRows neither asks
+// the tracker nor reconciles the mirror.
+func TestListRows_OfflineNeverAsksTheTracker(t *testing.T) {
+	t.Parallel()
+
+	rig := newRecordRig(t, "alice", "")
+	ctx := t.Context()
+	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Local", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{{ID: "42", Subject: "Remote", Status: "open"}}}
+	deps := issueflow.StartDeps{
+		Client: rig.client, Tracker: ft, Mirror: &issuepkg.Mirror{Tracker: ft, Type: "fake", Project: "zf"},
+		Flags: issuepkg.IssueStartFlags{Tracker: false},
+	}
+
+	rows, err := issueflow.ListRows(ctx, deps, "")
+
+	t.Run("the repo issue is the only row", func(t *testing.T) {
+		if err != nil || len(rows) != 1 || rows[0].IssueSlug != rec.ShortID() {
+			t.Errorf("rows = %+v, err = %v", rows, err)
+		}
+	})
+	t.Run("the tracker was never listed", func(t *testing.T) {
+		if ft.ListCalls != 0 {
+			t.Errorf("ListCalls = %d", ft.ListCalls)
+		}
+	})
+	t.Run("nothing was exported", func(t *testing.T) {
+		if len(ft.RecordedCreates) != 0 {
+			t.Errorf("creates = %+v", ft.RecordedCreates)
 		}
 	})
 }

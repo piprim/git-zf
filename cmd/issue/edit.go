@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/spf13/cobra"
@@ -67,7 +68,7 @@ func (i Issue) editRunE(cmd *cobra.Command, args []string, flags editFlags) erro
 // runEdit changes the title and the description of an issue. Without flags
 // the form asks for both. Only a field that changed gets an op.
 func runEdit(ctx context.Context, client *git.Client, p recordPrompter, args []string, flags editFlags, m *issuepkg.Mirror) error {
-	fetchIssues(ctx, client)
+	issueflow.FetchIssues(ctx, client)
 
 	rec, err := resolveRecord(ctx, client, p, args)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/piprim/git-zf/branch"
@@ -104,7 +105,7 @@ func newStartRig(t *testing.T) *startTestRig {
 }
 
 // deps returns a StartDeps wired with the rig's client + fake tracker.
-// flags lets the test choose Variant / TrackerFirst per case.
+// flags lets the test choose Variant / Tracker per case.
 func (r *startTestRig) deps(flags issuepkg.IssueStartFlags) issueflow.StartDeps {
 	return issueflow.StartDeps{Client: r.client, Cfg: r.cfg, Tracker: r.tracker, Flags: flags}
 }
@@ -126,7 +127,7 @@ func TestRunIssueStart_BranchHappyPath_NoTracker(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: false, Variant: ""}
 
 	pickedIssue := &issuepkg.Issue{
 		Type: "feat",
@@ -177,7 +178,7 @@ func TestRunIssueStart_BranchHappyPath_WithTracker(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: true, Variant: ""}
 
 	rig.tracker.ProjectIssues = []tracker.Issue{
 		{ID: "ABC-3", Subject: "Implement OAuth", TrackerType: "fake"},
@@ -193,7 +194,7 @@ func TestRunIssueStart_BranchHappyPath_WithTracker(t *testing.T) {
 	}
 
 	prompter := &scriptedStartPrompter{
-		UseTracker:       true,
+		PickSlug:         "ABC-3",
 		IssueFromTracker: pickedFromTracker,
 		UseWorktree:      false,
 		ConfirmBranch:    true,
@@ -247,7 +248,7 @@ func TestRunIssueStart_WorktreeHappyPath(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: false, Variant: ""}
 
 	pickedIssue := &issuepkg.Issue{
 		Type: "feat",
@@ -301,7 +302,7 @@ func TestRunIssueStart_BranchUserAbortsAtConfirm(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: false, Variant: ""}
 
 	picked := &issuepkg.Issue{
 		Type:  "feat",
@@ -340,7 +341,7 @@ func TestRunIssueStart_VariantOnCollision(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: false, Variant: ""}
 
 	rig.runGit(t, "branch", "ABC-6@feat@add-search", "main")
 
@@ -392,7 +393,7 @@ func TestRunIssueStart_AbortOnCollision(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: false, Variant: ""}
 
 	rig.runGit(t, "branch", "ABC-7@feat@add-export", "main")
 
@@ -428,50 +429,42 @@ func TestRunIssueStart_AbortOnCollision(t *testing.T) {
 	})
 }
 
-func TestRunIssueStart_TrackerListErrorFallsBackToManual(t *testing.T) {
+// Review Focus 4. The tracker is down: a warning, and the table is offered
+// the repository's rows.
+func TestRunIssueStart_TrackerDownOffersTheRepositoryRows(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: ""}
-
-	// Fake tracker starts with empty Issues — that triggers the "no open issues" fallback.
-
-	manualPicked := &issuepkg.Issue{
-		Type:  "feat",
-		Issue: tracker.Issue{ID: "ABC-8", Subject: "Manual fallback"},
+	ctx := t.Context()
+	rig.tracker.ListErr = errors.New("network error")
+	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Local one", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 
-	prompter := &scriptedStartPrompter{
-		UseTracker:    true, // operator accepts the toggle
-		IssueFromUser: manualPicked,
-		UseWorktree:   false,
-		ConfirmBranch: true,
-	}
+	prompter := &scriptedStartPrompter{PickSlug: rec.ShortID(), ConfirmBranch: true}
 
-	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
-		t.Fatalf("RunIssueStart: %v", err)
-	}
+	runErr := issueflow.RunIssueStart(ctx, rig.deps(issuepkg.IssueStartFlags{Tracker: true}), prompter)
 
-	t.Run("NotifyTrackerError was called once", func(t *testing.T) {
-		if got := prompter.TrackerErrorNotifications; got != 1 {
-			t.Errorf("TrackerErrorNotifications = %d, want 1", got)
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil {
+			t.Fatalf("RunIssueStart: %v", runErr)
 		}
 	})
-
-	t.Run("the notice does not tie the empty list to the assignee", func(t *testing.T) {
-		if got, want := prompter.TrackerErrorMessage, "no open issues found"; got != want {
-			t.Errorf("TrackerErrorMessage = %q, want %q", got, want)
+	t.Run("the warning names the tracker failure", func(t *testing.T) {
+		if got := rig.stderr.String(); !strings.Contains(got, "warning: tracker unavailable") {
+			t.Errorf("stderr = %q", got)
 		}
 	})
-
-	t.Run("manual fallback branch was created", func(t *testing.T) {
-		exists, err := rig.client.BranchExists("ABC-8@feat@manual-fallback")
-		if err != nil {
-			t.Fatalf("BranchExists: %v", err)
+	t.Run("the repository's row was offered", func(t *testing.T) {
+		if len(prompter.OfferedRows) != 1 || prompter.OfferedRows[0].IssueSlug != rec.ShortID() {
+			t.Errorf("offered = %+v", prompter.OfferedRows)
 		}
-
-		if !exists {
-			t.Error("manual fallback branch was not created")
+	})
+	t.Run("the branch was created", func(t *testing.T) {
+		exists, err := rig.client.BranchExists(rec.ShortID() + "@feat@local-one")
+		if err != nil || !exists {
+			t.Errorf("branch exists = %v (%v)", exists, err)
 		}
 	})
 }
@@ -480,7 +473,7 @@ func TestRunIssueStart_NoTrackerStatusUpdate(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: true, Variant: ""}
 
 	rig.tracker.ProjectIssues = []tracker.Issue{
 		{ID: "ABC-9", Subject: "Add lints", TrackerType: "fake"},
@@ -496,7 +489,7 @@ func TestRunIssueStart_NoTrackerStatusUpdate(t *testing.T) {
 	}
 
 	prompter := &scriptedStartPrompter{
-		UseTracker:       true,
+		PickSlug:         "ABC-9",
 		IssueFromTracker: pickedFromTracker,
 		UseWorktree:      false,
 		ConfirmBranch:    true,
@@ -535,7 +528,7 @@ func TestRunIssueStart_UseWorktreeConfigOverride(t *testing.T) {
 	override := true
 	rig.cfg.Branch.UseWorktree = &override
 
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false, Variant: ""}
+	flags := issuepkg.IssueStartFlags{Tracker: false, Variant: ""}
 
 	picked := &issuepkg.Issue{
 		Type:  "feat",
@@ -579,46 +572,45 @@ func TestRunIssueStart_UseWorktreeConfigOverride(t *testing.T) {
 	})
 }
 
-func TestRunIssueStart_DeclinesTrackerTogglesToManual(t *testing.T) {
+// Review Focus 5. branch new (Tracker false) never asks the tracker, even
+// with issues in it: the table is empty and the manual form opens.
+func TestRunIssueStart_BranchNewNeverAsksTheTracker(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: ""}
-
-	// Tracker is configured (rig.cfg.IssueTracker.Type = "fake") but the
-	// operator declines the toggle. pickIssue should fall through to
-	// prompter.PickIssueFromUser.
-	manualPicked := &issuepkg.Issue{
-		Type:  "feat",
-		Issue: tracker.Issue{ID: "ABC-11", Subject: "Manual choice"},
-	}
+	rig.tracker.ProjectIssues = []tracker.Issue{{ID: "ABC-11", Subject: "Remote", TrackerType: "fake"}}
 
 	prompter := &scriptedStartPrompter{
-		UseTracker:    false, // operator declines the tracker toggle
-		IssueFromUser: manualPicked,
-		// Tripwire: if pickIssue mis-routes to getFromTracker, this error fires.
-		IssueFromTrackerErr: errors.New("PickIssueFromTracker should not be called when UseTracker=false"),
-		UseWorktree:         false,
-		ConfirmBranch:       true,
+		IssueFromUser: &issuepkg.Issue{Type: "feat", Issue: tracker.Issue{ID: "ABC-11", Subject: "Manual choice"}},
+		ConfirmBranch: true,
 	}
 
-	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
-		t.Fatalf("RunIssueStart: %v", err)
-	}
+	err := issueflow.RunIssueStart(t.Context(), rig.deps(issuepkg.IssueStartFlags{Tracker: false}), prompter)
 
-	t.Run("manual branch was created", func(t *testing.T) {
-		exists, err := rig.client.BranchExists("ABC-11@feat@manual-choice")
+	t.Run("no error", func(t *testing.T) {
 		if err != nil {
-			t.Fatalf("BranchExists: %v", err)
-		}
-		if !exists {
-			t.Error("ABC-11@feat@manual-choice was not created")
+			t.Fatalf("RunIssueStart: %v", err)
 		}
 	})
-
-	t.Run("tracker received no UpdateIssueStatus calls", func(t *testing.T) {
+	t.Run("the tracker was never listed", func(t *testing.T) {
+		if rig.tracker.ListCalls != 0 {
+			t.Errorf("ListCalls = %d", rig.tracker.ListCalls)
+		}
+	})
+	t.Run("the table was not opened: nothing to list offline", func(t *testing.T) {
+		if prompter.OfferedRows != nil {
+			t.Errorf("offered = %+v", prompter.OfferedRows)
+		}
+	})
+	t.Run("the manual branch was created", func(t *testing.T) {
+		exists, err := rig.client.BranchExists("ABC-11@feat@manual-choice")
+		if err != nil || !exists {
+			t.Errorf("branch exists = %v (%v)", exists, err)
+		}
+	})
+	t.Run("the tracker received no status update", func(t *testing.T) {
 		if got := len(rig.tracker.RecordedUpdates); got != 0 {
-			t.Errorf("RecordedUpdates = %d, want 0 when tracker toggle declined", got)
+			t.Errorf("RecordedUpdates = %d, want 0", got)
 		}
 	})
 }
@@ -651,13 +643,14 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 		Issue: tracker.Issue{ID: "X.1", Subject: "sub-task one"},
 	}
 	prompter := &scriptedStartPrompter{
+		PickNew:       true, // a branch is seeded: the table has a row
 		IssueFromUser: pickedIssue,
 		BaseBranch:    parentBranch, // picker selects the parent branch
 		UseWorktree:   false,
 		ConfirmBranch: true,
 	}
 
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false}
+	flags := issuepkg.IssueStartFlags{Tracker: false}
 	if err := issueflow.RunIssueStart(t.Context(), rig.noTrackerDeps(flags), prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
 	}
@@ -759,7 +752,7 @@ func TestRunIssueStart_PickerOffersRemoteOnlyParent(t *testing.T) {
 		ConfirmBranch: true,
 	}
 
-	flags := issuepkg.IssueStartFlags{TrackerFirst: false}
+	flags := issuepkg.IssueStartFlags{Tracker: false}
 	deps := issueflow.StartDeps{Client: client, Cfg: cfg, Tracker: nil, Flags: flags}
 	if err := issueflow.RunIssueStart(t.Context(), deps, prompter); err != nil {
 		t.Fatalf("RunIssueStart: %v", err)
@@ -874,6 +867,7 @@ func TestRunIssueStart_WritesBranchRef_WithParent(t *testing.T) {
 	runGitInRig(t, rig, "checkout", "main")
 
 	prompter := &scriptedStartPrompter{
+		PickNew: true, // a branch is seeded: the table has a row
 		IssueFromUser: &issuepkg.Issue{
 			Type: "feat",
 			Issue: tracker.Issue{

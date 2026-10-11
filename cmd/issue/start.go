@@ -33,7 +33,7 @@ repository (refs/zf/branches/<issue>) and pushed, so every clone sees it.`,
 // startRunE drives the tracker-first issue-start flow. variant and parentSlug
 // carry the --variant and --parent flag values, "" when run from the issue menu.
 func (i Issue) startRunE(cmd *cobra.Command, variant, parentSlug string) error {
-	flags := issuepkg.IssueStartFlags{TrackerFirst: true, Variant: variant, ParentIssueSlug: parentSlug}
+	flags := issuepkg.IssueStartFlags{Tracker: true, Variant: variant, ParentIssueSlug: parentSlug}
 
 	deps, err := issueflow.BuildStartDeps(cmd, i.appConfig, flags)
 	if err != nil {

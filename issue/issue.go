@@ -8,7 +8,9 @@ import (
 // branch. Variant and ParentIssueSlug feed branch naming, so this stays in the
 // domain package next to the entity rather than moving to cmd/issueflow.
 type IssueStartFlags struct {
-	TrackerFirst    bool
+	// Tracker lists the tracker's issues in the picker: `issue start` and
+	// `issue list` set it; `branch new` leaves it false and works offline.
+	Tracker         bool
 	Variant         string
 	ParentIssueSlug string // non-empty when this is a sub-task; value is the parent's IssueSlug
 }

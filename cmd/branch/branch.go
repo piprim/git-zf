@@ -178,10 +178,11 @@ func (b Branch) newCmd() *cobra.Command {
 	return cmd
 }
 
-// newRunE delegates to RunIssueStart with manual-first (tracker toggle defaults to NO).
+// newRunE delegates to RunIssueStart offline: the picker lists the branches
+// and the repo issues, never the tracker.
 // variant carries the --variant flag value, "" when run from the branch menu.
 func (b Branch) newRunE(cmd *cobra.Command, variant string) error {
-	flags := issue.IssueStartFlags{TrackerFirst: false, Variant: variant}
+	flags := issue.IssueStartFlags{Tracker: false, Variant: variant}
 	deps, err := issueflow.BuildStartDeps(cmd, b.appConfig, flags)
 	if err != nil {
 		return fmt.Errorf("build start deps: %w", err)

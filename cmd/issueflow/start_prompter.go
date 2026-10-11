@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
@@ -13,35 +14,20 @@ import (
 )
 
 // StartPrompter resolves every user-facing decision in the issue-start flow.
-// The production implementation drives huh forms; the test implementation in
-// start_prompter_test.go returns canned values.
-//
-// Methods correspond to the huh forms in the pre-refactor flow. The order
-// below mirrors the order calls happen in RunIssueStart. Note:
-// PickIssueFromTracker covers a single form that lets the operator pick both
-// the issue and its branch type, so the mapping is interface→form, not 1:1
-// for every UI element.
+// The production implementation drives the issue table and huh forms; the
+// test implementation in cmd/issue's start_prompter_test.go returns canned
+// values. The order below mirrors the order calls happen in RunIssueStart.
 type StartPrompter interface {
-	// PickIssueFromUser opens the manual issue-input form (issue ID, subject, type).
-	PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error)
+	// PickRow opens the issue table over rows. A nil row with a nil error
+	// means "new issue": the flow falls through to PickIssueFromUser.
+	PickRow(ctx context.Context, rows []issuepkg.Row) (*issuepkg.Row, error)
 
-	// PickIssueFromTracker opens the picker over a pre-fetched issues list.
+	// PickIssueFromTracker asks the branch type of a tracker issue: the
+	// form lists issues (one, from now on) and the types.
 	PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error)
 
-	// NotifyTrackerError shows a one-line error note when the tracker errors
-	// out or returns no open issues. Returning a non-nil error aborts the flow.
-	NotifyTrackerError(ctx context.Context, message string) error
-
-	// PickIssueFromRepo opens the picker over the open issues stored in the
-	// repository. Called only when at least one exists. A nil record with a
-	// nil error means the operator chose "New issue…": the flow falls through
-	// to PickIssueFromUser.
-	PickIssueFromRepo(ctx context.Context, records []issuepkg.Record) (*issuepkg.Record, error)
-
-	// PickUseTracker drives the "fetch from tracker?" toggle. Called only when
-	// cfg.IssueTracker.Type != "". trackerFirst controls the pre-selected
-	// option (true for `issue start`, false for `branch new`).
-	PickUseTracker(ctx context.Context, trackerType string, trackerFirst bool) (use bool, err error)
+	// PickIssueFromUser opens the manual issue-input form (issue ID, subject, type).
+	PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error)
 
 	// PickUseWorktree drives the "worktree vs plain branch?" toggle. Called
 	// only when cfg.Branch.UseWorktree == nil.
@@ -149,39 +135,33 @@ func (p *HuhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tr
 	return &got, nil
 }
 
-func (*HuhStartPrompter) PickIssueFromRepo(
-	ctx context.Context, records []issuepkg.Record,
-) (*issuepkg.Record, error) {
-	var id string
-	if err := huh.NewForm(tui.IssueRecordPicker(records, &id, true)).RunWithContext(ctx); err != nil {
-		return nil, fmt.Errorf("repo issue picker: %w", err)
+// PickRow opens the issue table over rows: enter or s picks the row under
+// the cursor, n asks for a new issue, q gives up (huh.ErrUserAborted, as the
+// huh picker's Esc was).
+func (*HuhStartPrompter) PickRow(ctx context.Context, rows []issuepkg.Row) (*issuepkg.Row, error) {
+	m, err := tui.IssueTableModel(rows, issuepkg.StateOpen, tui.IssueActions{Pick: true, NewIssue: true})
+	if err != nil {
+		return nil, fmt.Errorf("issue table: %w", err)
+	}
+	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	if err != nil {
+		return nil, fmt.Errorf("issue table: %w", err)
 	}
 
-	for i := range records {
-		if records[i].ID == id {
-			return &records[i], nil
+	pick, slug := tui.PickedIssue(final)
+	switch pick {
+	case tui.IssuePickNew:
+		return nil, nil
+	case tui.IssuePickRow:
+		for i := range rows {
+			if rows[i].IssueSlug == slug {
+				return &rows[i], nil
+			}
 		}
+	case tui.IssuePickNone:
 	}
 
-	return nil, nil // tui.IssueRecordNew
-}
-
-func (p *HuhStartPrompter) NotifyTrackerError(ctx context.Context, message string) error {
-	if err := huh.NewForm(tui.IssueTrackerError(message)).RunWithContext(ctx); err != nil {
-		return fmt.Errorf("error note: %w", err)
-	}
-
-	return nil
-}
-
-func (p *HuhStartPrompter) PickUseTracker(ctx context.Context, trackerType string, trackerFirst bool) (bool, error) {
-	var use bool
-	form := tui.IssueTrackerToggle(&use, trackerFirst, trackerType)
-	if err := huh.NewForm(form).RunWithContext(ctx); err != nil {
-		return false, fmt.Errorf("tracker toggle: %w", err)
-	}
-
-	return use, nil
+	return nil, huh.ErrUserAborted
 }
 
 func (p *HuhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {

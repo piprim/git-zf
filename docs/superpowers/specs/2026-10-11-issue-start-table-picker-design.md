@@ -36,32 +36,46 @@ from the row.
 
 ## Section 1: the table (`tui/issue.go`)
 
-`IssueTableModel` takes a mode, start or list, through `IssueActions`:
+`IssueTableModel` takes a mode, pick or list, through `IssueActions`:
 
 ```go
 type IssueActions struct {
 	Show func(slug string) (string, error)
 	Load func(slug string) (title, description string, err error)
 	Edit func(slug, title, description string) (string, error)
-	// Start is set when the table picks the issue to start: enter picks
-	// the row under the cursor, n picks "new issue". Both quit.
-	Start bool
+	// Pick is set when the table picks an issue: enter and s pick the row
+	// under the cursor and quit. With NewIssue, n picks "new issue".
+	Pick     bool
+	NewIssue bool
 }
 ```
 
 Keys, both modes: `s` records the slug of the row under the cursor and
-quits. Start mode only: `enter` does what `s` does, `n` records
-`IssueRecordNew` and quits; show and edit are off (their actions are nil).
-List mode keeps enter for show and `e` for edit. The hint line names the
-keys of the mode.
+quits. Pick mode only: `enter` does what `s` does, `n` (with `NewIssue`)
+records "new issue" and quits; show and edit are off (their actions are
+nil). List mode keeps enter for show and `e` for edit. The hint line names
+the keys of the mode. `issue start` and `branch new` run the table with
+`Pick` and `NewIssue`; the record picker of section 5 with `Pick` alone.
 
-The picked slug is read after the program returns:
+What was picked is read after the program returns:
 
 ```go
-// PickedIssue is the slug picked with s, enter or n, "" when the table was
-// quit without picking. IssueRecordNew means "new issue".
-func PickedIssue(m tea.Model) string
+// IssuePick is how the issue table was quit.
+type IssuePick int
+
+const (
+	IssuePickNone IssuePick = iota // q or ctrl+c: nothing picked
+	IssuePickRow                   // s or enter: the slug is the row's issue
+	IssuePickNew                   // n: a new issue
+)
+
+// PickedIssue reports how the table was quit and, for IssuePickRow, the
+// slug of the picked row.
+func PickedIssue(m tea.Model) (IssuePick, string)
 ```
+
+(`IssueRecordNew` is the empty string, so it cannot also mean "nothing
+picked"; it goes with the huh record picker, section 5.)
 
 ## Section 2: the flow (`cmd/issueflow`)
 
@@ -140,8 +154,9 @@ PickRow(ctx context.Context, rows []issue.Row) (*issue.Row, error)
 ```
 
 `HuhStartPrompter.PickRow` runs `tui.IssueTableModel(rows, "open",
-IssueActions{Start: true})` in a bubbletea program and maps the picked slug
-back to its row. `branch new` and `issue start` differ by the `Tracker`
+IssueActions{Pick: true, NewIssue: true})` in a bubbletea program and maps
+the picked slug back to its row; a table quit with `q` is
+`huh.ErrUserAborted`, as the huh picker's Esc was. `branch new` and `issue start` differ by the `Tracker`
 flag alone.
 
 ## Section 3: the commands
@@ -181,16 +196,41 @@ the table, scripted by slug.
 - Show and edit inside the start-mode table.
 - Starting an issue from the stdout or JSON listing.
 - A fix for huh's `Select` scrolling itself. The remaining huh selects
-  (type, base branch, status) are short, and the two issue pickers lose
-  their fixed height (section 5).
+  (type, base branch, status) are short; the long one, the record picker,
+  becomes the table (section 5).
 
-## Section 5: the huh pickers that remain
+## Section 5: the record picker becomes the table
 
 huh v1.0.0 pins the cursor row at the top of a `Select` given a `Height`,
 so the matches above the cursor are never visible: filtering with the
-cursor low shows one row. `IssueRecordPicker` (`tui/issue_record.go`)
-keeps that height and is the picker of `issue show`, `edit`, `comment`,
-`label` and `close` run without an ID. Its `Height(...)` goes, with the
-constant: the list renders in full and every match shows. `IssueTrackerPicker`
-is offered one issue from now on; its `Height(...)` goes too, with the
-constant, so the form no longer pads nine blank lines.
+cursor low shows one row. Without a height huh draws every option and
+bubbletea trims the lines past the terminal, so a long list loses its top
+rows instead. Neither is a picker for a mirrored project.
+
+`IssueRecordPicker` (`tui/issue_record.go`) is the picker of `issue show`,
+`edit`, `comment`, `label` and `close` run without an ID, through
+`huhRecordPrompter.PickRecord`. That method runs the table instead:
+
+```go
+func (huhRecordPrompter) PickRecord(ctx context.Context, records []issuepkg.Record) (string, error) {
+	rows := make([]issuepkg.Row, len(records))
+	for i := range records {
+		rows[i] = issuepkg.RecordRow(&records[i])
+	}
+	// run tui.IssueTableModel(rows, "all", tui.IssueActions{Pick: true});
+	// IssuePickNone is huh.ErrUserAborted; the picked slug is mapped back
+	// to records[i].ID by DisplayID.
+}
+```
+
+`issue.RecordRow(rec *Record) Row` is the row of a record without a
+branch, extracted from `mergeRepoIssues` (slug, title, labels, state,
+tracker status, tracker number, creation date) and used by both. The
+table opens on the "all" tab: the picker lists every record today, closed
+ones included.
+
+The `recordPrompter` interface and `scriptedRecordPrompter` are unchanged.
+`IssueRecordPicker`, `IssueRecordNew` and `issueRecordPickerHeight` are
+deleted. `IssueTrackerPicker` is offered one issue from now on; its
+`Height(...)` goes with its constant, so the form no longer pads nine
+blank lines.

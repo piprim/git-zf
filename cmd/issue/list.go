@@ -1,19 +1,17 @@
 package issue
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
@@ -80,13 +78,24 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		tracker: t,
 		stderr:  cmd.OutOrStderr(),
 		client:  client,
-		mirror:  mirrorOf(ir.appConfig, t),
+		mirror:  issueflow.MirrorOf(ir.appConfig, t),
 	}
 
-	return runList(ctx, os.Stdout, infra, flags)
+	row, err := runList(ctx, os.Stdout, infra, flags)
+	if err != nil || row == nil {
+		return err
+	}
+
+	// The table's program has exited: the start forms get the terminal.
+	deps := infra.deps()
+	deps.Cfg = ir.appConfig
+
+	return issueflow.StartRow(ctx, deps, issueflow.NewHuhStartPrompter(), row)
 }
 
-func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issueListFlags) error {
+// runList prints or shows the issues. It returns the row picked with s in
+// the table, nil when none: the stdout and JSON outputs never pick.
+func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issueListFlags) (*issuepkg.Row, error) {
 	// The TUI filters by status inside the table model, so it needs every row.
 	status := flags.status
 	if !flags.jsonOut && !flags.stdout {
@@ -95,27 +104,27 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 
 	rows, err := buildRows(ctx, infra, status)
 	if err != nil {
-		return fmt.Errorf("build issue rows: %w", err)
+		return nil, fmt.Errorf("build issue rows: %w", err)
 	}
 
 	if flags.jsonOut {
 		if err := json.NewEncoder(w).Encode(normalizeRows(rows)); err != nil {
-			return fmt.Errorf("encode json: %w", err)
+			return nil, fmt.Errorf("encode json: %w", err)
 		}
 
-		return nil
+		return nil, nil
 	}
 
 	if len(rows) == 0 {
 		fmt.Fprintln(w, "No issues found.")
 
-		return nil
+		return nil, nil
 	}
 
 	if flags.stdout {
 		tty.RenderIssueTable(w, rows)
 
-		return nil
+		return nil, nil
 	}
 
 	actions := tui.IssueActions{
@@ -131,13 +140,21 @@ func runList(ctx context.Context, w io.Writer, infra issueListInfra, flags issue
 	}
 	m, err := tui.IssueTableModel(rows, flags.status, actions)
 	if err != nil {
-		return fmt.Errorf("failed to construct issue table: %w", err)
+		return nil, fmt.Errorf("failed to construct issue table: %w", err)
 	}
-	if _, err := tea.NewProgram(m).Run(); err != nil {
-		return fmt.Errorf("run table: %w", err)
+	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	if err != nil {
+		return nil, fmt.Errorf("run table: %w", err)
+	}
+	if pick, slug := tui.PickedIssue(final); pick == tui.IssuePickRow {
+		for i := range rows {
+			if rows[i].IssueSlug == slug {
+				return &rows[i], nil
+			}
+		}
 	}
 
-	return nil
+	return nil, nil
 }
 
 // resolveRow loads the issue of a table row; a row that is not an issue
@@ -219,167 +236,19 @@ func editIssue(ctx context.Context, infra issueListInfra, slug, title, descripti
 	return fmt.Sprintf("Edited issue %s: %s", rec.DisplayID(), strings.TrimSpace(title)), nil
 }
 
+// deps is the start flow's view of the list's infrastructure: the rows come
+// from issueflow.ListRows, with the tracker listed.
+func (infra issueListInfra) deps() issueflow.StartDeps {
+	return issueflow.StartDeps{
+		Client: infra.client, Tracker: infra.tracker, Mirror: infra.mirror, Stderr: infra.stderr,
+		Flags: issuepkg.IssueStartFlags{Tracker: true},
+	}
+}
+
 // buildRows lists the issue rows matching status, as the TUI's status tab
-// does (see issuepkg.Row.MatchesStatus); "" keeps every row.
+// does; "" keeps every row.
 func buildRows(ctx context.Context, infra issueListInfra, status string) ([]issuepkg.Row, error) {
-	rows, err := buildAllRows(ctx, infra)
-	if err != nil || status == "" {
-		return rows, err
-	}
-
-	return slices.DeleteFunc(rows, func(r issuepkg.Row) bool { return !r.MatchesStatus(status) }), nil
-}
-
-// buildAllRows lists the tracked branches, the tracker's open issues and the
-// issues stored in the repository, merged into one row per issue, the same
-// way with the mirror on or off. The tracker is asked once: with the mirror
-// on, the reconcile's listing is the one shown.
-func buildAllRows(ctx context.Context, infra issueListInfra) ([]issuepkg.Row, error) {
-	rows, err := buildFromBranches(ctx, infra.client)
-	if err != nil {
-		return nil, err
-	}
-
-	fetchIssues(ctx, infra.client)
-	issues := reconcileIssues(ctx, infra.client, infra.mirror).Listed
-	if infra.mirror == nil && infra.tracker != nil {
-		if issues, err = infra.tracker.ListIssues(ctx); err != nil {
-			fmt.Fprintf(infra.stderr, "warning: tracker unavailable, listing the repository alone: %v\n", err)
-		}
-	}
-
-	return mergeRepoIssues(ctx, infra, mergeTrackerIssues(issues, rows))
-}
-
-// mergeTrackerIssues adds the tracker's open issues to the branch rows: a row
-// whose branch names a tracker issue gets its title, project, status and
-// creation date, and every other issue is appended.
-func mergeTrackerIssues(issues []tracker.Issue, rows []issuepkg.Row) []issuepkg.Row {
-	byID := make(map[string]*tracker.Issue, len(issues))
-	for i := range issues {
-		byID[issues[i].ID] = &issues[i]
-	}
-
-	seen := make(map[string]bool, len(rows))
-	for i := range rows {
-		iss, ok := byID[rows[i].IssueSlug]
-		if !ok {
-			continue
-		}
-		seen[iss.ID] = true
-		status := iss.Status
-		rows[i].Title, rows[i].Project, rows[i].TrackerStatus, rows[i].CreatedAt = iss.Subject, iss.Project, &status, iss.CreatedAt
-		rows[i].AssignedToMe = iss.AssignedToMe
-	}
-
-	for i := range issues {
-		iss := &issues[i]
-		if seen[iss.ID] {
-			continue
-		}
-		status := iss.Status
-		rows = append(rows, issuepkg.Row{
-			IssueSlug: iss.ID, Title: iss.Subject, Project: iss.Project, TrackerStatus: &status, CreatedAt: iss.CreatedAt,
-			AssignedToMe: iss.AssignedToMe,
-		})
-	}
-
-	return rows
-}
-
-// mergeRepoIssues enriches the branch rows with the issues stored in the
-// repository: a row whose issue has a record gets its title, labels and state, and
-// every record without a branch row is appended, so the backlog shows up
-// before anyone starts a branch.
-func mergeRepoIssues(ctx context.Context, infra issueListInfra, rows []issuepkg.Row) ([]issuepkg.Row, error) {
-	records, warnings, err := issuepkg.List(ctx, infra.client)
-	if err != nil {
-		return nil, fmt.Errorf("list repo issues: %w", err)
-	}
-	printWarnings(infra.stderr, warnings)
-
-	// A branch names its issue by the full ID in its start op. A branch
-	// started before that op carried one, or seeded by hand, falls back to
-	// its slug, which is the display ID the branch was named after.
-	byID := make(map[string]*issuepkg.Record, len(records))
-	byDisplayID := make(map[string]*issuepkg.Record, len(records))
-	for i := range records {
-		byID[records[i].ID] = &records[i]
-		byDisplayID[records[i].DisplayID()] = &records[i]
-	}
-
-	out := rows
-	started := make(map[string]bool, len(out))
-	for i := range out {
-		var rec *issuepkg.Record
-		ok := false
-		if out[i].Branch != nil {
-			rec, ok = byID[out[i].Branch.IssueID]
-		}
-		if !ok {
-			rec, ok = byDisplayID[out[i].IssueSlug]
-		}
-		if !ok {
-			continue
-		}
-		started[rec.ID] = true
-		// The record's title, not the one the branch chain froze at start: it
-		// follows `issue edit`.
-		out[i].Title = rec.Title
-		out[i].Labels, out[i].State, out[i].TrackerStatus = rec.Labels, rec.State, trackerStatusOf(rec)
-		out[i].TrackerID, out[i].CreatedAt = trackerNumber(rec), rec.CreatedAt
-	}
-
-	for i := range records {
-		rec := &records[i]
-		if started[rec.ID] {
-			continue
-		}
-		out = append(out, issuepkg.Row{
-			IssueSlug: rec.DisplayID(), Title: rec.Title,
-			Labels: rec.Labels, State: rec.State, TrackerStatus: trackerStatusOf(rec),
-			TrackerID: trackerNumber(rec), CreatedAt: rec.CreatedAt,
-		})
-	}
-
-	return out, nil
-}
-
-// trackerStatusOf is the status shown for a repo issue: the tracker's status
-// name when the issue is mirrored, its open/closed state otherwise.
-func trackerStatusOf(rec *issuepkg.Record) *string {
-	s := cmp.Or(rec.TrackerStatus, rec.State)
-
-	return &s
-}
-
-// exportedNumber is the tracker number of a repo-born issue that was
-// exported, "" otherwise.
-func trackerNumber(rec *issuepkg.Record) string {
-	if rec.Tracker == nil {
-		return ""
-	}
-
-	return rec.Tracker.ID
-}
-
-func buildFromBranches(ctx context.Context, c *git.Client) ([]issuepkg.Row, error) {
-	branches, err := branch.ListRows(ctx, c, branch.StatusAll)
-	if err != nil {
-		return nil, fmt.Errorf("list branches: %w", err)
-	}
-
-	rows := make([]issuepkg.Row, len(branches))
-	for i := range branches {
-		b := branches[i]
-		rows[i] = issuepkg.Row{
-			IssueSlug: b.IssueSlug,
-			Title:     b.Title,
-			Branch:    &b,
-		}
-	}
-
-	return rows, nil
+	return issueflow.ListRows(ctx, infra.deps(), status)
 }
 
 func normalizeRows(rows []issuepkg.Row) []issuepkg.Row {
