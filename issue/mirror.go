@@ -461,12 +461,13 @@ func adopt(ctx context.Context, c *git.Client, rec *Record, t *tracker.Issue) (b
 
 // trackerIssue is the issue as the tracker shows it now: listed when it is
 // in the open listing, read with one call otherwise. nil, nil for a record
-// closed on both sides and not listed: nothing to compare.
+// closed on both sides, not listed and with nothing to push: nothing to
+// compare.
 func (m *Mirror) trackerIssue(ctx context.Context, rec *Record, listed *tracker.Issue) (*tracker.Issue, error) {
 	if listed != nil {
 		return listed, nil
 	}
-	if rec.State == StateClosed && cmp.Or(rec.TrackerState, StateOpen) == StateClosed {
+	if rec.State == StateClosed && cmp.Or(rec.TrackerState, StateOpen) == StateClosed && recordSettled(rec) {
 		return nil, nil
 	}
 
@@ -628,6 +629,8 @@ func (m *Mirror) syncContent(
 
 // pullComments appends the tracker's comments the record lacks, oldest
 // first, when the tracker moved since the snapshot. An empty body is skipped.
+// A tracker comment with the body of a local comment not yet linked is that
+// comment, posted by a run whose link never landed: it is linked, not pulled.
 func (m *Mirror) pullComments(ctx context.Context, c *git.Client, rec *Record, t *tracker.Issue) (bool, error) {
 	if rec.TrackerSeen != nil && t.UpdatedAt.Equal(rec.TrackerSeen.Updated) {
 		return false, nil
@@ -638,13 +641,24 @@ func (m *Mirror) pullComments(ctx context.Context, c *git.Client, rec *Record, t
 		return false, fmt.Errorf("list comments of tracker issue %s: %w", rec.Tracker.ID, err)
 	}
 	known := make(map[string]bool, len(rec.Comments))
-	for _, rc := range rec.Comments {
+	unlinked := make(map[string]int) // body → index of the first unlinked local comment
+	for i, rc := range rec.Comments {
 		known[rc.TrackerID] = true
+		if _, seen := unlinked[rc.Body]; rc.TrackerID == "" && !seen {
+			unlinked[rc.Body] = i
+		}
 	}
 
 	var ops []*Op
 	for _, tc := range comments {
 		if tc.Body == "" || known[tc.ID] {
+			continue
+		}
+		if i, ok := unlinked[tc.Body]; ok {
+			delete(unlinked, tc.Body)
+			ops = append(ops, &Op{Type: OpLinkComment, Comment: rec.Comments[i].ID, TrackerCommentID: tc.ID})
+			rec.Comments[i].TrackerID = tc.ID
+
 			continue
 		}
 		ops = append(ops, &Op{
@@ -747,14 +761,19 @@ func baseline(rec *Record) TrackerSnapshot {
 }
 
 // contentSettled reports that nothing moved on either side since the
-// snapshot: the tracker's updated time is the snapshot's, the record equals
-// the snapshot, and every comment is on the tracker.
+// snapshot: the tracker's updated time is the snapshot's and the record has
+// nothing to push.
 func contentSettled(rec *Record, t *tracker.Issue) bool {
 	s := rec.TrackerSeen
-	if s == nil || s.Updated.IsZero() || !t.UpdatedAt.Equal(s.Updated) {
-		return false
-	}
-	if rec.Title != s.Title || rec.Description != s.Description || !slices.Equal(rec.Labels, s.Labels) {
+
+	return s != nil && !s.Updated.IsZero() && t.UpdatedAt.Equal(s.Updated) && recordSettled(rec)
+}
+
+// recordSettled reports that the record has nothing to push: it equals its
+// snapshot and every comment is on the tracker.
+func recordSettled(rec *Record) bool {
+	s := rec.TrackerSeen
+	if s == nil || rec.Title != s.Title || rec.Description != s.Description || !slices.Equal(rec.Labels, s.Labels) {
 		return false
 	}
 	for _, c := range rec.Comments {

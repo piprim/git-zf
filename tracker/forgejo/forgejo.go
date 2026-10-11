@@ -496,20 +496,48 @@ func (a *forgejoAdapter) UpdateIssue(ctx context.Context, issueID, title, descri
 	return nil
 }
 
-// repoLabels lists the repository's labels, every page.
+// repoLabels lists the labels an issue of the repository can carry: the
+// repository's, then the owning organisation's (none when the owner is a
+// user: the org endpoint answers 404). A name defined at both levels is the
+// repository's.
 func (a *forgejoAdapter) repoLabels(ctx context.Context) (path string, labels []label, err error) {
 	owner, repo, err := a.ownerRepo()
 	if err != nil {
 		return "", nil, err
 	}
 	path = fmt.Sprintf("/repos/%s/%s/labels", url.PathEscape(owner), url.PathEscape(repo))
+	if labels, err = a.pageLabels(ctx, path); err != nil {
+		return "", nil, err
+	}
+	org, err := a.pageLabels(ctx, "/orgs/"+url.PathEscape(owner)+"/labels")
+	var he *httpError
+	if errors.As(err, &he) && he.StatusCode == http.StatusNotFound {
+		return path, labels, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	names := make(map[string]bool, len(labels))
+	for _, l := range labels {
+		names[l.Name] = true
+	}
+	for _, l := range org {
+		if !names[l.Name] {
+			labels = append(labels, l)
+		}
+	}
 
+	return path, labels, nil
+}
+
+// pageLabels lists the labels under path, every page.
+func (a *forgejoAdapter) pageLabels(ctx context.Context, path string) (labels []label, err error) {
 	for page := 1; page <= maxPages; page++ {
 		q := url.Values{"limit": {strconv.Itoa(issuesPerPage)}, "page": {strconv.Itoa(page)}}
 
 		var batch []label
 		if err := a.doJSON(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &batch); err != nil {
-			return "", nil, fmt.Errorf("forgejo: list labels: %w", err)
+			return nil, fmt.Errorf("forgejo: list labels: %w", err)
 		}
 		if len(batch) == 0 {
 			break
@@ -517,10 +545,10 @@ func (a *forgejoAdapter) repoLabels(ctx context.Context) (path string, labels []
 		labels = append(labels, batch...)
 	}
 
-	return path, labels, nil
+	return labels, nil
 }
 
-// ListLabels returns the names of the repository's labels.
+// ListLabels returns the names of the repository's and the organisation's labels.
 func (a *forgejoAdapter) ListLabels(ctx context.Context) ([]string, error) {
 	_, labels, err := a.repoLabels(ctx)
 	if err != nil {

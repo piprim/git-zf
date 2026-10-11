@@ -1036,13 +1036,12 @@ func TestListLabels(t *testing.T) {
 		t.Parallel()
 
 		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/v1/repos/a/b/labels" {
+			switch {
+			case r.URL.Path == "/api/v1/orgs/a/labels":
+				http.NotFound(w, r) // the owner is a user
+			case r.URL.Path != "/api/v1/repos/a/b/labels":
 				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
-
-				return
-			}
-			switch r.URL.Query().Get("page") {
-			case "1":
+			case r.URL.Query().Get("page") == "1":
 				fmt.Fprint(w, `[{"id":1,"name":"bug"},{"id":2,"name":"ui"}]`)
 			default:
 				fmt.Fprint(w, `[]`)
@@ -1050,6 +1049,27 @@ func TestListLabels(t *testing.T) {
 		})
 
 		if got, err := a.ListLabels(t.Context()); err != nil || !slices.Equal(got, []string{"bug", "ui"}) {
+			t.Errorf("ListLabels = %q, %v", got, err)
+		}
+	})
+
+	t.Run("adds the organisation's labels, the repository's name winning", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Query().Get("page") != "1":
+				fmt.Fprint(w, `[]`)
+			case r.URL.Path == "/api/v1/repos/a/b/labels":
+				fmt.Fprint(w, `[{"id":1,"name":"bug"}]`)
+			case r.URL.Path == "/api/v1/orgs/a/labels":
+				fmt.Fprint(w, `[{"id":7,"name":"org-wide"},{"id":8,"name":"bug"}]`)
+			default:
+				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
+			}
+		})
+
+		if got, err := a.ListLabels(t.Context()); err != nil || !slices.Equal(got, []string{"bug", "org-wide"}) {
 			t.Errorf("ListLabels = %q, %v", got, err)
 		}
 	})
@@ -1072,6 +1092,12 @@ func TestSetLabels(t *testing.T) {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/a/b/labels":
 				if r.URL.Query().Get("page") == "1" {
 					fmt.Fprint(w, `[{"id":1,"name":"bug"}]`)
+				} else {
+					fmt.Fprint(w, `[]`)
+				}
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/orgs/a/labels":
+				if r.URL.Query().Get("page") == "1" {
+					fmt.Fprint(w, `[{"id":7,"name":"org-wide"}]`)
 				} else {
 					fmt.Fprint(w, `[]`)
 				}
@@ -1106,6 +1132,18 @@ func TestSetLabels(t *testing.T) {
 			t.Fatalf("SetLabels: %v", err)
 		}
 		if !slices.Equal(s.created, []string{"urgent"}) || !slices.Equal(s.put, []int{1, 11}) {
+			t.Errorf("created %q, put %v", s.created, s.put)
+		}
+	})
+
+	t.Run("an organisation label is kept by ID, not created", func(t *testing.T) {
+		t.Parallel()
+
+		a, s := newServer(t)
+		if err := a.SetLabels(t.Context(), "42", []string{"bug", "org-wide"}); err != nil {
+			t.Fatalf("SetLabels: %v", err)
+		}
+		if len(s.created) != 0 || !slices.Equal(s.put, []int{1, 7}) {
 			t.Errorf("created %q, put %v", s.created, s.put)
 		}
 	})

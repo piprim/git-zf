@@ -1082,6 +1082,22 @@ func TestReconcile_Comments(t *testing.T) {
 		}
 	})
 
+	t.Run("a local comment already on the tracker is linked, not posted again", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ctx := t.Context()
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpAddComment, Body: "Posted, link lost"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		web := ft.WebComment("42", "alice", "Posted, link lost")
+		mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		if len(ft.RecordedComments) != 0 || len(got.Comments) != 1 || got.Comments[0].TrackerID != web.ID {
+			t.Errorf("posted = %+v, comments = %+v", ft.RecordedComments, got.Comments)
+		}
+	})
+
 	t.Run("an empty tracker comment is not pulled", func(t *testing.T) {
 		t.Parallel()
 
@@ -1176,6 +1192,30 @@ func TestSyncOne(t *testing.T) {
 		got, _ := Load(ctx, c, rec.ID)
 		if err != nil || len(ft.RecordedComments) != 1 || len(got.Comments) != 1 || got.Comments[0].TrackerID == "" {
 			t.Errorf("err = %v, posted = %+v, comments = %+v", err, ft.RecordedComments, got.Comments)
+		}
+	})
+
+	t.Run("a comment left behind by a failed sync is posted by the next reconcile", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, m, rec := importOne(t)
+		ctx := t.Context()
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpSetState, Value: StateClosed}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		mustReconcile(t, m, c)
+		if err := Append(ctx, c, rec.ID, &Op{Type: OpAddComment, Body: "After the close"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		ft.GetErr = errors.New("502")
+		if _, err := m.SyncOne(ctx, c, rec.ID); err == nil {
+			t.Fatal("SyncOne with the tracker down: no error")
+		}
+		ft.GetErr = nil
+		mustReconcile(t, m, c)
+		got, _ := Load(ctx, c, rec.ID)
+		if len(ft.RecordedComments) != 1 || len(got.Comments) != 1 || got.Comments[0].TrackerID == "" {
+			t.Errorf("posted = %+v, comments = %+v", ft.RecordedComments, got.Comments)
 		}
 	})
 
