@@ -388,6 +388,21 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 			t.Error("expected a quit command")
 		}
 	})
+
+	t.Run("the dialog scrolls horizontally", func(t *testing.T) {
+		m := newTable(t, func(string) (string, error) {
+			return "Description: a line far longer than the thirty columns of this terminal", nil
+		})
+		m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 20})
+		m, _ = m.Update(key(tea.KeyEnter))
+		if v := m.View(); !strings.Contains(v, "Description:") {
+			t.Fatalf("view = %q", v)
+		}
+		m, _ = m.Update(key(tea.KeyRight))
+		if v := m.View(); strings.Contains(v, "Description:") {
+			t.Errorf("view after right = %q", v)
+		}
+	})
 }
 
 func TestIssueTable_EditDialog(t *testing.T) {

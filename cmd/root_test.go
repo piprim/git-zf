@@ -20,7 +20,7 @@ func TestGetRootCmd_menu(t *testing.T) {
 	})
 
 	t.Run("menu offers the workflow commands in order", func(t *testing.T) {
-		want := []string{"commit", "issue", "branch", "review"}
+		want := []string{"commit", "issue", "branch", "review", "log"}
 
 		var got []string
 		for _, sub := range menuSubs(root) {

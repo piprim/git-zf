@@ -209,6 +209,22 @@ When adding a review op type, add its constant and its case in `apply`
 (`review/record.go`) with a table case in `TestFold`. Unknown types must keep
 being skipped.
 
+### Testing the log view
+
+`git zf log` runs the colored commit graph of every ref but `refs/*zf/*`
+(`git.LogGraph`) in a bubbletea list (`tui.LogModel`); enter shows the commit's
+stat and patch (`git.ShowCommit`) in a dialog that scrolls both ways; `/` filters
+the lines like the issue table does. Without a
+TTY on stdout the graph is printed as `git log` would (`git.PrintLog`).
+Arguments after `--` reach `git log`.
+
+    mise exec -- go test ./git/... -run "TestLogGraph|TestShowCommit|TestPrintLog" -v
+    mise exec -- go test ./tui/... -run "TestCommitHash|TestLogModel" -v
+    mise exec -- go test ./cmd/log/... -v
+
+The hash of a graph line is read by `commitHash` (`tui/log.go`) after
+stripping colors; a graph-only line (`|/`) has none and enter ignores it.
+
 ### Testing the menus
 
 `git zf` (no subcommand), `git zf review`, `git zf branch` and `git zf issue`

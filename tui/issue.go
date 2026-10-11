@@ -206,6 +206,9 @@ func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueAction
 	fi.Placeholder = "type to filter…"
 	fi.CharLimit = 64
 
+	dialog := viewport.New(width, issueTableHeight)
+	dialog.SetHorizontalStep(horizontalStep)
+
 	return &issueTableModel{
 		table:         t,
 		allRows:       rows,
@@ -215,7 +218,7 @@ func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueAction
 		projectFilter: projectAll,
 		visible:       filterRows(rows, status, "", projectAll, includeProj, false),
 		actions:       actions,
-		dialog:        viewport.New(width, issueTableHeight),
+		dialog:        dialog,
 	}, nil
 }
 
@@ -618,7 +621,7 @@ func (m *issueTableModel) View() string {
 		return dialogStyle.Render(m.form.View()) + "\n\nenter: save · esc: cancel"
 	}
 	if m.viewing {
-		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓ scroll · e: edit · esc: back"
+		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓←→ scroll · e: edit · esc: back"
 	}
 
 	tabs := renderStatusTabs(m.statusFilter)
