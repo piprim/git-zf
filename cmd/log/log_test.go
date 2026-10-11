@@ -14,7 +14,7 @@ import (
 	"github.com/piprim/git-zf/internal/pkg"
 )
 
-func newLogRig(t *testing.T) (*git.Client, *bytes.Buffer) {
+func newLogRig(t *testing.T) (*git.Client, *bytes.Buffer, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -45,7 +45,7 @@ func newLogRig(t *testing.T) (*git.Client, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 
-	return client, out
+	return client, out, dir
 }
 
 // defaults is the built-in log configuration.
@@ -63,7 +63,7 @@ func defaults(t *testing.T) config.LogConfig {
 func TestRunLog_NoTTY(t *testing.T) {
 	t.Parallel()
 
-	client, out := newLogRig(t)
+	client, out, _ := newLogRig(t)
 	if err := runLog(t.Context(), client, defaults(t), []string{"-n", "1"}, false); err != nil {
 		t.Fatalf("runLog: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestRunLog_NoTTY(t *testing.T) {
 	})
 
 	t.Run("default-cmd picks the command", func(t *testing.T) {
-		client, out := newLogRig(t)
+		client, out, _ := newLogRig(t)
 		cfg := defaults(t)
 		cfg.DefaultCmd = "linear"
 		if err := runLog(t.Context(), client, cfg, nil, false); err != nil {
@@ -105,6 +105,57 @@ func TestGetRootCmd(t *testing.T) {
 	t.Run("accepts git log arguments after --", func(t *testing.T) {
 		if err := cmd.ValidateArgs([]string{"-n", "5", "main..feature"}); err != nil {
 			t.Errorf("ValidateArgs: %v", err)
+		}
+	})
+}
+
+func TestPlanLinearize(t *testing.T) {
+	t.Parallel()
+
+	client, _, dir := newLogRig(t)
+	run := func(args ...string) string {
+		t.Helper()
+
+		out, err := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+
+		return strings.TrimSpace(string(out))
+	}
+
+	t.Run("a plain commit is refused", func(t *testing.T) {
+		if _, err := planLinearize(t.Context(), client, run("rev-parse", "--short", "HEAD")); err == nil {
+			t.Error("planLinearize accepted a commit of one parent")
+		}
+	})
+
+	run("switch", "-q", "-c", "side")
+	run("commit", "-q", "--allow-empty", "-m", "feat: side")
+	run("switch", "-q", "main")
+	run("merge", "-q", "--no-ff", "side", "-m", "merge side")
+	merge := run("rev-parse", "--short", "HEAD")
+	l, err := planLinearize(t.Context(), client, merge)
+	if err != nil {
+		t.Fatalf("planLinearize: %v", err)
+	}
+
+	t.Run("the question names the merge and the branch, with no push without an upstream", func(t *testing.T) {
+		if l.Confirm != "Linearize "+merge+" on main?" || l.PushConfirm != "" || l.Push != nil {
+			t.Errorf("plan = %+v", l)
+		}
+	})
+
+	t.Run("applying says what moved", func(t *testing.T) {
+		text, err := l.Apply()
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if want := "main: " + merge + " → " + run("rev-parse", "--short", "main") + " (the old tip is in the reflog)"; text != want {
+			t.Errorf("text = %q, want %q", text, want)
+		}
+		if got := run("rev-list", "--count", "main"); got != "3" {
+			t.Errorf("main holds %s commits, want 3", got)
 		}
 	})
 }

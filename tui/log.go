@@ -45,7 +45,48 @@ type LogActions struct {
 	Load func(cmd config.LogCmd) ([]string, error)
 	// Show renders one commit; its error is shown in place of the commit.
 	Show func(hash string) (string, error)
+	// Plan fetches and says how the merge hash would be replaced by one
+	// commit; its error is the reason it cannot be.
+	Plan func(hash string) (Linearization, error)
 }
+
+// Linearization is what replacing a merge by one commit holding its tree
+// would do: a question, the rewrite, and the push that may follow it.
+type Linearization struct {
+	// Confirm is the question asked before Apply, e.g. "Linearize bad9692
+	// on master?".
+	Confirm string
+	// Apply rewrites the branch and returns a line saying what moved.
+	Apply func() (string, error)
+	// PushConfirm is the question asked after Apply; "" when nothing is to
+	// push. Push pushes and returns a line saying so.
+	PushConfirm string
+	Push        func() (string, error)
+}
+
+// The messages of the linearize steps, each the result of a command that
+// ran git off the event loop.
+type (
+	planMsg struct {
+		plan Linearization
+		err  error
+	}
+	appliedMsg struct {
+		text string
+		err  error
+	}
+	pushedMsg struct {
+		text string
+		err  error
+	}
+)
+
+// What the hint line is asking.
+const (
+	askNone = iota
+	askLinearize
+	askPush
+)
 
 // LogModel is the `git zf log` view: the colored lines of cmds[current], a
 // cursor, enter opening the commit under it in a dialog that replaces the
@@ -83,6 +124,11 @@ type logModel struct {
 	// viewing is set while the dialog replaces the list.
 	viewing bool
 	dialog  viewport.Model
+	// asking is the y/n question the hint shows about plan; status is a
+	// line shown in place of the hint until the next key.
+	asking int
+	plan   Linearization
+	status string
 }
 
 func (*logModel) Init() tea.Cmd { return nil }
@@ -164,6 +210,9 @@ func (m *logModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.viewing {
 		return m.updateViewing(msg)
 	}
+	if done := m.updateLinearize(msg); done {
+		return m, nil
+	}
 	if m.filtering {
 		return m.updateFiltering(msg)
 	}
@@ -178,7 +227,16 @@ func (m *logModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.picking {
 		return m.updatePicking(key)
 	}
+	if m.asking != askNone {
+		return m.updateAsking(key)
+	}
+	m.status = ""
 
+	return m.updateKey(key)
+}
+
+// updateKey handles a key of the list.
+func (m *logModel) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k := key.String(); k {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -203,13 +261,19 @@ func (m *logModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "c":
 		m.picking = true
 		m.pickCursor = m.current
+	case "L":
+		if hash := m.hashUnderCursor(); hash != "" {
+			m.status = "fetching…"
+
+			return m, func() tea.Msg { p, err := m.actions.Plan(hash); return planMsg{p, err} }
+		}
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if i := m.cmdWithKey(int(k[0] - '0')); i >= 0 {
 			m.switchTo(i)
 		}
 	default: // ←→ h l scroll horizontally
 		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
+		m.list, cmd = m.list.Update(key)
 
 		return m, cmd
 	}
@@ -260,12 +324,73 @@ func (m *logModel) updateFiltering(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateLinearize handles the messages of the linearize steps; done is
+// false for any other message.
+func (m *logModel) updateLinearize(msg tea.Msg) (done bool) {
+	switch msg := msg.(type) {
+	case planMsg:
+		m.plan, m.asking, m.status = msg.plan, askLinearize, ""
+		if msg.err != nil {
+			m.asking, m.status = askNone, "Error: "+msg.err.Error()
+		}
+	case appliedMsg:
+		m.switchTo(m.current)
+		m.asking, m.status = askNone, msg.text
+		switch {
+		case msg.err != nil:
+			m.status = "Error: " + msg.err.Error()
+		case m.plan.PushConfirm != "":
+			m.asking = askPush
+		}
+	case pushedMsg:
+		m.asking, m.status = askNone, msg.text
+		if msg.err != nil {
+			m.status = "Error: " + msg.err.Error()
+		}
+	default:
+		return false
+	}
+
+	return true
+}
+
+// updateAsking answers the y/n question of the hint.
+func (m *logModel) updateAsking(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "y":
+		if m.asking == askPush {
+			m.status += " · pushing…"
+
+			return m, func() tea.Msg { text, err := m.plan.Push(); return pushedMsg{text, err} }
+		}
+		m.status = "linearizing…"
+
+		return m, func() tea.Msg { text, err := m.plan.Apply(); return appliedMsg{text, err} }
+	case "n", "esc":
+		if m.asking == askPush {
+			m.status += " · not pushed"
+		}
+		m.asking = askNone
+	}
+
+	return m, nil
+}
+
+// hashUnderCursor is the hash of the line under the cursor, "" for a
+// graph-only line or no line.
+func (m *logModel) hashUnderCursor() string {
+	if m.loadErr != "" || m.cursor >= len(m.visible) {
+		return ""
+	}
+
+	return commitHash(m.visible[m.cursor])
+}
+
 // openDialog shows the commit under the cursor; a graph-only line has none.
 func (m *logModel) openDialog() {
-	if m.loadErr != "" || m.cursor >= len(m.visible) {
-		return
-	}
-	hash := commitHash(m.visible[m.cursor])
+	hash := m.hashUnderCursor()
 	if hash == "" {
 		return
 	}
@@ -314,9 +439,16 @@ func (m *logModel) View() string {
 		}
 
 		return head + renderPicker("Pick command", m.pickCursor, names)
+	case m.asking == askLinearize:
+		return head + m.plan.Confirm + "  (y: yes  n: no)"
+	case m.asking == askPush:
+		return head + m.status + " · " + m.plan.PushConfirm + "  (y: yes  n: no)"
+	case m.status != "":
+		return head + m.status
 	}
 
-	return head + "↑↓ move · ←→ scroll · enter: show · / to filter · 1-9: command · c: pick · q to quit"
+	return head + "↑↓ move · ←→ scroll · enter: show · / to filter · 1-9: command · c: pick · " +
+		"L: linearize merge · q to quit"
 }
 
 // describe is the description of c as a suffix of its name, empty without one.

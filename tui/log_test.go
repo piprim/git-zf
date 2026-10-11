@@ -396,3 +396,165 @@ func TestLogModel_Commands(t *testing.T) {
 		}
 	})
 }
+
+func TestLogModel_Linearize(t *testing.T) {
+	key, runeKey := logKey, logRuneKey
+	lines := []string{"* bbbbbbb - merge side", "|\\  ", "| * aaaaaaa - feat: side"}
+
+	var planned, applied, pushed []string
+	var loads int
+	var planErr, applyErr error
+	withPush := true
+	actions := LogActions{
+		Load: func(config.LogCmd) ([]string, error) {
+			loads++
+
+			return []string{"* ccccccc - merge side", "* 1111111 - docs"}, nil
+		},
+		Plan: func(hash string) (Linearization, error) {
+			planned = append(planned, hash)
+			if planErr != nil {
+				return Linearization{}, planErr
+			}
+			l := Linearization{
+				Confirm: "Linearize " + hash + " on main?",
+				Apply: func() (string, error) {
+					applied = append(applied, hash)
+
+					return "main: " + hash + " → ccccccc", applyErr
+				},
+			}
+			if withPush {
+				l.PushConfirm = "Push main to origin with --force-with-lease=main:" + hash + "?"
+				l.Push = func() (string, error) {
+					pushed = append(pushed, hash)
+
+					return "pushed main to origin/main", nil
+				}
+			}
+
+			return l, nil
+		},
+	}
+	reset := func() {
+		planned, applied, pushed, loads, planErr, applyErr, withPush = nil, nil, nil, 0, nil, nil, true
+	}
+	// press sends a key and runs the command it returns, feeding its message
+	// back, like the bubbletea runtime does.
+	press := func(m tea.Model, k tea.KeyMsg) tea.Model {
+		m, cmd := m.Update(k)
+		if cmd != nil {
+			m, _ = m.Update(cmd())
+		}
+
+		return m
+	}
+	newLog := func() tea.Model { return LogModel(lines, oneCmd, 0, actions) }
+	ask := func() tea.Model { return press(newLog(), runeKey('L')) }
+
+	t.Run("the hint offers L", func(t *testing.T) {
+		if v := newLog().View(); !strings.Contains(v, "L: linearize") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("L on a graph-only line does nothing", func(t *testing.T) {
+		reset()
+		m := press(press(newLog(), key(tea.KeyDown)), runeKey('L'))
+		if planned != nil || !strings.Contains(m.View(), "enter: show") {
+			t.Errorf("planned = %v, view = %q", planned, m.View())
+		}
+	})
+
+	t.Run("L says it is fetching, then asks the plan's question", func(t *testing.T) {
+		reset()
+		m, cmd := newLog().Update(runeKey('L'))
+		if v := m.View(); !strings.Contains(v, "fetching") {
+			t.Errorf("view = %q", v)
+		}
+		m, _ = m.Update(cmd())
+		if v := m.View(); !strings.Contains(v, "Linearize bbbbbbb on main?") || !strings.Contains(v, "y: yes") {
+			t.Errorf("view = %q", v)
+		}
+		if !slices.Equal(planned, []string{"bbbbbbb"}) {
+			t.Errorf("planned = %v", planned)
+		}
+	})
+
+	t.Run("a refused plan shows its reason until the next key", func(t *testing.T) {
+		reset()
+		planErr = errors.New("bbbbbbb is not a merge of two parents")
+		m := ask()
+		if v := m.View(); !strings.Contains(v, "Error: bbbbbbb is not a merge") || strings.Contains(v, "y: yes") {
+			t.Errorf("view = %q", v)
+		}
+		m = press(m, key(tea.KeyDown))
+		if v := m.View(); strings.Contains(v, "Error") || !strings.Contains(v, "enter: show") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("n and esc keep the branch", func(t *testing.T) {
+		for _, k := range []tea.KeyMsg{runeKey('n'), key(tea.KeyEsc)} {
+			reset()
+			m := press(ask(), k)
+			if applied != nil || !strings.Contains(m.View(), "enter: show") {
+				t.Errorf("%s: applied = %v, view = %q", k, applied, m.View())
+			}
+		}
+	})
+
+	t.Run("y rewrites, reloads the lines and asks for the push", func(t *testing.T) {
+		reset()
+		m := press(ask(), runeKey('y'))
+		v := m.View()
+		if !slices.Equal(applied, []string{"bbbbbbb"}) || loads != 1 || pushed != nil {
+			t.Errorf("applied = %v, loads = %d, pushed = %v", applied, loads, pushed)
+		}
+		if !strings.Contains(v, "ccccccc - merge side") || !strings.Contains(v, "main: bbbbbbb → ccccccc") ||
+			!strings.Contains(v, "Push main to origin with --force-with-lease=main:bbbbbbb?") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("n after the rewrite leaves it unpushed", func(t *testing.T) {
+		reset()
+		m := press(press(ask(), runeKey('y')), runeKey('n'))
+		if pushed != nil || !strings.Contains(m.View(), "main: bbbbbbb → ccccccc · not pushed") {
+			t.Errorf("pushed = %v, view = %q", pushed, m.View())
+		}
+	})
+
+	t.Run("y after the rewrite pushes", func(t *testing.T) {
+		reset()
+		m := press(press(ask(), runeKey('y')), runeKey('y'))
+		if !slices.Equal(pushed, []string{"bbbbbbb"}) || !strings.Contains(m.View(), "pushed main to origin/main") {
+			t.Errorf("pushed = %v, view = %q", pushed, m.View())
+		}
+	})
+
+	t.Run("without a push the result alone is shown", func(t *testing.T) {
+		reset()
+		withPush = false
+		m := press(ask(), runeKey('y'))
+		if v := m.View(); !strings.Contains(v, "main: bbbbbbb → ccccccc") || strings.Contains(v, "y: yes") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("a failed rewrite shows the error and asks nothing more", func(t *testing.T) {
+		reset()
+		applyErr = errors.New("update-ref: ref moved")
+		m := press(ask(), runeKey('y'))
+		if v := m.View(); !strings.Contains(v, "Error: update-ref: ref moved") || strings.Contains(v, "y: yes") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("ctrl+c quits while asking", func(t *testing.T) {
+		reset()
+		if _, cmd := ask().Update(key(tea.KeyCtrlC)); cmd == nil {
+			t.Error("ctrl+c must quit")
+		}
+	})
+}
