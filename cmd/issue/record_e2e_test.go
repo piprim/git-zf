@@ -32,12 +32,22 @@ type scriptedRecordPrompter struct {
 	// EditTitle and EditDescription are what EditIssue leaves in the form.
 	EditTitle, EditDescription string
 	Err                        error // returned by every method when non-nil
+	FormErr                    error // returned by the next form alone, then cleared: esc in a form
 
+	Picks       int               // times PickRecord was called
 	PickedFrom  []issuepkg.Record // records PickRecord was offered
 	EditOffered [2]string         // title and description EditIssue was prefilled with
 }
 
 var _ recordPrompter = (*scriptedRecordPrompter)(nil)
+
+// formErr returns FormErr once.
+func (s *scriptedRecordPrompter) formErr() error {
+	err := s.FormErr
+	s.FormErr = nil
+
+	return err
+}
 
 func (s *scriptedRecordPrompter) NewIssue(_ context.Context, _ []string, in *issuepkg.NewIssue) error {
 	if s.Err != nil {
@@ -50,6 +60,7 @@ func (s *scriptedRecordPrompter) NewIssue(_ context.Context, _ []string, in *iss
 
 func (s *scriptedRecordPrompter) PickRecord(_ context.Context, records []issuepkg.Record) (string, error) {
 	s.PickedFrom = records
+	s.Picks++
 	if s.Err != nil {
 		return "", s.Err
 	}
@@ -61,10 +72,17 @@ func (s *scriptedRecordPrompter) PickRecord(_ context.Context, records []issuepk
 }
 
 func (s *scriptedRecordPrompter) CommentBody(_ context.Context) (string, error) {
+	if err := s.formErr(); err != nil {
+		return "", err
+	}
+
 	return s.Comment, s.Err
 }
 
 func (s *scriptedRecordPrompter) EditIssue(_ context.Context, title, description *string) error {
+	if err := s.formErr(); err != nil {
+		return err
+	}
 	if s.Err != nil {
 		return s.Err
 	}
@@ -76,6 +94,9 @@ func (s *scriptedRecordPrompter) EditIssue(_ context.Context, title, description
 
 func (s *scriptedRecordPrompter) LabelChanges(_ context.Context, choices, current []string, single bool) ([]string, error) {
 	s.LabelOffered.Choices, s.LabelOffered.Current, s.LabelOffered.Single = choices, current, single
+	if err := s.formErr(); err != nil {
+		return nil, err
+	}
 
 	return s.LabelSet, s.Err
 }

@@ -137,49 +137,47 @@ func runLabel(ctx context.Context, client *git.Client, p recordPrompter, args []
 		idArgs, tokens = args[:1], args[1:]
 	}
 
-	rec, err := resolveRecord(ctx, client, p, idArgs)
-	if err != nil {
-		return err
-	}
-	choices, single := labelChoices(ctx, client, m, rec.Labels)
+	return withRecord(ctx, client, p, idArgs, func(rec issuepkg.Record) error {
+		choices, single := labelChoices(ctx, client, m, rec.Labels)
 
-	var final []string
-	if len(tokens) == 0 {
-		final, err = p.LabelChanges(ctx, choices, rec.Labels, single)
+		var final []string
+		if len(tokens) == 0 {
+			var err error
+			if final, err = p.LabelChanges(ctx, choices, rec.Labels, single); err != nil {
+				return fmt.Errorf("label form: %w", err)
+			}
+		} else {
+			changes, err := parseLabelChanges(tokens)
+			if err != nil {
+				return err
+			}
+			final = applyLabelChanges(rec.Labels, changes)
+		}
+		if single && choices != nil && (len(final) != 1 || !slices.Contains(choices, final[0])) {
+			return fmt.Errorf("this tracker's one label is the status: want exactly one of %s, got %q", strings.Join(choices, ", "), final)
+		}
+
+		ops := diffLabels(rec.Labels, final)
+		if len(ops) == 0 {
+			return fmt.Errorf("no label change given for issue %s", rec.DisplayID())
+		}
+
+		for i := range ops {
+			if err := issuepkg.Append(ctx, client, rec.ID, &ops[i]); err != nil {
+				return fmt.Errorf("update labels: %w", err)
+			}
+		}
+
+		pushIssue(ctx, client, rec.ID)
+		syncOne(ctx, client, m, rec.ID)
+
+		updated, err := issuepkg.Load(ctx, client, rec.ID)
 		if err != nil {
-			return fmt.Errorf("label form: %w", err)
+			return fmt.Errorf("reload issue: %w", err)
 		}
-	} else {
-		changes, err := parseLabelChanges(tokens)
-		if err != nil {
-			return err
-		}
-		final = applyLabelChanges(rec.Labels, changes)
-	}
-	if single && choices != nil && (len(final) != 1 || !slices.Contains(choices, final[0])) {
-		return fmt.Errorf("this tracker's one label is the status: want exactly one of %s, got %q", strings.Join(choices, ", "), final)
-	}
 
-	ops := diffLabels(rec.Labels, final)
-	if len(ops) == 0 {
-		return fmt.Errorf("no label change given for issue %s", rec.DisplayID())
-	}
+		fmt.Fprintf(client.IO().Out, "Issue %s labels: %s\n", updated.DisplayID(), strings.Join(updated.Labels, ", "))
 
-	for i := range ops {
-		if err := issuepkg.Append(ctx, client, rec.ID, &ops[i]); err != nil {
-			return fmt.Errorf("update labels: %w", err)
-		}
-	}
-
-	pushIssue(ctx, client, rec.ID)
-	syncOne(ctx, client, m, rec.ID)
-
-	updated, err := issuepkg.Load(ctx, client, rec.ID)
-	if err != nil {
-		return fmt.Errorf("reload issue: %w", err)
-	}
-
-	fmt.Fprintf(client.IO().Out, "Issue %s labels: %s\n", updated.DisplayID(), strings.Join(updated.Labels, ", "))
-
-	return nil
+		return nil
+	})
 }

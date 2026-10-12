@@ -46,31 +46,28 @@ func (i Issue) commentRunE(cmd *cobra.Command, args []string, message string) er
 func runComment(ctx context.Context, client *git.Client, p recordPrompter, args []string, message string, m *issuepkg.Mirror) error {
 	issueflow.FetchIssues(ctx, client)
 
-	rec, err := resolveRecord(ctx, client, p, args)
-	if err != nil {
-		return err
-	}
-
-	body := message
-	if body == "" {
-		body, err = p.CommentBody(ctx)
-		if err != nil {
-			return fmt.Errorf("comment form: %w", err)
+	return withRecord(ctx, client, p, args, func(rec issuepkg.Record) error {
+		body := message
+		if body == "" {
+			var err error
+			if body, err = p.CommentBody(ctx); err != nil {
+				return fmt.Errorf("comment form: %w", err)
+			}
 		}
-	}
 
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return errors.New("comment is empty")
-	}
+		body = strings.TrimSpace(body)
+		if body == "" {
+			return errors.New("comment is empty")
+		}
 
-	if err := issuepkg.Append(ctx, client, rec.ID, &issuepkg.Op{Type: issuepkg.OpAddComment, Body: body}); err != nil {
-		return fmt.Errorf("add comment: %w", err)
-	}
+		if err := issuepkg.Append(ctx, client, rec.ID, &issuepkg.Op{Type: issuepkg.OpAddComment, Body: body}); err != nil {
+			return fmt.Errorf("add comment: %w", err)
+		}
 
-	pushIssue(ctx, client, rec.ID)
-	syncOne(ctx, client, m, rec.ID)
-	fmt.Fprintf(client.IO().Out, "Commented on issue %s\n", rec.DisplayID())
+		pushIssue(ctx, client, rec.ID)
+		syncOne(ctx, client, m, rec.ID)
+		fmt.Fprintf(client.IO().Out, "Commented on issue %s\n", rec.DisplayID())
 
-	return nil
+		return nil
+	})
 }

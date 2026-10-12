@@ -134,6 +134,30 @@ func TestRunLabel(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a form left with esc reopens the picker", func(t *testing.T) {
+		p := &scriptedRecordPrompter{FormErr: huh.ErrUserAborted, LabelSet: []string{"esc-then-pick"}}
+		if err := runLabel(ctx, rig.client, p, nil, nil); err != nil {
+			t.Fatalf("runLabel: %v", err)
+		}
+		if got := labels(t); p.Picks != 2 || !slices.Equal(got, []string{"esc-then-pick"}) {
+			t.Errorf("picks = %d, labels = %v", p.Picks, got)
+		}
+	})
+
+	t.Run("q in the picker ends quietly", func(t *testing.T) {
+		p := &scriptedRecordPrompter{Err: huh.ErrUserAborted}
+		if err := runLabel(ctx, rig.client, p, nil, nil); err != nil {
+			t.Errorf("runLabel: %v", err)
+		}
+	})
+
+	t.Run("esc with an ID given ends quietly", func(t *testing.T) {
+		p := &scriptedRecordPrompter{FormErr: huh.ErrUserAborted}
+		if err := runLabel(ctx, rig.client, p, []string{rec.ID}, nil); err != nil || p.Picks != 0 {
+			t.Errorf("err = %v, picks = %d", err, p.Picks)
+		}
+	})
 }
 
 func TestRunSync(t *testing.T) {

@@ -1092,6 +1092,27 @@ func TestListLabels(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps the repository's labels when the org endpoint is forbidden", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/api/v1/orgs/a/labels":
+				http.Error(w, "token lacks read:organization", http.StatusForbidden)
+			case r.URL.Path != "/api/v1/repos/a/b/labels":
+				http.Error(w, "unexpected "+r.URL.Path, http.StatusBadRequest)
+			case r.URL.Query().Get("page") == "1":
+				fmt.Fprint(w, `[{"id":1,"name":"bug"}]`)
+			default:
+				fmt.Fprint(w, `[]`)
+			}
+		})
+
+		if got, err := a.ListLabels(t.Context()); err != nil || !slices.Equal(got, []string{"bug"}) {
+			t.Errorf("ListLabels = %q, %v", got, err)
+		}
+	})
+
 	t.Run("adds the organisation's labels, the repository's name winning", func(t *testing.T) {
 		t.Parallel()
 
@@ -1118,8 +1139,9 @@ func TestSetLabels(t *testing.T) {
 	t.Parallel()
 
 	type server struct {
-		created []string
-		put     []int
+		created      []string
+		put          []int
+		orgForbidden bool // the org labels answer 403
 	}
 
 	newServer := func(t *testing.T) (*forgejoAdapter, *server) {
@@ -1128,6 +1150,8 @@ func TestSetLabels(t *testing.T) {
 		s := &server{}
 		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/a/b/issues/42":
+				fmt.Fprint(w, `{"number":42,"labels":[{"id":9,"name":"on-issue"}]}`)
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/a/b/labels":
 				if r.URL.Query().Get("page") == "1" {
 					fmt.Fprint(w, `[{"id":1,"name":"bug"}]`)
@@ -1135,7 +1159,9 @@ func TestSetLabels(t *testing.T) {
 					fmt.Fprint(w, `[]`)
 				}
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/orgs/a/labels":
-				if r.URL.Query().Get("page") == "1" {
+				if s.orgForbidden {
+					http.Error(w, "token lacks read:organization", http.StatusForbidden)
+				} else if r.URL.Query().Get("page") == "1" {
 					fmt.Fprint(w, `[{"id":7,"name":"org-wide"}]`)
 				} else {
 					fmt.Fprint(w, `[]`)
@@ -1171,6 +1197,19 @@ func TestSetLabels(t *testing.T) {
 			t.Fatalf("SetLabels: %v", err)
 		}
 		if !slices.Equal(s.created, []string{"urgent"}) || !slices.Equal(s.put, []int{1, 11}) {
+			t.Errorf("created %q, put %v", s.created, s.put)
+		}
+	})
+
+	t.Run("a label on the issue the token cannot list is kept by ID, not created", func(t *testing.T) {
+		t.Parallel()
+
+		a, s := newServer(t)
+		s.orgForbidden = true
+		if err := a.SetLabels(t.Context(), "42", []string{"on-issue", "bug"}); err != nil {
+			t.Fatalf("SetLabels: %v", err)
+		}
+		if len(s.created) != 0 || !slices.Equal(s.put, []int{9, 1}) {
 			t.Errorf("created %q, put %v", s.created, s.put)
 		}
 	})

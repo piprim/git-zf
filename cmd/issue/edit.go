@@ -70,36 +70,33 @@ func (i Issue) editRunE(cmd *cobra.Command, args []string, flags editFlags) erro
 func runEdit(ctx context.Context, client *git.Client, p recordPrompter, args []string, flags editFlags, m *issuepkg.Mirror) error {
 	issueflow.FetchIssues(ctx, client)
 
-	rec, err := resolveRecord(ctx, client, p, args)
-	if err != nil {
-		return err
-	}
-
-	newTitle, newDescription := rec.Title, rec.Description
-	if flags.title == nil && flags.description == nil {
-		if err := p.EditIssue(ctx, &newTitle, &newDescription); err != nil {
-			return fmt.Errorf("edit form: %w", err)
+	return withRecord(ctx, client, p, args, func(rec issuepkg.Record) error {
+		newTitle, newDescription := rec.Title, rec.Description
+		if flags.title == nil && flags.description == nil {
+			if err := p.EditIssue(ctx, &newTitle, &newDescription); err != nil {
+				return fmt.Errorf("edit form: %w", err)
+			}
 		}
-	}
-	if flags.title != nil {
-		newTitle = *flags.title
-	}
-	if flags.description != nil {
-		newDescription = *flags.description
-	}
+		if flags.title != nil {
+			newTitle = *flags.title
+		}
+		if flags.description != nil {
+			newDescription = *flags.description
+		}
 
-	changed, err := applyEdit(ctx, client, &rec, newTitle, newDescription, m)
-	if err != nil {
-		return err
-	}
-	if !changed {
-		fmt.Fprintf(client.IO().Out, "Issue %s unchanged\n", rec.DisplayID())
+		changed, err := applyEdit(ctx, client, &rec, newTitle, newDescription, m)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			fmt.Fprintf(client.IO().Out, "Issue %s unchanged\n", rec.DisplayID())
+
+			return nil
+		}
+		fmt.Fprintf(client.IO().Out, "Edited issue %s: %s\n", rec.DisplayID(), strings.TrimSpace(newTitle))
 
 		return nil
-	}
-	fmt.Fprintf(client.IO().Out, "Edited issue %s: %s\n", rec.DisplayID(), strings.TrimSpace(newTitle))
-
-	return nil
+	})
 }
 
 // applyEdit records the new title and description of rec, one op per field

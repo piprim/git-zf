@@ -233,6 +233,29 @@ func resolveRecord(
 	return rec, nil
 }
 
+// withRecord runs act on the issue named by args, or on the one picked in
+// the table. A form act leaves with esc reopens the table; q in the table,
+// or esc with an ID given, ends quietly.
+func withRecord(
+	ctx context.Context, client *git.Client, p recordPrompter, args []string, act func(rec issuepkg.Record) error,
+) error {
+	for {
+		rec, err := resolveRecord(ctx, client, p, args)
+		if errors.Is(err, huh.ErrUserAborted) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := act(rec); !errors.Is(err, huh.ErrUserAborted) {
+			return err
+		}
+		if len(args) > 0 {
+			return nil
+		}
+	}
+}
+
 // closeRepoIssue closes the repo issue a merged branch worked on: it writes
 // set_state closed on the issue named by ref.IssueID and pushes it. A nil
 // state or one without an issue ID (tracker issue, hand-typed ID) is a no-op.

@@ -534,8 +534,8 @@ func (a *forgejoAdapter) UpdateIssue(ctx context.Context, issueID, title, descri
 
 // repoLabels lists the labels an issue of the repository can carry: the
 // repository's, then the owning organisation's (none when the owner is a
-// user: the org endpoint answers 404). A name defined at both levels is the
-// repository's.
+// user, 404, or when the token lacks the read:organization scope, 403). A
+// name defined at both levels is the repository's.
 func (a *forgejoAdapter) repoLabels(ctx context.Context) (path string, labels []label, err error) {
 	owner, repo, err := a.ownerRepo()
 	if err != nil {
@@ -547,7 +547,7 @@ func (a *forgejoAdapter) repoLabels(ctx context.Context) (path string, labels []
 	}
 	org, err := a.pageLabels(ctx, "/orgs/"+url.PathEscape(owner)+"/labels")
 	var he *httpError
-	if errors.As(err, &he) && he.StatusCode == http.StatusNotFound {
+	if errors.As(err, &he) && (he.StatusCode == http.StatusNotFound || he.StatusCode == http.StatusForbidden) {
 		return path, labels, nil
 	}
 	if err != nil {
@@ -602,8 +602,9 @@ func (a *forgejoAdapter) ListLabels(ctx context.Context) ([]string, error) {
 // defaultLabelColor is the colour of a label git-zf creates.
 const defaultLabelColor = "#ededed"
 
-// SetLabels replaces the issue's labels with names, creating the ones the
-// repository lacks, via PUT /repos/{owner}/{repo}/issues/{number}/labels.
+// SetLabels replaces the issue's labels with names, creating the ones
+// neither the repository nor the issue has, via
+// PUT /repos/{owner}/{repo}/issues/{number}/labels.
 func (a *forgejoAdapter) SetLabels(ctx context.Context, issueID string, names []string) error {
 	issuePath, err := a.issuePath(issueID)
 	if err != nil {
@@ -614,7 +615,16 @@ func (a *forgejoAdapter) SetLabels(ctx context.Context, issueID string, names []
 	if err != nil {
 		return err
 	}
-	byName := make(map[string]int, len(labels))
+	// The issue's own labels come with their IDs: an organisation label the
+	// token cannot list (403) is kept, not recreated in the repository.
+	var cur issue
+	if err := a.doJSON(ctx, http.MethodGet, issuePath, nil, &cur); err != nil {
+		return fmt.Errorf("forgejo: get issue %s: %w", issueID, err)
+	}
+	byName := make(map[string]int, len(labels)+len(cur.Labels))
+	for _, l := range cur.Labels {
+		byName[l.Name] = l.ID
+	}
 	for _, l := range labels {
 		byName[l.Name] = l.ID
 	}
