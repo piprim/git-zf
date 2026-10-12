@@ -43,7 +43,7 @@ var _ recordPrompter = huhRecordPrompter{}
 
 func (huhRecordPrompter) NewIssue(ctx context.Context, allowedTypes []string, in *issuepkg.NewIssue) error {
 	var labels string
-	if err := huh.NewForm(
+	if err := tui.Form(
 		tui.IssueNewForm(&in.Title, &in.BranchType, &in.Description, &labels, allowedTypes),
 	).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("new issue form: %w", err)
@@ -81,7 +81,7 @@ func (huhRecordPrompter) PickRecord(ctx context.Context, records []issuepkg.Reco
 }
 
 func (huhRecordPrompter) EditIssue(ctx context.Context, title, description *string) error {
-	if err := huh.NewForm(tui.IssueEditForm(title, description)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.IssueEditForm(title, description)).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("edit issue form: %w", err)
 	}
 
@@ -90,7 +90,7 @@ func (huhRecordPrompter) EditIssue(ctx context.Context, title, description *stri
 
 func (huhRecordPrompter) CommentBody(ctx context.Context) (string, error) {
 	var body string
-	if err := huh.NewForm(tui.IssueCommentInput(&body)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.IssueCommentInput(&body)).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("comment form: %w", err)
 	}
 
@@ -101,7 +101,7 @@ func (huhRecordPrompter) LabelChanges(ctx context.Context, choices, current []st
 	switch {
 	case choices == nil:
 		var changes string
-		if err := huh.NewForm(tui.IssueLabelInput(&changes)).RunWithContext(ctx); err != nil {
+		if err := tui.Form(tui.IssueLabelInput(&changes)).RunWithContext(ctx); err != nil {
 			return nil, fmt.Errorf("label form: %w", err)
 		}
 		ops, err := parseLabelChanges(strings.Fields(changes))
@@ -115,14 +115,14 @@ func (huhRecordPrompter) LabelChanges(ctx context.Context, choices, current []st
 		if len(current) > 0 {
 			picked = current[0]
 		}
-		if err := huh.NewForm(tui.IssueLabelStatusPicker(choices, picked, &picked)).RunWithContext(ctx); err != nil {
+		if err := tui.Form(tui.IssueLabelStatusPicker(choices, picked, &picked)).RunWithContext(ctx); err != nil {
 			return nil, fmt.Errorf("status form: %w", err)
 		}
 
 		return []string{picked}, nil
 	default:
 		selected, extra := slices.Clone(current), ""
-		if err := huh.NewForm(tui.IssueLabelPicker(choices, current, &selected, &extra)).RunWithContext(ctx); err != nil {
+		if err := tui.Form(tui.IssueLabelPicker(choices, current, &selected, &extra)).RunWithContext(ctx); err != nil {
 			return nil, fmt.Errorf("label form: %w", err)
 		}
 

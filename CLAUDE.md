@@ -271,7 +271,10 @@ prints to stdout when stdin is not a terminal. The table's keys `s`, `n`,
 `tui.IssuePick` (`TestIssueTable_ActionKeys`);
 `listAction` (`cmd/issue/list.go`, `TestListAction`) runs the command behind
 the key with the terminal free and the list loop reopens the table. To add a
-key, add its `IssuePick`, its case in `updateNormal` and in `listAction`. A
+key, add its `IssuePick`, its case in `updateNormal` and in `listAction`. The
+forms a key opens are built with `tui.Form`, never `huh.NewForm`: esc aborts
+them (huh's default is ctrl+c alone) and `listAction` reopens the table on
+`huh.ErrUserAborted`, `s` included. A
 subcommand offered by a menu reads its string flags with `cmdutil.StringFlag`,
 never `cmd.Flags().GetString`: the parent command does not define them.
 

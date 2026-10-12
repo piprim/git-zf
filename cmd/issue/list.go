@@ -92,7 +92,7 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		if err != nil {
 			return err
 		}
-		reopen, err := ir.listAction(ctx, infra, huhRecordPrompter{}, pick, row)
+		reopen, err := ir.listAction(ctx, infra, huhRecordPrompter{}, issueflow.NewHuhStartPrompter(), pick, row)
 		if !reopen {
 			return err
 		}
@@ -107,14 +107,16 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 // reopens: a start leaves the operator on the new branch, and a form left
 // with esc is no error.
 func (ir Issue) listAction(
-	ctx context.Context, infra issueListInfra, p recordPrompter, pick tui.IssuePick, row *issuepkg.Row,
+	ctx context.Context, infra issueListInfra, p recordPrompter, sp issueflow.StartPrompter,
+	pick tui.IssuePick, row *issuepkg.Row,
 ) (reopen bool, err error) {
 	switch pick {
 	case tui.IssuePickRow:
 		deps := infra.deps()
 		deps.Cfg = ir.appConfig
-
-		return false, issueflow.StartRow(ctx, deps, issueflow.NewHuhStartPrompter(), row)
+		if err = issueflow.StartRow(ctx, deps, sp, row); !errors.Is(err, huh.ErrUserAborted) {
+			return false, err
+		}
 	case tui.IssuePickNew:
 		err = runNew(ctx, infra.client, ir.appConfig, issuepkg.NewIssue{}, p, infra.mirror)
 	case tui.IssuePickClose:

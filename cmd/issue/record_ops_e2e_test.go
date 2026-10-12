@@ -601,7 +601,7 @@ func TestListAction(t *testing.T) {
 	row := &issuepkg.Row{IssueSlug: rec.ShortID()}
 
 	t.Run("c closes the record under the cursor and reopens", func(t *testing.T) {
-		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, tui.IssuePickClose, row)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, &scriptedStartPrompter{}, tui.IssuePickClose, row)
 		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
 		if !reopen || err != nil || loadErr != nil || got.State != issuepkg.StateClosed {
 			t.Errorf("reopen = %v, err = %v, state = %q (%v)", reopen, err, got.State, loadErr)
@@ -609,20 +609,27 @@ func TestListAction(t *testing.T) {
 	})
 	t.Run("n creates an issue from the form and reopens", func(t *testing.T) {
 		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From the table", BranchType: "fix"}}
-		reopen, err := New(rig.cfg).listAction(ctx, infra, p, tui.IssuePickNew, nil)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, p, &scriptedStartPrompter{}, tui.IssuePickNew, nil)
 		recs, _, listErr := issuepkg.List(ctx, rig.client)
 		if !reopen || err != nil || listErr != nil || !slices.ContainsFunc(recs, func(r issuepkg.Record) bool { return r.Title == "From the table" }) {
 			t.Errorf("reopen = %v, err = %v, records = %+v (%v)", reopen, err, recs, listErr)
 		}
 	})
 	t.Run("a form left with esc reopens without an error", func(t *testing.T) {
-		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, tui.IssuePickNew, nil)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, &scriptedStartPrompter{}, tui.IssuePickNew, nil)
+		if !reopen || err != nil {
+			t.Errorf("reopen = %v, err = %v", reopen, err)
+		}
+	})
+	t.Run("a start form left with esc reopens without an error", func(t *testing.T) {
+		sp := &scriptedStartPrompter{IssueFromTrackerErr: huh.ErrUserAborted}
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, sp, tui.IssuePickRow, &issuepkg.Row{IssueSlug: "T-1", Title: "manual"})
 		if !reopen || err != nil {
 			t.Errorf("reopen = %v, err = %v", reopen, err)
 		}
 	})
 	t.Run("nothing picked does not reopen", func(t *testing.T) {
-		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, tui.IssuePickNone, nil)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, &scriptedStartPrompter{}, tui.IssuePickNone, nil)
 		if reopen || err != nil {
 			t.Errorf("reopen = %v, err = %v", reopen, err)
 		}

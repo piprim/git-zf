@@ -79,7 +79,7 @@ func (HuhPickers) PickTrackerStatus(
 	ctx context.Context, issueID, trackerType string, statuses []string,
 ) (string, error) {
 	var selected string
-	if err := huh.NewForm(
+	if err := tui.Form(
 		tui.IssueStatusPicker(issueID, trackerType, statuses, &selected)).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("status picker form: %w", err)
 	}
@@ -91,7 +91,7 @@ func (HuhPickers) PickTrackerStatus(
 // defaultBase pre-selected.
 func (HuhPickers) PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error) {
 	var picked string
-	if err := huh.NewForm(tui.BaseBranchPicker(defaultBase, branches, &picked)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.BaseBranchPicker(defaultBase, branches, &picked)).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("base branch picker: %w", err)
 	}
 
@@ -105,7 +105,7 @@ func NewHuhStartPrompter() *HuhStartPrompter {
 
 func (p *HuhStartPrompter) PickIssueFromUser(ctx context.Context, allowedTypes []string) (*issuepkg.Issue, error) {
 	var got issuepkg.Issue
-	if err := huh.NewForm(
+	if err := tui.Form(
 		tui.IssueInput(&got.ID, &got.Subject, &got.Type, allowedTypes),
 	).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("issue form: %w", err)
@@ -119,7 +119,7 @@ func (p *HuhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tr
 	idx := -1
 
 	picker := tui.IssueTrackerPicker(issues, &idx, allowedTypes, &got.Type)
-	if err := huh.NewForm(picker).RunWithContext(ctx); err != nil {
+	if err := tui.Form(picker).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("tracker picker: %w", err)
 	}
 
@@ -166,7 +166,7 @@ func (*HuhStartPrompter) PickRow(ctx context.Context, rows []issuepkg.Row) (*iss
 
 func (p *HuhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {
 	var use bool
-	if err := huh.NewForm(tui.WorktreeToggle(&use)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.WorktreeToggle(&use)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("worktree toggle: %w", err)
 	}
 
@@ -175,7 +175,7 @@ func (p *HuhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {
 
 func (p *HuhStartPrompter) ConfirmCreateBranch(ctx context.Context, message string) (bool, error) {
 	var confirmed = true
-	if err := huh.NewForm(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm branch: %w", err)
 	}
 
@@ -184,7 +184,7 @@ func (p *HuhStartPrompter) ConfirmCreateBranch(ctx context.Context, message stri
 
 func (p *HuhStartPrompter) ConfirmCreateWorktree(ctx context.Context, message string) (bool, error) {
 	var confirmed bool
-	if err := huh.NewForm(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.IssueConfirm(message, &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm worktree: %w", err)
 	}
 
@@ -208,7 +208,7 @@ func (*HuhStartPrompter) ResolveBranchConflict(
 		}
 
 		var action string
-		if err := huh.NewForm(tui.BranchConflictPicker(b.Name(), &action)).RunWithContext(ctx); err != nil {
+		if err := tui.Form(tui.BranchConflictPicker(b.Name(), &action)).RunWithContext(ctx); err != nil {
 			return nil, fmt.Errorf("conflict picker: %w", err)
 		}
 
@@ -227,7 +227,7 @@ func (*HuhStartPrompter) ResolveBranchConflict(
 			return nil, nil
 		case "variant":
 			var label string
-			if err := huh.NewForm(tui.VariantLabelInput(&label)).RunWithContext(ctx); err != nil {
+			if err := tui.Form(tui.VariantLabelInput(&label)).RunWithContext(ctx); err != nil {
 				return nil, fmt.Errorf("variant input: %w", err)
 			}
 
