@@ -150,8 +150,13 @@ tracker's labels back, any other error keeps the local change.
 `importRootTemplate` (`issue/mirror.go`) is frozen: the ID of every imported
 issue is the hash of a commit holding those bytes. Never edit it; if
 `TestChainRef_FixedRoot` fails on the golden hash, the code is wrong. Only
-`issue list` and the commands that create an issue or change its state
-reconcile; a new read-only command must not.
+`issue sync` (`r` in the table), the `issue start` picker (it has no `r`)
+and the commands that create an issue or change its state reconcile;
+`issue list` and any read-only command must not: the repo issues are the
+mirror. `issue list` does not fetch either (`issueflow.ListRows` is local
+work; `r` syncs): a picker that must be fresh fetches before calling it, as
+`RunIssueStart` does. `Mirror.Labels` asks the tracker for its labels once
+per process (a reconcile forgets them).
 
 `issue.List` reads every issue with `ReadAllChains` (three git processes) and
 `issue.PushAll` pushes many issues in one `git push` (`PushChainRefs`); a loop

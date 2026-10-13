@@ -1403,15 +1403,34 @@ func TestReconcile_RespelledPushSettles(t *testing.T) {
 	})
 }
 
-func TestReconcile_ResultCarriesTheListing(t *testing.T) {
+func TestLabels_AsksTheTrackerOnce(t *testing.T) {
 	t.Parallel()
 
-	ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "From tracker")}}
-	res := mustReconcile(t, newTestMirror(ft), newRepo(t, "alice", ""))
+	ft := &fake.Tracker{Labels: []string{"bug", "ui"}}
+	m := newTestMirror(ft)
+	ctx := t.Context()
 
-	t.Run("the listing the run worked from is returned", func(t *testing.T) {
-		if len(res.Listed) != 1 || res.Listed[0].ID != "42" || res.Listed[0].Subject != "From tracker" {
-			t.Errorf("res.Listed = %+v", res.Listed)
+	first, err := m.Labels(ctx)
+	t.Run("the first call lists the tracker", func(t *testing.T) {
+		if err != nil || !slices.Equal(first, []string{"bug", "ui"}) || ft.ListLabelsCalls != 1 {
+			t.Errorf("labels = %q, err = %v, calls = %d", first, err, ft.ListLabelsCalls)
+		}
+	})
+
+	ft.Labels = []string{"bug", "ui", "docs"}
+	first[0] = "edited"
+	second, _ := m.Labels(ctx)
+	t.Run("the second call is answered from memory, a copy the caller cannot edit", func(t *testing.T) {
+		if !slices.Equal(second, []string{"bug", "ui"}) || ft.ListLabelsCalls != 1 {
+			t.Errorf("labels = %q, calls = %d", second, ft.ListLabelsCalls)
+		}
+	})
+
+	mustReconcile(t, m, newRepo(t, "alice", ""))
+	third, _ := m.Labels(ctx)
+	t.Run("a reconcile forgets them", func(t *testing.T) {
+		if !slices.Equal(third, []string{"bug", "ui", "docs"}) || ft.ListLabelsCalls != 2 {
+			t.Errorf("labels = %q, calls = %d", third, ft.ListLabelsCalls)
 		}
 	})
 }

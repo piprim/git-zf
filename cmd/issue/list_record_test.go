@@ -381,3 +381,35 @@ func TestListRows_OfflineNeverAsksTheTracker(t *testing.T) {
 		}
 	})
 }
+
+// issue list is local work: an issue pushed by another clone shows up after
+// `r` (issue sync), never on the listing itself.
+func TestListRows_NeverFetches(t *testing.T) {
+	t.Parallel()
+
+	origin := newBareOrigin(t)
+	alice := newRecordRig(t, "alice", origin)
+	bob := newRecordRig(t, "bob", origin)
+	ctx := t.Context()
+	if err := runNew(ctx, alice.client, alice.cfg, issuepkg.NewIssue{Title: "Shared"}, nil, nil); err != nil {
+		t.Fatalf("runNew: %v", err)
+	}
+	infra := issueListInfra{stderr: bob.stderr, client: bob.client}
+
+	rows, err := buildRows(ctx, infra, "")
+	t.Run("the listing does not see the pushed issue", func(t *testing.T) {
+		if err != nil || len(rows) != 0 {
+			t.Errorf("rows = %+v, err = %v", rows, err)
+		}
+	})
+
+	if err := runSync(ctx, bob.client, nil); err != nil {
+		t.Fatalf("runSync: %v", err)
+	}
+	rows, err = buildRows(ctx, infra, "")
+	t.Run("a sync brings it in", func(t *testing.T) {
+		if err != nil || len(rows) != 1 || rows[0].Title != "Shared" {
+			t.Errorf("rows = %+v, err = %v", rows, err)
+		}
+	})
+}

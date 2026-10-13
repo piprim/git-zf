@@ -108,14 +108,14 @@ func diffLabels(current, final []string) []issuepkg.Op {
 	return ops
 }
 
-// labelChoices asks the tracker for its labels when the mirror is on. nil
-// when the mirror is off or the tracker does not answer: the form is then
-// the text line and the tokens are not checked.
+// labelChoices offers the tracker's labels when the mirror is on (asked
+// once, see Mirror.Labels). nil when the mirror is off or the tracker does
+// not answer: the form is then the text line and the tokens are not checked.
 func labelChoices(ctx context.Context, client *git.Client, m *issuepkg.Mirror, current []string) (choices []string, single bool) {
 	if m == nil {
 		return nil, false
 	}
-	names, err := m.Tracker.ListLabels(ctx)
+	names, err := m.Labels(ctx)
 	if err != nil {
 		fmt.Fprintf(client.IO().Err, "warning: could not list the tracker's labels: %v\n", err)
 

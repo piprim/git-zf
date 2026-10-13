@@ -69,8 +69,10 @@ type Tracker struct {
 	RecordedLabelSets []LabelSet
 	// SetLabelsErr, when non-nil, is returned by SetLabels.
 	SetLabelsErr error
-	// ListLabelsErr, when non-nil, is returned by ListLabels.
-	ListLabelsErr error
+	// ListLabelsErr, when non-nil, is returned by ListLabels; ListLabelsCalls
+	// counts the calls.
+	ListLabelsErr   error
+	ListLabelsCalls int
 
 	ticks   int
 	nextCID int
@@ -402,6 +404,7 @@ func (t *Tracker) UpdateIssue(_ context.Context, issueID, title, description str
 func (t *Tracker) ListLabels(_ context.Context) ([]string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ListLabelsCalls++
 
 	if t.ListLabelsErr != nil {
 		return nil, t.ListLabelsErr

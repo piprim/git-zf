@@ -550,3 +550,33 @@ func TestRunIssueStart_ImportedRecordStartsAsTrackerIssue(t *testing.T) {
 		}
 	})
 }
+
+// The picker has no `r` key: issue start reconciles once with the mirror on,
+// so an issue just filed in the tracker is offered.
+func TestRunIssueStart_MirrorReconcilesBeforeThePicker(t *testing.T) {
+	t.Parallel()
+
+	rig := newStartRig(t)
+	ctx := t.Context()
+	rig.tracker.ProjectIssues = []tracker.Issue{{
+		TrackerType: "fake", ID: "42", Subject: "From tracker", Status: "open",
+		CreatedAt: time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC),
+	}}
+	deps := rig.deps(issuepkg.IssueStartFlags{Tracker: true})
+	deps.Mirror = &issuepkg.Mirror{Tracker: rig.tracker, Type: "fake", Project: "zf"}
+	prompter := &scriptedStartPrompter{PickSlug: "42", IssueFromTracker: &issuepkg.Issue{Type: "fix"}, ConfirmBranch: true}
+
+	runErr := issueflow.RunIssueStart(ctx, deps, prompter)
+
+	t.Run("no error", func(t *testing.T) {
+		if runErr != nil {
+			t.Fatalf("RunIssueStart: %v", runErr)
+		}
+	})
+	t.Run("the tracker was listed once and its issue imported and offered", func(t *testing.T) {
+		records, _, _ := issuepkg.List(ctx, rig.client)
+		if rig.tracker.ListCalls != 1 || len(records) != 1 || len(prompter.OfferedRows) != 1 || prompter.OfferedRows[0].IssueSlug != "42" {
+			t.Errorf("listings = %d, records = %d, offered = %+v", rig.tracker.ListCalls, len(records), prompter.OfferedRows)
+		}
+	})
+}

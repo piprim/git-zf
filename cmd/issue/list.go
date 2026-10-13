@@ -161,7 +161,10 @@ func runList(
 	}
 
 	if len(rows) == 0 {
-		fmt.Fprintln(w, "No issues found.")
+		// The table needs a row, so `r` is out of reach: name the sync that
+		// pulls the remote's issues and, with the mirror on, the tracker's.
+		fmt.Fprintln(w, "No issues found. `git zf issue sync` pulls them from the remote and the tracker,",
+			"`git zf issue new` files one.")
 
 		return tui.IssuePickNone, nil, nil
 	}

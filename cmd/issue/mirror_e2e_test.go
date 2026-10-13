@@ -244,7 +244,7 @@ func TestMirror_NewSurvivesATrackerFailure(t *testing.T) {
 	})
 }
 
-func TestMirror_ListReadsTheRepository(t *testing.T) {
+func TestMirror_ListReadsTheRepository(t *testing.T) { // no reconcile: a sync (`r`) is the one tracker call
 	t.Parallel()
 
 	rig, ft, m := newMirrorRig(t)
@@ -267,13 +267,37 @@ func TestMirror_ListReadsTheRepository(t *testing.T) {
 			t.Fatalf("buildRows: %v", err)
 		}
 	})
-	t.Run("the tracker's project issue is listed under its number with its status name", func(t *testing.T) {
+	t.Run("the list never asks the tracker: the repository's issues alone are shown", func(t *testing.T) {
+		if _, ok := bySlug["42"]; ok || len(rows) != 1 || ft.ListCalls != 0 {
+			t.Errorf("rows = %+v, listings = %d", rows, ft.ListCalls)
+		}
+	})
+	t.Run("the local issue is listed under its own ID until a sync exports it", func(t *testing.T) {
+		row, ok := bySlug[local.DisplayID()]
+		if !ok || row.TrackerID != "" || row.Title != local.Title {
+			t.Errorf("row = %+v (found %v)", row, ok)
+		}
+	})
+
+	if err := runSync(ctx, rig.client, m); err != nil {
+		t.Fatalf("runSync: %v", err)
+	}
+	rows, err = buildRows(ctx, infra, "")
+	if err != nil {
+		t.Fatalf("buildRows after sync: %v", err)
+	}
+	bySlug = make(map[string]issuepkg.Row, len(rows))
+	for _, r := range rows {
+		bySlug[r.IssueSlug] = r
+	}
+
+	t.Run("after a sync the tracker's project issue is listed under its number with its status name", func(t *testing.T) {
 		row, ok := bySlug["42"]
 		if !ok || row.Title != "From tracker" || row.TrackerStatus == nil || *row.TrackerStatus != "In Progress" {
 			t.Errorf("row = %+v (found %v)", row, ok)
 		}
 	})
-	t.Run("the exported issue is keyed by its new tracker number", func(t *testing.T) {
+	t.Run("after a sync the exported issue is keyed by its new tracker number", func(t *testing.T) {
 		row, ok := bySlug["1"]
 		if !ok || row.TrackerID != "1" || row.Title != local.Title {
 			t.Errorf("row = %+v (found %v)", row, ok)
@@ -282,7 +306,7 @@ func TestMirror_ListReadsTheRepository(t *testing.T) {
 			t.Errorf("ID cell = %q", cell)
 		}
 	})
-	t.Run("the tracker is listed once, by the reconcile", func(t *testing.T) {
+	t.Run("the tracker was listed once, by the sync", func(t *testing.T) {
 		if len(rows) != 2 || ft.ListCalls != 1 {
 			t.Errorf("rows = %+v, listings = %d", rows, ft.ListCalls)
 		}

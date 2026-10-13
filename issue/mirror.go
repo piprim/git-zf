@@ -28,6 +28,23 @@ type Mirror struct {
 	Tracker tracker.Tracker
 	Type    string // tracker type, as configured
 	Project string // the configured project name
+	// labels memoizes Labels: the tracker's labels rarely change and the
+	// issue table asks on every `l`. Reconcile forgets them.
+	labels []string
+}
+
+// Labels lists the tracker's labels, asking it once per process and after
+// each Reconcile.
+func (m *Mirror) Labels(ctx context.Context) ([]string, error) {
+	if m.labels == nil {
+		names, err := m.Tracker.ListLabels(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list tracker labels: %w", err)
+		}
+		m.labels = append([]string{}, names...)
+	}
+
+	return slices.Clone(m.labels), nil
 }
 
 // MirrorResult summarizes one Reconcile.
@@ -35,9 +52,6 @@ type MirrorResult struct {
 	Imported, Exported int
 	Pulled, Pushed     int      // state changes: tracker → repo, repo → tracker
 	Warnings           []string // one line per issue that could not be handled
-	// Listed is the tracker's listing the run worked from, for a command
-	// that shows it: the tracker is asked once.
-	Listed []tracker.Issue
 }
 
 type stateMove int
@@ -72,7 +86,7 @@ func (m *Mirror) Reconcile(ctx context.Context, c *git.Client) (MirrorResult, er
 	if err != nil {
 		return res, fmt.Errorf("list tracker issues: %w", err)
 	}
-	res.Listed = listed
+	m.labels = nil
 
 	// The fold warnings of List are not reported here: the command prints
 	// them from its own read, and would otherwise print them twice.

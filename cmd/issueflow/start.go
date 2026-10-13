@@ -28,7 +28,7 @@ type StartDeps struct {
 	Cfg     *config.AppConfig
 	Tracker tracker.Tracker // nil when cfg.IssueTracker.Type == ""
 	// Mirror is non-nil when the issues are mirrored with the tracker; the
-	// listing then comes from the reconcile.
+	// listing is then the repository's, never the tracker's.
 	Mirror *issue.Mirror
 	// Stderr receives the warnings of the tracker listing and of the repo
 	// issues; nil means Client.IO().Err, where the fetch and the reconcile
@@ -103,6 +103,14 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 	types, err := allowedTypes(deps)
 	if err != nil {
 		return err
+	}
+
+	// The picker has no `r` key: it fetches, and with the mirror on
+	// reconciles, once, so an issue a teammate just filed is offered and not
+	// filed again.
+	FetchIssues(ctx, deps.Client)
+	if deps.Flags.Tracker {
+		ReconcileIssues(ctx, deps.Client, deps.Mirror)
 	}
 
 	rows, err := ListRows(ctx, deps, issue.StateOpen)

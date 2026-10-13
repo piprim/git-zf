@@ -57,25 +57,21 @@ func ReconcileIssues(ctx context.Context, client *git.Client, m *issue.Mirror) i
 // ListRows lists the tracked branches, the tracker's open issues and the
 // issues stored in the repository, merged into one row per issue; status
 // ("open", "closed", "all", "" for every row) filters them as the list's
-// tab does. With deps.Flags.Tracker false the tracker is not asked, nor
-// the mirror reconciled: the rows are the branches and the repo issues.
-// The tracker is asked once: with the mirror on, the reconcile's listing
-// is the one shown.
+// tab does. With deps.Flags.Tracker false the tracker is not asked: the
+// rows are the branches and the repo issues. With the mirror on the repo
+// issues are the tracker's: the list never reconciles. It never fetches
+// either: `issue sync` (`r` in the table) does, so a listing is local work
+// and costs no round trip. A picker that must be fresh fetches first.
 func ListRows(ctx context.Context, deps StartDeps, status string) ([]issue.Row, error) {
 	rows, err := buildFromBranches(ctx, deps.Client)
 	if err != nil {
 		return nil, err
 	}
 
-	FetchIssues(ctx, deps.Client)
-
 	var issues []tracker.Issue
-	if deps.Flags.Tracker {
-		issues = ReconcileIssues(ctx, deps.Client, deps.Mirror).Listed
-		if deps.Mirror == nil && deps.Tracker != nil {
-			if issues, err = deps.Tracker.ListIssues(ctx); err != nil {
-				fmt.Fprintf(deps.errW(), "warning: tracker unavailable, listing the repository alone: %v\n", err)
-			}
+	if deps.Flags.Tracker && deps.Mirror == nil && deps.Tracker != nil {
+		if issues, err = deps.Tracker.ListIssues(ctx); err != nil {
+			fmt.Fprintf(deps.errW(), "warning: tracker unavailable, listing the repository alone: %v\n", err)
 		}
 	}
 
