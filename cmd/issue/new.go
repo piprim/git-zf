@@ -69,7 +69,10 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 	}
 
 	if p != nil {
-		if err := p.NewIssue(ctx, types, &in); err != nil {
+		// The tracker is asked for its labels for the form alone: a flag-driven
+		// run never reaches it.
+		choices, single := labelChoices(ctx, client, m, nil)
+		if err := p.NewIssue(ctx, types, choices, single, &in); err != nil {
 			return fmt.Errorf("issue form: %w", err)
 		}
 	}
@@ -86,7 +89,7 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 		return fmt.Errorf("unknown type %q (want one of: %s)", in.BranchType, strings.Join(types, ", "))
 	}
 
-	in.Labels = cleanLabels(in.Labels)
+	in.Labels = issuepkg.CleanLabels(in.Labels)
 
 	rec, err := issuepkg.Create(ctx, client, in)
 	if err != nil {

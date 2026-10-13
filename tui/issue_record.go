@@ -3,8 +3,10 @@ package tui
 import (
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/issue"
 )
 
 func requiredText(s string) error {
@@ -29,9 +31,10 @@ func branchTypeOptions(allowed []string) []huh.Option[string] {
 	return opts
 }
 
-// IssueNewForm is the form of `issue new`. labels is one comma-separated line.
-func IssueNewForm(title, branchType, description, labels *string, allowedBranchTypes []string) *huh.Group {
-	return huh.NewGroup(
+// IssueNewForm is the form of `issue new`. labels are the fields of
+// IssueLabelFields, shown last.
+func IssueNewForm(title, branchType, description *string, allowedBranchTypes []string, labels ...huh.Field) *huh.Group {
+	fields := []huh.Field{
 		huh.NewInput().
 			Title("Title:").
 			Placeholder("Short description of the issue").
@@ -44,10 +47,9 @@ func IssueNewForm(title, branchType, description, labels *string, allowedBranchT
 		huh.NewText().
 			Title("Description:").
 			Value(description),
-		huh.NewInput().
-			Title("Labels (comma-separated, optional):").
-			Value(labels),
-	)
+	}
+
+	return huh.NewGroup(append(fields, labels...)...)
 }
 
 // IssueEditForm is the form of `issue edit`: title and description come
@@ -74,50 +76,51 @@ func IssueCommentInput(body *string) *huh.Group {
 	)
 }
 
-// IssueLabelInput asks for label changes as "+add -remove" tokens.
-func IssueLabelInput(changes *string) *huh.Group {
-	return huh.NewGroup(
-		huh.NewInput().
-			Title("Label changes:").
-			Placeholder("+bug -wontfix").
-			Validate(requiredText).
-			Value(changes),
-	)
-}
+// IssueLabelFields are the label fields shared by `issue new` and `issue
+// label`, and labels reads what they hold once the form ran. choices are the
+// labels the tracker knows (nil: unknown); current are the issue's. single
+// means the one label is the status: a single pick among choices. Otherwise a
+// multi-select over choices and current (none: no list) plus a line for new
+// names.
+func IssueLabelFields(choices, current []string, single bool) (fields []huh.Field, labels func() []string) {
+	if single {
+		picked := ""
+		if len(current) > 0 {
+			picked = current[0]
+		}
+		opts := make([]huh.Option[string], len(choices))
+		for i, name := range choices {
+			opts[i] = huh.NewOption(name, name).Selected(name == picked)
+		}
 
-// IssueLabelPicker is the `issue label` form when the tracker's labels are
-// known: a multi-select over choices, current preselected, plus a line for
-// names not in the list.
-func IssueLabelPicker(choices, current []string, selected *[]string, extra *string) *huh.Group {
-	opts := make([]huh.Option[string], len(choices))
-	for i, name := range choices {
-		opts[i] = huh.NewOption(name, name).Selected(slices.Contains(current, name))
+		return []huh.Field{
+			huh.NewSelect[string]().
+				Title("Status:").
+				Options(opts...).
+				Value(&picked),
+		}, func() []string {
+			return []string{picked}
+		}
 	}
 
-	return huh.NewGroup(
-		huh.NewMultiSelect[string]().
+	known := issue.CleanLabels(append(slices.Clone(choices), current...))
+	selected, extra := slices.Clone(current), ""
+	if len(known) > 0 {
+		opts := make([]huh.Option[string], len(known))
+		for i, name := range known {
+			opts[i] = huh.NewOption(name, name).Selected(slices.Contains(current, name))
+		}
+		fields = append(fields, huh.NewMultiSelect[string]().
 			Title("Labels:").
 			Description("space/x toggles, enter confirms").
 			Options(opts...).
-			Value(selected),
-		huh.NewInput().
-			Title("New labels (space separated, optional):").
-			Value(extra),
-	)
-}
-
-// IssueLabelStatusPicker is the `issue label` form on a tracker whose one label
-// is the status: a single pick.
-func IssueLabelStatusPicker(choices []string, current string, picked *string) *huh.Group {
-	opts := make([]huh.Option[string], len(choices))
-	for i, name := range choices {
-		opts[i] = huh.NewOption(name, name).Selected(name == current)
+			Value(&selected))
 	}
+	fields = append(fields, huh.NewInput().
+		Title("New labels (space separated, optional):").
+		Value(&extra))
 
-	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Status:").
-			Options(opts...).
-			Value(picked),
-	)
+	return fields, func() []string {
+		return issue.CleanLabels(append(selected, strings.Fields(extra)...))
+	}
 }

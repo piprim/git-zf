@@ -3,6 +3,7 @@ package issue
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/piprim/git-zf/internal/chain"
@@ -264,4 +265,20 @@ func Fold(id string, ops []Op) Record {
 	slices.Sort(rec.Labels)
 
 	return rec
+}
+
+// CleanLabels trims labels and drops empty and duplicate ones.
+func CleanLabels(labels []string) []string {
+	seen := make(map[string]bool, len(labels))
+	out := make([]string, 0, len(labels))
+	for _, l := range labels {
+		l = strings.TrimSpace(l)
+		if l == "" || seen[l] {
+			continue
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+
+	return out
 }

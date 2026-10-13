@@ -22,8 +22,8 @@ type scriptedRecordPrompter struct {
 	New     issuepkg.NewIssue // copied into the form input by NewIssue
 	PickID  string            // returned by PickRecord; "" picks the first record offered
 	Comment string
-	// LabelSet is what LabelChanges returns; LabelOffered records what it was
-	// offered.
+	// LabelSet is what LabelChanges returns; LabelOffered records what it, or
+	// NewIssue, was offered.
 	LabelSet     []string
 	LabelOffered struct {
 		Choices, Current []string
@@ -49,7 +49,8 @@ func (s *scriptedRecordPrompter) formErr() error {
 	return err
 }
 
-func (s *scriptedRecordPrompter) NewIssue(_ context.Context, _ []string, in *issuepkg.NewIssue) error {
+func (s *scriptedRecordPrompter) NewIssue(_ context.Context, _, choices []string, single bool, in *issuepkg.NewIssue) error {
+	s.LabelOffered.Choices, s.LabelOffered.Single = choices, single
 	if s.Err != nil {
 		return s.Err
 	}
@@ -222,6 +223,11 @@ func TestRunNew_Form(t *testing.T) {
 		rec := rig.onlyRecord(t)
 		if rec.Title != "From form" || rec.BranchType != "fix" {
 			t.Errorf("record = %+v", rec)
+		}
+	})
+	t.Run("without a tracker the label form is offered no choices, not single", func(t *testing.T) {
+		if p.LabelOffered.Choices != nil || p.LabelOffered.Single {
+			t.Errorf("offered = %+v", p.LabelOffered)
 		}
 	})
 }

@@ -23,8 +23,9 @@ import (
 // comment, label). The production implementation opens huh forms; tests use
 // scriptedRecordPrompter.
 type recordPrompter interface {
-	// NewIssue fills in from the `issue new` form.
-	NewIssue(ctx context.Context, allowedTypes []string, in *issuepkg.NewIssue) error
+	// NewIssue fills in from the `issue new` form. choices and single are
+	// those of LabelChanges.
+	NewIssue(ctx context.Context, allowedTypes, choices []string, single bool, in *issuepkg.NewIssue) error
 	// PickRecord returns the full ID of the record the user picked.
 	PickRecord(ctx context.Context, records []issuepkg.Record) (string, error)
 	// EditIssue edits title and description in place; both come prefilled.
@@ -41,15 +42,17 @@ type huhRecordPrompter struct{}
 
 var _ recordPrompter = huhRecordPrompter{}
 
-func (huhRecordPrompter) NewIssue(ctx context.Context, allowedTypes []string, in *issuepkg.NewIssue) error {
-	var labels string
+func (huhRecordPrompter) NewIssue(
+	ctx context.Context, allowedTypes, choices []string, single bool, in *issuepkg.NewIssue,
+) error {
+	fields, labels := tui.IssueLabelFields(choices, nil, single)
 	if err := tui.Form(
-		tui.IssueNewForm(&in.Title, &in.BranchType, &in.Description, &labels, allowedTypes),
+		tui.IssueNewForm(&in.Title, &in.BranchType, &in.Description, allowedTypes, fields...),
 	).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("new issue form: %w", err)
 	}
 
-	in.Labels = strings.Split(labels, ",")
+	in.Labels = labels()
 
 	return nil
 }
@@ -98,36 +101,12 @@ func (huhRecordPrompter) CommentBody(ctx context.Context) (string, error) {
 }
 
 func (huhRecordPrompter) LabelChanges(ctx context.Context, choices, current []string, single bool) ([]string, error) {
-	switch {
-	case choices == nil:
-		var changes string
-		if err := tui.Form(tui.IssueLabelInput(&changes)).RunWithContext(ctx); err != nil {
-			return nil, fmt.Errorf("label form: %w", err)
-		}
-		ops, err := parseLabelChanges(strings.Fields(changes))
-		if err != nil {
-			return nil, err
-		}
-
-		return applyLabelChanges(current, ops), nil
-	case single:
-		picked := ""
-		if len(current) > 0 {
-			picked = current[0]
-		}
-		if err := tui.Form(tui.IssueLabelStatusPicker(choices, picked, &picked)).RunWithContext(ctx); err != nil {
-			return nil, fmt.Errorf("status form: %w", err)
-		}
-
-		return []string{picked}, nil
-	default:
-		selected, extra := slices.Clone(current), ""
-		if err := tui.Form(tui.IssueLabelPicker(choices, current, &selected, &extra)).RunWithContext(ctx); err != nil {
-			return nil, fmt.Errorf("label form: %w", err)
-		}
-
-		return cleanLabels(append(selected, strings.Fields(extra)...)), nil
+	fields, labels := tui.IssueLabelFields(choices, current, single)
+	if err := tui.Form(huh.NewGroup(fields...)).RunWithContext(ctx); err != nil {
+		return nil, fmt.Errorf("label form: %w", err)
 	}
+
+	return labels(), nil
 }
 
 // commitTypeNames returns the configured commit types, which are the allowed
@@ -139,22 +118,6 @@ func commitTypeNames(cfg *config.AppConfig) []string {
 	}
 
 	return names
-}
-
-// cleanLabels trims labels and drops empty and duplicate ones.
-func cleanLabels(labels []string) []string {
-	seen := make(map[string]bool, len(labels))
-	out := make([]string, 0, len(labels))
-	for _, l := range labels {
-		l = strings.TrimSpace(l)
-		if l == "" || seen[l] {
-			continue
-		}
-		seen[l] = true
-		out = append(out, l)
-	}
-
-	return out
 }
 
 // pushIssue pushes issue id. A failure is a warning: the op is committed

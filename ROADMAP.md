@@ -14,8 +14,7 @@
 5. `git zf issue new` should propose to start the issue now (yes/no).
 6. `git zf issue list` show the issues. Allow to pick one and open a view the same `git zf shwo <id>`
 7. [done] `git zf issue` must show the list by default. The action `Close`, 'New', `Edit`, `Label` and `Sync` can be called throught key-binding.
+8. `issue new` : the label entry is a free text form, it should be like the form of pressing `l` in `issue list`. The label form should be shared acrross all form.
 
 ## To be discuss
 
-Add the trackers for “Under development”, “To be reviewed/tested”, “Under review”, “Test/review” to the redimne conf to automate the code review workflow.
-Is it possible to do the same with Forgejo with labels or projects ?

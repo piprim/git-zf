@@ -113,8 +113,9 @@ $ git zf issue show 1a2b3c4
 $ git zf issue start            # pick it, the branch is 1a2b3c4@fix@login-fails-on-safari
 ```
 
-- **`issue new`** opens a form (title, type, description, labels). Any flag
-  (`--title`, `--type`, `--description`, `--label`, repeatable) skips it.
+- **`issue new`** opens a form (title, type, description, then the label form
+  of `issue label`). Any flag (`--title`, `--type`, `--description`, `--label`,
+  repeatable) skips it.
 - **`issue show`**, **`issue edit`**, **`issue comment`** and **`issue label`**
   take the issue ID shown by `issue list`: the 7-character ID, the full one, or
   any unique prefix of at least 4 characters. Without an ID they open a picker.
@@ -443,7 +444,7 @@ id   = "owner/repo"                 # what the tracker calls it
 | `projects` | Optional list of projects, one `[[issue-tracker.projects]]` table each. `id` is the tracker's name for the project (Redmine: a slug or numeric ID; GitHub/Forgejo/Gitea: `"owner/repo"`); `name` is a stable local name, so renaming the project in the tracker only means editing `id`. Every open issue of those projects is listed, whoever it is assigned to, on every tracker. Omitted = every open issue you can see across the tracker (GitHub: the issues involving you, assigned, created, mentioned or subscribed). In `issue list`, `m` keeps only the issues assigned to you. **Exactly one entry is required** to update issue status on GitHub/Forgejo/Gitea, whose issue endpoints are scoped to one repository. |
 | `mirror` | `true` mirrors the project's issues with the issues stored in the repository. Needs a tracker type and exactly one project. See `docs/issue-refs.md`. |
 
-**With the mirror on**, title, description, labels and comments travel both ways: a web edit shows up in `issue show`, and `issue edit`, `issue label` and `issue comment` reach the tracker at once. When both sides changed a title or a description between two syncs, the repo wins and one warning names the tracker's value. A label the tracker lacks is created there. `issue label` offers the tracker's labels. On Redmine, which has no labels, the status is the one label: `issue label +Resolved -New` is a status change, and the form is a single pick. After upgrading to this version, run `git zf issue sync` once before editing: the first run pulls the tracker's content wherever it differs from the repo.
+**With the mirror on**, title, description, labels and comments travel both ways: a web edit shows up in `issue show`, and `issue edit`, `issue label` and `issue comment` reach the tracker at once. When both sides changed a title or a description between two syncs, the repo wins and one warning names the tracker's value. A label the tracker lacks is created there. `issue label` and `issue new` offer the tracker's labels. On Redmine, which has no labels, the status is the one label: `issue label +Resolved -New` is a status change, and the form is a single pick. After upgrading to this version, run `git zf issue sync` once before editing: the first run pulls the tracker's content wherever it differs from the repo.
 
 **Instance behind an HTTP Basic auth gate** (a reverse proxy protecting the whole site): put the gate credentials in the URL, `url = "https://user:password@forgejo.example.org"`. They are sent as `Authorization: Basic` for the proxy and the Forgejo token is passed as the `token` query parameter instead, which Forgejo/Gitea accept unless `[security] DISABLE_QUERY_AUTH_TOKEN = true` is set. A token in the query string can end up in the proxy's access logs.
 

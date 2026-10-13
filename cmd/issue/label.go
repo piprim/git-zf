@@ -24,9 +24,10 @@ and push it:
     git zf issue label 1a2b3c4 +bug -wontfix
 
 <id> is the full ID or a unique prefix of at least 4 characters. Without
-arguments a picker lists the issues, then a form asks for the changes. With
-the issue mirror on, the form lists the tracker's labels; on Redmine the one
-label is the status, picked among the tracker's statuses.`,
+arguments a picker lists the issues, then a form lists the issue's labels to
+untick, plus a line for new ones. With the issue mirror on, the list holds the
+tracker's labels too; on Redmine the one label is the status, picked among the
+tracker's statuses. "issue new" ends with the same form.`,
 	}
 
 	// Everything after <id> is positional, so "-wontfix" is not read as flags.
@@ -120,7 +121,7 @@ func labelChoices(ctx context.Context, client *git.Client, m *issuepkg.Mirror, c
 
 		return nil, false
 	}
-	choices = cleanLabels(append(names, current...))
+	choices = issuepkg.CleanLabels(append(names, current...))
 	single = tracker.SingleLabel(m.Tracker)
 	if !single {
 		slices.Sort(choices)

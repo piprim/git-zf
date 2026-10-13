@@ -125,6 +125,43 @@ func TestMirror_NewCreatesTheTrackerIssue(t *testing.T) {
 	})
 }
 
+func TestMirror_NewOffersTheTrackerLabels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the form is offered the tracker's labels", func(t *testing.T) {
+		t.Parallel()
+
+		rig, ft, m := newMirrorRig(t)
+		ft.Labels = []string{"bug", "ui"}
+		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From form", Labels: []string{"ui"}}}
+
+		if err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{}, p, m); err != nil {
+			t.Fatalf("runNew: %v", err)
+		}
+		if !slices.Equal(p.LabelOffered.Choices, []string{"bug", "ui"}) || p.LabelOffered.Single {
+			t.Errorf("offered = %+v", p.LabelOffered)
+		}
+		if rec := rig.onlyRecord(t); !slices.Equal(rec.Labels, []string{"ui"}) {
+			t.Errorf("labels = %v", rec.Labels)
+		}
+	})
+
+	t.Run("on a single-label tracker the form is a single pick among the statuses", func(t *testing.T) {
+		t.Parallel()
+
+		rig, ft, m := newMirrorRig(t)
+		ft.StatusIsLabel, ft.Statuses = true, []string{"New", "Resolved"}
+		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From form", Labels: []string{"New"}}}
+
+		if err := runNew(t.Context(), rig.client, rig.cfg, issuepkg.NewIssue{}, p, m); err != nil {
+			t.Fatalf("runNew: %v", err)
+		}
+		if !p.LabelOffered.Single || !slices.Equal(p.LabelOffered.Choices, []string{"New", "Resolved"}) {
+			t.Errorf("offered = %+v", p.LabelOffered)
+		}
+	})
+}
+
 // Two clones, one tracker: alice's reconcile exports a shared record; bob,
 // who has not fetched since, runs `issue new`. His reconcile must see the
 // link, or it imports the new tracker issue as a second record and exports
