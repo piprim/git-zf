@@ -8,6 +8,7 @@ import (
 	"github.com/piprim/git-zf/cmd/mergeflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/tui"
 )
 
 // SourceBranch is one pickable merge source. RemoteOnly marks a branch that
@@ -56,7 +57,7 @@ func (p *huhMergePrompter) PickSource(ctx context.Context, sources []SourceBranc
 	}
 
 	var picked string
-	form := huh.NewForm(huh.NewGroup(
+	form := tui.NewForm(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("Branch to merge into current:").
 			Options(opts...).

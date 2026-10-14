@@ -41,7 +41,7 @@ func (huhMenuPrompter) Select(ctx context.Context, title string, subs []*cobra.C
 	}
 
 	var picked string
-	if err := huh.NewForm(tui.MenuSelect(title, menuOptions(subs), &picked)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.MenuSelect(title, menuOptions(subs), &picked)).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("menu form: %w", err)
 	}
 

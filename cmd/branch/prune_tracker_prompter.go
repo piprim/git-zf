@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/tui"
 )
 
 // TrackerPrunePrompter resolves the per-branch reap action for the whole
@@ -67,7 +68,7 @@ func (p *huhTrackerPrunePrompter) DecideReap(ctx context.Context, candidates []t
 		)
 	}
 
-	if err := huh.NewForm(huh.NewGroup(fields...)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(huh.NewGroup(fields...)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("tracker-prune decide form: %w", err)
 	}
 

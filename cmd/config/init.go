@@ -74,7 +74,7 @@ func pickDest(ctx context.Context, homePath, repoPath string) (string, error) {
 	opts := buildPickerOpts(homePath, repoPath, homeExists, repoExists)
 
 	var dest string
-	if err := huh.NewForm(tui.ConfigDestPicker(opts, &dest)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.ConfigDestPicker(opts, &dest)).RunWithContext(ctx); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			return "", nil
 		}
@@ -109,7 +109,7 @@ func buildPickerOpts(homePath, repoPath string, homeExists, repoExists bool) []h
 
 func confirmOverwrite(path string) (bool, error) {
 	var confirmed bool
-	err := huh.NewForm(huh.NewGroup(
+	err := tui.NewForm(huh.NewGroup(
 		huh.NewConfirm().
 			Title(fmt.Sprintf("%s already exists. Overwrite?", path)).
 			Value(&confirmed),
@@ -148,7 +148,7 @@ func writeRepoDest(cmd *cobra.Command, dest string, cfg *appconfig.AppConfig) er
 	keys := slices.Sorted(maps.Keys(sections))
 
 	var selected []string
-	if err := huh.NewForm(tui.ConfigSectionPicker(keys, &selected)).RunWithContext(cmd.Context()); err != nil {
+	if err := tui.NewForm(tui.ConfigSectionPicker(keys, &selected)).RunWithContext(cmd.Context()); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
 

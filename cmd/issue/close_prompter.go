@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/mergeflow"
@@ -81,7 +80,7 @@ func newHuhPrompter(client *git.Client, cfg *config.AppConfig) *huhPrompter {
 func (p *huhPrompter) PickBranch(ctx context.Context, branches []branch.Row, current string) (*branch.Row, error) {
 	var picked branch.Row
 	onCurrent := func(b *branch.Row) bool { return b.BranchName == current }
-	if err := huh.NewForm(
+	if err := tui.NewForm(
 		tui.BranchPicker("Select branch to close:", branches, onCurrent, &picked)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}

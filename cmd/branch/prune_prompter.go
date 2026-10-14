@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -38,7 +37,7 @@ type huhPrunePrompter struct{}
 
 func (p *huhPrunePrompter) ConfirmPrune(ctx context.Context, toClose, toMerge int) (bool, error) {
 	var confirmed bool
-	if err := huh.NewForm(tui.BranchPruneConfirm(toClose, toMerge, &confirmed)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.BranchPruneConfirm(toClose, toMerge, &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm prune form: %w", err)
 	}
 

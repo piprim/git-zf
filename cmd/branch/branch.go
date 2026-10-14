@@ -10,7 +10,6 @@ import (
 	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
@@ -118,7 +117,7 @@ func runList(ctx context.Context, w io.Writer, c *git.Client, flags listFlags) e
 
 	// TUI path: status filter then interactive table.
 	statusStr := flags.status
-	if err := huh.NewForm(tui.BranchStatusFilter(&statusStr, statusStr)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.BranchStatusFilter(&statusStr, statusStr)).RunWithContext(ctx); err != nil {
 		return fmt.Errorf("status filter: %w", err)
 	}
 

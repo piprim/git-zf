@@ -44,7 +44,7 @@ func (p *huhReviewPrompter) PickBranch(
 ) (*branch.Row, error) {
 	var picked branch.Row
 	onCurrent := func(b *branch.Row) bool { return b.IssueSlug == currentSlug }
-	if err := huh.NewForm(tui.BranchPicker(title, branches, onCurrent, &picked)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.BranchPicker(title, branches, onCurrent, &picked)).RunWithContext(ctx); err != nil {
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}
 	return &picked, nil
@@ -52,7 +52,7 @@ func (p *huhReviewPrompter) PickBranch(
 
 func (p *huhReviewPrompter) Confirm(ctx context.Context, title string) (bool, error) {
 	confirmed := true
-	form := huh.NewForm(huh.NewGroup(huh.NewConfirm().Title(title).Value(&confirmed)))
+	form := tui.NewForm(huh.NewGroup(huh.NewConfirm().Title(title).Value(&confirmed)))
 	if err := form.RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm form: %w", err)
 	}
@@ -61,7 +61,7 @@ func (p *huhReviewPrompter) Confirm(ctx context.Context, title string) (bool, er
 
 func (p *huhReviewPrompter) Text(ctx context.Context, title string) (string, error) {
 	var text string
-	form := huh.NewForm(huh.NewGroup(huh.NewText().Title(title).Value(&text)))
+	form := tui.NewForm(huh.NewGroup(huh.NewText().Title(title).Value(&text)))
 	if err := form.RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("text form: %w", err)
 	}

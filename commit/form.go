@@ -117,7 +117,7 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 	}
 
 	selected := -1
-	pickerForm := huh.NewForm(huh.NewGroup(
+	pickerForm := tui.NewForm(huh.NewGroup(
 		huh.NewSelect[int]().
 			Title("Pick a past commit:").
 			Options(opts...).
@@ -148,7 +148,7 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 // with enter/esc/ctrl+c. Any runner error is logged and swallowed; the dialog is purely
 // informational and never blocks the calling flow.
 func showNoHistoryDialog() {
-	dialog := huh.NewForm(huh.NewGroup(
+	dialog := tui.NewForm(huh.NewGroup(
 		huh.NewNote().
 			Title("Commit history").
 			Description("No commit history yet.\n\nPress enter to continue."),
@@ -460,5 +460,5 @@ func loadForm(
 
 	extractOpts = func() tui.CommitOption { return opts }
 
-	return huh.NewForm(groups...), extractMsg, extractOpts
+	return tui.NewForm(groups...), extractMsg, extractOpts
 }

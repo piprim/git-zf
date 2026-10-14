@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -45,7 +44,7 @@ func (p *HuhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, e
 			Hint:  "git merge --no-ff with commitizen message — preserves full history",
 		},
 	})
-	if err := huh.NewForm(form).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(form).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("strategy picker: %w", err)
 	}
 
@@ -54,7 +53,7 @@ func (p *HuhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, e
 
 func (*HuhPrompter) ConfirmMerge(ctx context.Context, source, target string, s commit.MergeStrategy) (bool, error) {
 	var confirmed bool
-	if err := huh.NewForm(tui.IssueMergeConfirm(source, target, string(s), &confirmed)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.IssueMergeConfirm(source, target, string(s), &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm form: %w", err)
 	}
 
@@ -91,7 +90,7 @@ func (p *HuhPrompter) ComposeMessage(ctx context.Context, prefill map[string]any
 // branch was checked out in a linked worktree, and before ConfirmDeleteBranch.
 func (*HuhPrompter) ConfirmRemoveWorktree(ctx context.Context, path string) (bool, error) {
 	var remove bool
-	if err := huh.NewForm(tui.IssueRemoveWorktree(path, &remove)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.IssueRemoveWorktree(path, &remove)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("remove worktree form: %w", err)
 	}
 
@@ -101,7 +100,7 @@ func (*HuhPrompter) ConfirmRemoveWorktree(ctx context.Context, path string) (boo
 // ConfirmDeleteBranch runs after a successful merge.
 func (*HuhPrompter) ConfirmDeleteBranch(ctx context.Context, branchName string) (bool, error) {
 	var shouldDelete bool
-	if err := huh.NewForm(tui.IssueDeleteBranch(branchName, &shouldDelete)).RunWithContext(ctx); err != nil {
+	if err := tui.NewForm(tui.IssueDeleteBranch(branchName, &shouldDelete)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("delete branch form: %w", err)
 	}
 

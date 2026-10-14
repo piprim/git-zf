@@ -458,7 +458,7 @@ func (m *issueTableModel) openEdit() tea.Cmd {
 		return nil
 	}
 	m.editSlug, m.editTitle, m.editDescription = slug, title, description
-	m.form = huh.NewForm(IssueEditForm(&m.editTitle, &m.editDescription)).WithWidth(m.dialog.Width)
+	m.form = NewForm(IssueEditForm(&m.editTitle, &m.editDescription)).WithWidth(m.dialog.Width)
 
 	return m.form.Init()
 }

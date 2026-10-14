@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/tui"
 )
 
 // reviewConfirmFunc resolves the "merge reviewer commits now?" decision.
@@ -17,7 +18,7 @@ type reviewConfirmFunc func(ctx context.Context, title string) (bool, error)
 func newHuhReviewConfirm() reviewConfirmFunc {
 	return func(ctx context.Context, title string) (bool, error) {
 		confirmed := true
-		form := huh.NewForm(huh.NewGroup(huh.NewConfirm().Title(title).Value(&confirmed)))
+		form := tui.NewForm(huh.NewGroup(huh.NewConfirm().Title(title).Value(&confirmed)))
 		if err := form.RunWithContext(ctx); err != nil {
 			return false, fmt.Errorf("review merge confirm: %w", err)
 		}
