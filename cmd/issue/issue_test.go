@@ -306,6 +306,9 @@ func TestRunIssueList(t *testing.T) {
 		if !strings.Contains(buf.String(), "No issues found") {
 			t.Errorf("expected 'No issues found', got: %s", buf.String())
 		}
+		if !strings.Contains(buf.String(), "`git zf issue start <id>`") {
+			t.Errorf("expected the issue start hint, got: %s", buf.String())
+		}
 	})
 
 	t.Run("the stdout and json outputs pick nothing", func(t *testing.T) {

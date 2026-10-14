@@ -27,6 +27,8 @@ type issueListFlags struct {
 	status  string
 	stdout  bool
 	jsonOut bool
+	// start carries the flags of `issue start` to the start behind `s`.
+	start issuepkg.IssueStartFlags
 }
 
 type issueListInfra struct {
@@ -37,6 +39,8 @@ type issueListInfra struct {
 	// mirror is non-nil when the issues are mirrored with the tracker: the
 	// list then reads the repository, never the assigned-to-me listing.
 	mirror *issuepkg.Mirror
+	// startFlags are the flags of the start behind `s`; Tracker is forced.
+	startFlags issuepkg.IssueStartFlags
 }
 
 func (ir Issue) getIssueListCmd() *cobra.Command {
@@ -81,10 +85,11 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 	}
 
 	infra := issueListInfra{
-		tracker: t,
-		stderr:  cmd.OutOrStderr(),
-		client:  client,
-		mirror:  issueflow.MirrorOf(ir.appConfig, t),
+		tracker:    t,
+		stderr:     cmd.OutOrStderr(),
+		client:     client,
+		mirror:     issueflow.MirrorOf(ir.appConfig, t),
+		startFlags: flags.start,
 	}
 
 	for {
@@ -164,7 +169,7 @@ func runList(
 		// The table needs a row, so `r` is out of reach: name the sync that
 		// pulls the remote's issues and, with the mirror on, the tracker's.
 		fmt.Fprintln(w, "No issues found. `git zf issue sync` pulls them from the remote and the tracker,",
-			"`git zf issue new` files one.")
+			"`git zf issue new` files one, `git zf issue start <id>` starts one by its ID.")
 
 		return tui.IssuePickNone, nil, nil
 	}
@@ -289,9 +294,11 @@ func editIssue(ctx context.Context, infra issueListInfra, slug, title, descripti
 // deps is the start flow's view of the list's infrastructure: the rows come
 // from issueflow.ListRows, with the tracker listed.
 func (infra issueListInfra) deps() issueflow.StartDeps {
+	flags := infra.startFlags
+	flags.Tracker = true
+
 	return issueflow.StartDeps{
-		Client: infra.client, Tracker: infra.tracker, Mirror: infra.mirror, Stderr: infra.stderr,
-		Flags: issuepkg.IssueStartFlags{Tracker: true},
+		Client: infra.client, Tracker: infra.tracker, Mirror: infra.mirror, Stderr: infra.stderr, Flags: flags,
 	}
 }
 

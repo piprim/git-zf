@@ -47,17 +47,22 @@ cases live in `cmd/mergeflow/mergeflow_worktree_test.go` (`newWorktreeRig`).
 
 The issue-start flow (used by `issue start`, `branch new` and `s` in
 `issue list`) is end-to-end tested in `cmd/issue/start_e2e_test.go`,
-`start_record_e2e_test.go` and `start_row_e2e_test.go`. The pattern mirrors
+`start_record_e2e_test.go`, `start_row_e2e_test.go` and
+`start_id_e2e_test.go`. The pattern mirrors
 the close-flow tests: a real on-disk repo, the fake tracker at
 `tracker/fake/`, and a `scriptedStartPrompter` that returns canned answers
 for every form. The picker is the `issue list` table over
 `issueflow.ListRows`: a script picks a row by slug (`PickSlug`), asks for a
 new issue (`PickNew`) and reads what it was offered in `OfferedRows`. An
-empty table is skipped: the manual form opens at once.
+empty table is skipped: the manual form opens at once. That picker
+(`RunIssueStart`) is `branch new`'s alone: `issue start <id>` resolves the
+ID after a fetch (`issueflow.StartID`; only an unknown ID reconciles with
+the mirror, and an ID nothing knows opens the manual form with it filled
+in) and `issue start` without an ID is `issue list`, no sync.
 
 To exercise just the start-flow tests:
 
-    mise exec -- go test ./cmd/issue/... -run "^TestRunIssueStart_|^TestStartRow_" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestRunIssueStart_|^TestStartRow_|^TestStartID_|^TestStartCmd_" -v
 
 `branch new` lists the branches and the repo issues alone
 (`IssueStartFlags.Tracker` false); `issue start` and `issue list` list the
@@ -321,7 +326,7 @@ Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.to
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (5155 symbols, 22093 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (5232 symbols, 22684 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

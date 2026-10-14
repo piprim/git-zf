@@ -18,9 +18,11 @@ var _ issueflow.StartPrompter = (*scriptedStartPrompter)(nil)
 // start_e2e_test.go. Each field corresponds to one StartPrompter method's
 // return value; *Err fields inject errors.
 type scriptedStartPrompter struct {
-	// Issue-input return values.
+	// Issue-input return values. OfferedID records the id the manual form
+	// was opened with ("" for an empty form).
 	IssueFromUser    *issuepkg.Issue
 	IssueFromTracker *issuepkg.Issue
+	OfferedID        string
 
 	// PickRow answers: PickSlug names the row to pick among those offered;
 	// PickNew picks "new issue" instead (nil, nil); PickRowErr fails the
@@ -69,7 +71,8 @@ type scriptedStartPrompter struct {
 	ConflictErr         error
 }
 
-func (s *scriptedStartPrompter) PickIssueFromUser(_ context.Context, _ []string) (*issuepkg.Issue, error) {
+func (s *scriptedStartPrompter) PickIssueFromUser(_ context.Context, id string, _ []string) (*issuepkg.Issue, error) {
+	s.OfferedID = id
 	if s.IssueFromUserErr != nil {
 		return nil, s.IssueFromUserErr
 	}

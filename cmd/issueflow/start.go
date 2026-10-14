@@ -93,9 +93,10 @@ func allowedTypes(deps StartDeps) ([]string, error) {
 // RunIssueStart is the prompter-driven issue-start flow: the open issues
 // are listed (ListRows), one is picked in the table (PickRow) or a new one
 // is asked for in the manual form, and StartIssue creates its branch.
-// Called from cmd/issue's startRunE and cmd/branch's newRunE with a
-// HuhStartPrompter; tests call it with a scripted one. An empty table is
-// skipped: the manual form opens at once.
+// Called from cmd/branch's newRunE with a HuhStartPrompter; tests call it
+// with a scripted one. `issue start` does not: without an ID it is the list,
+// with one it is StartID. An empty table is skipped: the manual form opens
+// at once.
 //
 // Returns nil on the non-error exits: the operator aborted at the confirm
 // or in the conflict loop, or a test prompter returned no issue.
@@ -127,7 +128,7 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 
 	var picked *issue.Issue
 	if row == nil {
-		picked, err = newIssueFromUser(ctx, deps.Client, prompter, types)
+		picked, err = newIssueFromUser(ctx, deps.Client, prompter, "", types)
 	} else {
 		picked, err = issueFromRow(ctx, deps, prompter, row, types)
 	}
@@ -237,13 +238,15 @@ func issueFromRow(
 	return issueFromRecord(&rec), nil
 }
 
-// newIssueFromUser is the manual form. A typed ID is used as is, with no
-// record (an issue living in a tracker git-zf does not talk to); an empty
-// one prepares a new repo issue, which createFlow publishes once the branch
-// exists, so every abort in between (base picker, confirm, branch conflict,
-// git failure) leaves no issue behind.
-func newIssueFromUser(ctx context.Context, c *git.Client, p StartPrompter, types []string) (*issue.Issue, error) {
-	got, err := p.PickIssueFromUser(ctx, types)
+// newIssueFromUser is the manual form, its ID field filled with id. A typed
+// ID is used as is, with no record (an issue living in a tracker git-zf does
+// not talk to); an empty one prepares a new repo issue, which createFlow
+// publishes once the branch exists, so every abort in between (base picker,
+// confirm, branch conflict, git failure) leaves no issue behind.
+func newIssueFromUser(
+	ctx context.Context, c *git.Client, p StartPrompter, id string, types []string,
+) (*issue.Issue, error) {
+	got, err := p.PickIssueFromUser(ctx, id, types)
 	if err != nil {
 		return nil, fmt.Errorf("issue input: %w", err)
 	}
@@ -251,13 +254,13 @@ func newIssueFromUser(ctx context.Context, c *git.Client, p StartPrompter, types
 		return got, nil
 	}
 
-	id, err := issue.Prepare(ctx, c, issue.NewIssue{Title: got.Subject, BranchType: got.Type})
+	recID, err := issue.Prepare(ctx, c, issue.NewIssue{Title: got.Subject, BranchType: got.Type})
 	if err != nil {
 		return nil, fmt.Errorf("prepare repo issue: %w", err)
 	}
 
-	rec := issue.Record{ID: id}
-	got.ID, got.RecordID, got.RecordPending = rec.DisplayID(), id, true
+	rec := issue.Record{ID: recID}
+	got.ID, got.RecordID, got.RecordPending = rec.DisplayID(), recID, true
 
 	return got, nil
 }
@@ -621,4 +624,64 @@ func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
 	}
 
 	return filepath.Join(base, repoName+"--"+branchName)
+}
+
+// StartID starts the issue of a typed ID: `issue start <id>`. The issues
+// are fetched first and the ID is resolved as `issue show` does (full ID,
+// unique prefix, tracker number). A known ID costs no tracker round trip:
+// only an ID the repo does not know reconciles with the mirror, so a number
+// a teammate just filed in the tracker is imported and found; with the
+// mirror off it is asked to the tracker and starts as a tracker issue. An
+// ID nothing knows is an issue of a tracker git-zf does not talk to: the
+// manual form opens with it filled in and the branch starts as a manual one.
+func StartID(ctx context.Context, deps StartDeps, prompter StartPrompter, id string) error {
+	types, err := allowedTypes(deps)
+	if err != nil {
+		return err
+	}
+
+	FetchIssues(ctx, deps.Client)
+
+	row, err := rowOfID(ctx, deps, id)
+	if deps.Mirror != nil && errors.Is(err, git.ErrIssueNotFound) {
+		ReconcileIssues(ctx, deps.Client, deps.Mirror)
+		row, err = rowOfID(ctx, deps, id)
+	}
+	if errors.Is(err, git.ErrIssueNotFound) {
+		picked, err := newIssueFromUser(ctx, deps.Client, prompter, id, types)
+		if err != nil || picked == nil {
+			return err
+		}
+
+		return StartIssue(ctx, deps, prompter, picked)
+	}
+	if err != nil {
+		return err
+	}
+
+	return StartRow(ctx, deps, prompter, row)
+}
+
+// rowOfID is the list row of an ID: the repo issue it resolves to, else the
+// tracker's issue of that number when the mirror is off.
+func rowOfID(ctx context.Context, deps StartDeps, id string) (*issue.Row, error) {
+	rec, err := issue.Resolve(ctx, deps.Client, id)
+	if err == nil {
+		return &issue.Row{IssueSlug: rec.ID, State: rec.State}, nil
+	}
+	if !errors.Is(err, git.ErrIssueNotFound) {
+		return nil, fmt.Errorf("resolve issue %s: %w", id, err)
+	}
+
+	if deps.Tracker != nil && deps.Mirror == nil {
+		iss, gerr := deps.Tracker.GetIssue(ctx, id)
+		if gerr == nil {
+			return &issue.Row{IssueSlug: iss.ID, Title: iss.Subject, TrackerStatus: &iss.Status}, nil
+		}
+		if !errors.Is(gerr, tracker.ErrIssueNotFound) {
+			return nil, fmt.Errorf("tracker issue %s: %w", id, gerr)
+		}
+	}
+
+	return nil, fmt.Errorf("resolve issue %s: %w", id, err)
 }

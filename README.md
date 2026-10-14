@@ -60,7 +60,7 @@ On an issue branch the form is pre-filled from the branch name (see [Commit auto
 ### Issue
 
 ```
-$ git zf issue start
+$ git zf issue start [<id>]    # start an issue; without <id> the list opens
 $ git zf issue list
 $ git zf issue close            # merge an in-progress branch and close its issue
 $ git zf issue close <id>       # close a repository issue without merging
@@ -72,7 +72,7 @@ $ git zf issue label [<id> +add -remove …]
 $ git zf issue sync             # fetch, merge and push the repository issues
 ```
 
-**`issue start`** — start work on an issue: fetch your open issues from the configured tracker (Redmine, GitHub, Forgejo/Gitea), or take the manual path: pick an open issue stored in the repository, or fill the form. Leaving the form's Issue ID empty creates a new issue in the repository; typing one (for a tracker git-zf does not talk to) uses it as is. A branch named `{issue-id}@{type}@{slug}` (see [Branch naming](#branch-naming)) is created and checked out, **or a git worktree is created** so the main working tree stays untouched. A prompt asks which; pin the choice with `branch.use-worktree` in the config. When a worktree is created the command prints its path and a `cd` hint, since the shell cannot change directory for you. With a tracker configured, you can move the issue to "In Progress" in the same step. The branch is recorded in the repository, under `refs/zf/branches/<issue-id>` (see [Branches in the repository](#branches-in-the-repository)), and that record is pushed: every clone sees that the issue is in progress.
+**`issue start [<id>]`** — start work on an issue. `<id>` is the full ID of an issue stored in the repository, a unique prefix of at least 4 characters, or the number of the tracker issue (Redmine, GitHub, Forgejo/Gitea): the repository issues are fetched first. A number the repository does not know is reconciled with the [mirror](#tracker-integration) when it is on, so an issue a teammate just filed in the tracker is found, and asked to the tracker when it is off; a known id costs no tracker round trip. An id nothing knows (for a tracker git-zf does not talk to) opens the manual form with it filled in: the title and type are asked and the id is used as is, with no issue in the repository. Without `<id>` the issue list opens, as `git zf issue` does, with no sync: `s` starts the issue under the cursor, `n` files a new one, `r` syncs. A branch named `{issue-id}@{type}@{slug}` (see [Branch naming](#branch-naming)) is created and checked out, **or a git worktree is created** so the main working tree stays untouched. A prompt asks which; pin the choice with `branch.use-worktree` in the config. When a worktree is created the command prints its path and a `cd` hint, since the shell cannot change directory for you. With a tracker configured, you can move the issue to "In Progress" in the same step. The branch is recorded in the repository, under `refs/zf/branches/<issue-id>` (see [Branches in the repository](#branches-in-the-repository)), and that record is pushed: every clone sees that the issue is in progress.
 
 Pass `--variant=<label>` to create a parallel branch on an issue that already has one (see [Parallel branches per issue](#parallel-branches-per-issue)).
 
@@ -110,7 +110,7 @@ $ git zf issue comment 1a2b3c4 -m "Reproduced on 17.4"
 $ git zf issue label 1a2b3c4 +ui -bug
 $ git zf issue edit 1a2b3c4 --title "Login fails on Safari 17"
 $ git zf issue show 1a2b3c4
-$ git zf issue start            # pick it, the branch is 1a2b3c4@fix@login-fails-on-safari
+$ git zf issue start 1a2b3c4    # the branch is 1a2b3c4@fix@login-fails-on-safari
 ```
 
 - **`issue new`** opens a form (title, type, description, then the label form
