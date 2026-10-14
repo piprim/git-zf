@@ -933,6 +933,33 @@ func TestRepoName(t *testing.T) {
 func TestCreateWorktree(t *testing.T) {
 	t.Parallel()
 
+	t.Run("worktrees inside the repo are excluded from the main tree once", func(t *testing.T) {
+		t.Parallel()
+
+		c, dir := newDiskRepo(t)
+		for _, b := range []string{"feat/9-a", "feat/9-b"} {
+			if err := c.CreateWorktree(t.Context(), b, "main", filepath.Join(dir, ".worktrees", filepath.Base(b))); err != nil {
+				t.Fatalf("CreateWorktree %s: %v", b, err)
+			}
+		}
+
+		out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+		if err != nil {
+			t.Fatalf("git status: %v", err)
+		}
+		if len(out) != 0 {
+			t.Errorf("main tree is not clean:\n%s", out)
+		}
+
+		exclude, err := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+		if err != nil {
+			t.Fatalf("read exclude: %v", err)
+		}
+		if n := strings.Count(string(exclude), "/.worktrees/\n"); n != 1 {
+			t.Errorf("exclude has %d /.worktrees/ lines, want 1:\n%s", n, exclude)
+		}
+	})
+
 	t.Run("creates a linked worktree at the given path", func(t *testing.T) {
 		t.Parallel()
 

@@ -15,6 +15,8 @@
 6. `git zf issue list` show the issues. Allow to pick one and open a view the same `git zf shwo <id>`
 7. [done] `git zf issue` must show the list by default. The action `Close`, 'New', `Edit`, `Label` and `Sync` can be called throught key-binding.
 8. `issue new` : the label entry is a free text form, it should be like the form of pressing `l` in `issue list`. The label form should be shared acrross all form.
+9. les hints en bas ils sont peu visibles. Est-ce un problème de configuration du terminal ?
+10. `git zf issue start` always make a synck when mirroring is on but `git zf issue` does not. `git zf issue start` should need an issueID, if missing the same TUI than `git zf issue` is opened
 
 ## To be discuss
 

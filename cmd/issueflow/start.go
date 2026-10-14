@@ -592,16 +592,32 @@ func prepareBranch(
 	return b, base, nil
 }
 
-// worktreePath computes the absolute path for a new worktree.
-// baseDir overrides the default (sibling of repoRoot) when non-empty; ~ is expanded.
+// defaultWorktreeDir is the sub-directory of the repo root that holds the
+// worktrees when [branch] worktree-dir is not set; one .gitignore line covers it.
+const defaultWorktreeDir = ".worktrees"
+
+// worktreePath computes the absolute path for a new worktree. baseDir
+// overrides defaultWorktreeDir; ~ is expanded and a relative baseDir is taken
+// from repoRoot. Inside the repo the worktree is named <branch>; outside it
+// <repo>--<branch>, so worktrees of several repos can share one directory.
 func worktreePath(repoRoot, baseDir, repoName, branchName string) string {
 	base := baseDir
 	if base == "" {
-		base = filepath.Dir(repoRoot)
-	} else if rest, ok := strings.CutPrefix(base, "~"); ok && (rest == "" || rest[0] == '/') {
+		base = defaultWorktreeDir
+	}
+
+	if rest, ok := strings.CutPrefix(base, "~"); ok && (rest == "" || rest[0] == '/') {
 		if home, err := os.UserHomeDir(); err == nil {
 			base = filepath.Join(home, rest)
 		}
+	}
+
+	if !filepath.IsAbs(base) {
+		base = filepath.Join(repoRoot, base)
+	}
+
+	if rel, err := filepath.Rel(repoRoot, base); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		return filepath.Join(base, branchName)
 	}
 
 	return filepath.Join(base, repoName+"--"+branchName)

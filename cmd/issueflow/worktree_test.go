@@ -12,18 +12,29 @@ import (
 func TestWorktreePath(t *testing.T) {
 	t.Parallel()
 
-	t.Run("uses sibling of repo root when worktreeDir is empty", func(t *testing.T) {
+	t.Run("defaults to .worktrees/<branch> in the repo root", func(t *testing.T) {
 		t.Parallel()
 
 		repoRoot := "/home/user/code/myapp"
 		got := worktreePath(repoRoot, "", "myapp", "feat-123-login")
-		want := "/home/user/code/myapp--feat-123-login"
+		want := "/home/user/code/myapp/.worktrees/feat-123-login"
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
-	t.Run("uses configured worktreeDir as base", func(t *testing.T) {
+	t.Run("a relative worktreeDir is under the repo root, no repo prefix", func(t *testing.T) {
+		t.Parallel()
+
+		repoRoot := "/home/user/code/myapp"
+		got := worktreePath(repoRoot, "wt", "myapp", "feat-123-login")
+		want := "/home/user/code/myapp/wt/feat-123-login"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a worktreeDir outside the repo keeps the <repo>-- prefix", func(t *testing.T) {
 		t.Parallel()
 
 		repoRoot := "/home/user/code/myapp"

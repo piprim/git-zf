@@ -10,6 +10,9 @@ import (
 
 // CreateWorktree creates a new branch from baseBranch and checks it out
 // in a linked worktree at path. Wraps `git worktree add -b <branch> <path> <base>`.
+// For a path inside the working tree, its first component (the directory
+// holding the worktrees) is added to .git/info/exclude once, so the main tree
+// never sees the worktrees as untracked (and never stages them).
 func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, path string) error {
 	root := c.root
 
@@ -17,7 +20,45 @@ func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, pat
 		return fmt.Errorf("create worktree %q: %w", path, err)
 	}
 
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return nil
+	}
+
+	if err := c.excludeDir(strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]); err != nil {
+		return fmt.Errorf("exclude worktree %q: %w", path, err)
+	}
+
 	return nil
+}
+
+// excludeDir appends "/<dir>/" to .git/info/exclude unless the line is there.
+func (c *Client) excludeDir(dir string) error {
+	common, err := c.CommonDir()
+	if err != nil {
+		return err
+	}
+
+	exclude := filepath.Join(common, "info", "exclude")
+	line := "/" + dir + "/\n"
+
+	if cur, err := os.ReadFile(exclude); err == nil && strings.Contains("\n"+string(cur), "\n"+line) {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(exclude), 0o755); err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(exclude, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(line)
+
+	return err
 }
 
 // Worktree is one entry of `git worktree list --porcelain`.

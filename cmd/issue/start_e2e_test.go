@@ -282,9 +282,7 @@ func TestRunIssueStart_WorktreeHappyPath(t *testing.T) {
 	})
 
 	t.Run("worktree directory exists", func(t *testing.T) {
-		parent := filepath.Dir(rig.dir)
-		repoName := filepath.Base(rig.dir)
-		wantPath := filepath.Join(parent, repoName+"--"+wantBranch)
+		wantPath := filepath.Join(rig.dir, ".worktrees", wantBranch)
 		if _, err := os.Stat(wantPath); err != nil {
 			t.Errorf("worktree dir %q not found: %v", wantPath, err)
 		}
@@ -563,9 +561,7 @@ func TestRunIssueStart_UseWorktreeConfigOverride(t *testing.T) {
 	})
 
 	t.Run("worktree directory exists (override forced worktree path)", func(t *testing.T) {
-		parent := filepath.Dir(rig.dir)
-		repoName := filepath.Base(rig.dir)
-		wantPath := filepath.Join(parent, repoName+"--"+wantBranch)
+		wantPath := filepath.Join(rig.dir, ".worktrees", wantBranch)
 		if _, err := os.Stat(wantPath); err != nil {
 			t.Errorf("worktree dir %q not found: %v", wantPath, err)
 		}

@@ -370,10 +370,10 @@ Branches are named `{issue-id}@{type}@{slugified-title}`, e.g. `ABC-42@feat@add-
 base         = "develop"     # default: auto-detected from <remote>/HEAD, then "main", then "master"
 remote       = "upstream"    # default: auto-detected (see below)
 use-worktree = true          # omit = ask at runtime; true = always worktree; false = always branch
-worktree-dir = "~/worktrees" # omit = sibling of the repo root, named <repo>--<branch>
+worktree-dir = "~/worktrees" # omit = <repo>/.worktrees/<branch>; relative = under the repo root; outside the repo, named <repo>--<branch>
 ```
 
-The default worktree path is a sibling of the repository root, `<repo>--<branch>` (e.g. `~/code/myapp--feat-123-login`). The repo name is taken from the remote URL when possible, so it is right even inside containers whose working directory is named differently.
+The default worktree path is `.worktrees/<branch>` under the repository root (e.g. `~/code/myapp/.worktrees/feat-123-login`): add `.worktrees/` to your `.gitignore`. The directory is also added to `.git/info/exclude` of the clone, so the main tree never sees a worktree as untracked. Outside the repo (`worktree-dir = "~/worktrees"`) a worktree is named `<repo>--<branch>`; the repo name is taken from the remote URL when possible.
 
 **Remote auto-detection**, when `branch.remote` is not set:
 
