@@ -142,3 +142,58 @@ func TestSingleLabel(t *testing.T) {
 		}
 	})
 }
+
+// prTracker is a stub with the pull request capability.
+type prTracker struct{ *stubTracker }
+
+func (prTracker) FindPullRequest(_ context.Context, _ string) (tracker.PullRequest, error) {
+	return tracker.PullRequest{}, tracker.ErrNoPullRequest
+}
+
+func (prTracker) CreatePullRequest(_ context.Context, _, _, _, _ string) (tracker.PullRequest, error) {
+	return tracker.PullRequest{}, nil
+}
+
+func (prTracker) MergePullRequest(_ context.Context, _ string, _ tracker.MergeMethod) error {
+	return nil
+}
+
+func TestPullRequestsOf(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil and a tracker without the methods have no capability", func(t *testing.T) {
+		t.Parallel()
+
+		if tracker.PullRequestsOf(nil) != nil || tracker.PullRequestsOf(&stubTracker{}) != nil {
+			t.Error("want nil")
+		}
+	})
+	t.Run("a wrapped tracker hides the methods", func(t *testing.T) {
+		t.Parallel()
+
+		if tracker.PullRequestsOf(struct{ tracker.Tracker }{prTracker{}}) != nil {
+			t.Error("want nil")
+		}
+	})
+	t.Run("a tracker with the methods is returned", func(t *testing.T) {
+		t.Parallel()
+
+		if tracker.PullRequestsOf(prTracker{}) == nil {
+			t.Error("want the capability")
+		}
+	})
+}
+
+func TestPullRequestClean(t *testing.T) {
+	t.Parallel()
+
+	got := tracker.PullRequest{Number: "7\n", URL: "https://x/pull/7\x1b[31m", Head: "feat\x07", Base: "main\r"}.Clean()
+
+	t.Run("every field is one line without control characters", func(t *testing.T) {
+		t.Parallel()
+
+		if got.Number != "7" || got.URL != "https://x/pull/7[31m" || got.Head != "feat" || got.Base != "main" {
+			t.Errorf("got %+v", got)
+		}
+	})
+}

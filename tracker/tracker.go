@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/piprim/git-zf/config"
@@ -140,4 +141,56 @@ func New(cfg config.IssueTrackerConfig) (Tracker, error) {
 	}
 
 	return fn(cfg)
+}
+
+// PullRequest is one pull request of the forge, as it names things.
+type PullRequest struct {
+	Number string // the forge's number, "12"
+	URL    string
+	Head   string // branch name
+	Base   string
+}
+
+// Clean drops the control characters, as Issue.Clean does, and the blanks at
+// the ends a newline leaves behind.
+func (p PullRequest) Clean() PullRequest {
+	p.Number, p.URL, p.Head, p.Base = strings.TrimSpace(text.Line(p.Number)), strings.TrimSpace(text.Line(p.URL)), strings.TrimSpace(text.Line(p.Head)), strings.TrimSpace(text.Line(p.Base))
+
+	return p
+}
+
+// MergeMethod is how the forge merges a pull request.
+type MergeMethod string
+
+const (
+	MergeMethodMerge  MergeMethod = "merge"
+	MergeMethodSquash MergeMethod = "squash"
+	MergeMethodRebase MergeMethod = "rebase"
+)
+
+// ErrNoPullRequest is returned by FindPullRequest when the branch has no open
+// pull request.
+var ErrNoPullRequest = errors.New("tracker: no open pull request")
+
+// PullRequests is the optional capability of a tracker that is also the forge
+// hosting the repository: GitHub and Forgejo. Discover it with PullRequestsOf.
+type PullRequests interface {
+	// FindPullRequest returns the open pull request whose head is branch.
+	FindPullRequest(ctx context.Context, branch string) (PullRequest, error)
+	// CreatePullRequest opens one and returns it with its number and URL.
+	CreatePullRequest(ctx context.Context, head, base, title, body string) (PullRequest, error)
+	// MergePullRequest merges number with method. A refusal of the forge
+	// (checks failing, not mergeable) is an error carrying its message.
+	MergePullRequest(ctx context.Context, number string, method MergeMethod) error
+}
+
+// PullRequestsOf returns t's capability, or nil when the tracker has none
+// (or t is nil).
+func PullRequestsOf(t Tracker) PullRequests {
+	p, ok := t.(PullRequests)
+	if !ok {
+		return nil
+	}
+
+	return p
 }
