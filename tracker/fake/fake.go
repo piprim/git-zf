@@ -74,6 +74,16 @@ type Tracker struct {
 	ListLabelsErr   error
 	ListLabelsCalls int
 
+	// PullRequests are the forge's open pull requests; FindPullRequest
+	// matches their Head. CreatePullRequest appends, MergePullRequest
+	// removes.
+	PullRequests         []tracker.PullRequest
+	RecordedPullRequests []PullRequestCreate
+	RecordedMerges       []Merge
+	// MergeError, when non-nil, is returned by MergePullRequest: the forge
+	// refuses the merge (checks failing, not mergeable).
+	MergeError error
+
 	ticks   int
 	nextCID int
 	nextID  int
@@ -89,6 +99,17 @@ type Update struct {
 // Edit captures one UpdateIssue call.
 type Edit struct {
 	IssueID, Title, Description string
+}
+
+// PullRequestCreate captures one CreatePullRequest call.
+type PullRequestCreate struct {
+	Head, Base, Title, Body string
+}
+
+// Merge captures one MergePullRequest call.
+type Merge struct {
+	Number string
+	Method tracker.MergeMethod
 }
 
 // LabelSet captures one SetLabels call.
@@ -494,4 +515,58 @@ func (t *Tracker) addComment(issueID, author, body string) tracker.Comment {
 	t.mutate(issueID, func(*tracker.Issue) {})
 
 	return c
+}
+
+// FindPullRequest returns the open pull request whose head is branch.
+func (t *Tracker) FindPullRequest(_ context.Context, branch string) (tracker.PullRequest, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for _, pr := range t.PullRequests {
+		if pr.Head == branch {
+			return pr, nil
+		}
+	}
+
+	return tracker.PullRequest{}, tracker.ErrNoPullRequest
+}
+
+// CreatePullRequest records the call and lists the pull request under the
+// next free number.
+func (t *Tracker) CreatePullRequest(_ context.Context, head, base, title, body string) (tracker.PullRequest, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	next := 1
+	for _, pr := range t.PullRequests {
+		if n, err := strconv.Atoi(pr.Number); err == nil && n >= next {
+			next = n + 1
+		}
+	}
+	num := strconv.Itoa(next)
+	pr := tracker.PullRequest{Number: num, URL: "fake://pr/" + num, Head: head, Base: base}
+	t.RecordedPullRequests = append(t.RecordedPullRequests, PullRequestCreate{Head: head, Base: base, Title: title, Body: body})
+	t.PullRequests = append(t.PullRequests, pr)
+
+	return pr, nil
+}
+
+// MergePullRequest records the merge and removes the pull request, or
+// returns MergeError untouched.
+func (t *Tracker) MergePullRequest(_ context.Context, number string, method tracker.MergeMethod) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.MergeError != nil {
+		return t.MergeError
+	}
+
+	i := slices.IndexFunc(t.PullRequests, func(pr tracker.PullRequest) bool { return pr.Number == number })
+	if i < 0 {
+		return fmt.Errorf("fake: no open pull request #%s", number)
+	}
+	t.PullRequests = slices.Delete(t.PullRequests, i, i+1)
+	t.RecordedMerges = append(t.RecordedMerges, Merge{Number: number, Method: method})
+
+	return nil
 }

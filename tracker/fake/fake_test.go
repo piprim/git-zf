@@ -3,6 +3,7 @@ package fake
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/piprim/git-zf/tracker"
@@ -210,6 +211,91 @@ func TestFake_Content(t *testing.T) {
 		}
 		if err := ft.SetLabels(ctx, "1", []string{"urgent"}); !errors.Is(err, tracker.ErrLabelRule) {
 			t.Errorf("not a status: err = %v", err)
+		}
+	})
+}
+
+func TestFake_PullRequests(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	t.Run("the fake has the capability", func(t *testing.T) {
+		t.Parallel()
+
+		if tracker.PullRequestsOf(&Tracker{}) == nil {
+			t.Error("want the capability")
+		}
+	})
+
+	t.Run("FindPullRequest matches the head, ErrNoPullRequest otherwise", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{PullRequests: []tracker.PullRequest{{Number: "7", Head: "feat", Base: "main"}}}
+		if pr, err := ft.FindPullRequest(ctx, "feat"); err != nil || pr.Number != "7" {
+			t.Errorf("FindPullRequest(feat) = %+v, %v", pr, err)
+		}
+		if _, err := ft.FindPullRequest(ctx, "other"); !errors.Is(err, tracker.ErrNoPullRequest) {
+			t.Errorf("FindPullRequest(other) err = %v", err)
+		}
+	})
+
+	t.Run("CreatePullRequest records, numbers and lists the pull request", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{PullRequests: []tracker.PullRequest{{Number: "3", Head: "a", Base: "main"}}}
+		pr, err := ft.CreatePullRequest(ctx, "feat", "main", "Add thing", "Closes #1")
+		if err != nil {
+			t.Fatalf("CreatePullRequest: %v", err)
+		}
+		if pr.Number != "4" || pr.URL != "fake://pr/4" || pr.Head != "feat" || pr.Base != "main" {
+			t.Errorf("pr = %+v", pr)
+		}
+		want := PullRequestCreate{Head: "feat", Base: "main", Title: "Add thing", Body: "Closes #1"}
+		if len(ft.RecordedPullRequests) != 1 || ft.RecordedPullRequests[0] != want {
+			t.Errorf("RecordedPullRequests = %+v", ft.RecordedPullRequests)
+		}
+		if found, err := ft.FindPullRequest(ctx, "feat"); err != nil || found.Number != "4" {
+			t.Errorf("FindPullRequest after create = %+v, %v", found, err)
+		}
+	})
+
+	t.Run("MergePullRequest records the method and removes the pull request", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{PullRequests: []tracker.PullRequest{{Number: "7", Head: "feat", Base: "main"}}}
+		if err := ft.MergePullRequest(ctx, "7", tracker.MergeMethodSquash); err != nil {
+			t.Fatalf("MergePullRequest: %v", err)
+		}
+		if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != (Merge{Number: "7", Method: tracker.MergeMethodSquash}) {
+			t.Errorf("RecordedMerges = %+v", ft.RecordedMerges)
+		}
+		if _, err := ft.FindPullRequest(ctx, "feat"); !errors.Is(err, tracker.ErrNoPullRequest) {
+			t.Errorf("the merged pull request is still open: %v", err)
+		}
+	})
+
+	t.Run("MergePullRequest of an unknown number is an error", func(t *testing.T) {
+		t.Parallel()
+
+		if err := (&Tracker{}).MergePullRequest(ctx, "9", tracker.MergeMethodMerge); err == nil {
+			t.Error("want an error")
+		}
+	})
+
+	t.Run("MergeError is the forge's refusal: nothing is recorded or removed", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{
+			PullRequests: []tracker.PullRequest{{Number: "7", Head: "feat", Base: "main"}},
+			MergeError:   errors.New("Pull Request is not mergeable"),
+		}
+		err := ft.MergePullRequest(ctx, "7", tracker.MergeMethodMerge)
+		if err == nil || !strings.Contains(err.Error(), "not mergeable") {
+			t.Errorf("err = %v", err)
+		}
+		if len(ft.RecordedMerges) != 0 || len(ft.PullRequests) != 1 {
+			t.Errorf("merges %+v, open %+v", ft.RecordedMerges, ft.PullRequests)
 		}
 	})
 }
