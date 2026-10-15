@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/internal/text"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -167,7 +168,12 @@ func (a *forgejoAdapter) doJSON(ctx context.Context, method, path string, body, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return &httpError{Method: method, Path: path, StatusCode: resp.StatusCode}
+		var apiErr struct {
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&apiErr)
+
+		return &httpError{Method: method, Path: path, StatusCode: resp.StatusCode, Message: text.Line(apiErr.Message)}
 	}
 
 	if dst == nil {
@@ -197,15 +203,22 @@ func (a *forgejoAdapter) requestURL(path string) string {
 	return full + sep + "token=" + url.QueryEscape(a.cfg.Token)
 }
 
-// httpError reports a non-2xx response.
+// httpError reports a non-2xx response, with the API's message when it sent
+// one.
 type httpError struct {
 	Method     string
 	Path       string
 	StatusCode int
+	Message    string
 }
 
 func (e *httpError) Error() string {
-	return fmt.Sprintf("%s %s: unexpected status %d", e.Method, e.Path, e.StatusCode)
+	s := fmt.Sprintf("%s %s: unexpected status %d", e.Method, e.Path, e.StatusCode)
+	if e.Message != "" {
+		s += ": " + e.Message
+	}
+
+	return s
 }
 
 // ListIssues fetches every open issue of each configured repository, whoever
