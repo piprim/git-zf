@@ -3221,3 +3221,30 @@ func TestClose_ReviewPreflight_PrintsMalformedOpWarnings(t *testing.T) {
 		}
 	})
 }
+
+func (r *closeTestRig) headSubject(t *testing.T, ref string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", "log", "-1", "--format=%s", ref)
+	cmd.Dir = r.dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log %s: %v\n%s", ref, err, out)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
+func (r *closeTestRig) statusOf(t *testing.T, branchName string) string {
+	t.Helper()
+
+	_, e, err := branch.Find(t.Context(), r.client, branchName)
+	if err != nil {
+		t.Fatalf("Find(%s): %v", branchName, err)
+	}
+	if e == nil {
+		return ""
+	}
+
+	return e.Status
+}

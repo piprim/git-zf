@@ -245,6 +245,22 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return err
 	}
 
+	// A branch with an open pull request is merged by the forge, against the
+	// pull request's base: no target picker. The branch must be the one the
+	// forge shows, checked before the review preflight can add commits.
+	forge, pr := issueflow.ForgePullRequest(ctx, deps.tracker, deps.client.IO().Err, picked.BranchName)
+
+	var tipBefore git.Hash
+	if pr != nil {
+		if deps.baseOverride != "" && deps.baseOverride != pr.Base {
+			return fmt.Errorf("pull request #%s targets %q, not %q", pr.Number, pr.Base, deps.baseOverride)
+		}
+		if err := issueflow.CheckPushed(ctx, deps.client, picked.BranchName); err != nil {
+			return err //nolint:wrapcheck // says what to do
+		}
+		tipBefore, _ = deps.client.ResolveRef("refs/heads/" + picked.BranchName)
+	}
+
 	reviewCleanup, err := reviewPreflight(ctx, deps, picked, srcClient)
 	if err != nil {
 		return err
@@ -262,17 +278,35 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		}
 	}()
 
-	// Smart-default merge target, pre-selected in the picker: the configured
-	// base (or DefaultBaseBranch), redirected to the parent integration branch
-	// when the picked issue has a parent.
-	base, err := issueflow.ResolveParentBranch(ctx, deps.client, picked.IssueSlug, deps.cfg.Branch.Base)
-	if err != nil {
-		return err
-	}
+	var base string
+	var forgeMerge *mergeflow.ForgeMerge
+	if pr != nil {
+		// The review preflight merged reviewer commits into the branch: the
+		// forge must see them before it merges. They already live on the remote's
+		// @review branch, so the push adds nothing new; it happens only when the
+		// preflight moved the tip.
+		tipAfter, _ := deps.client.ResolveRef("refs/heads/" + picked.BranchName)
+		if tipAfter != tipBefore {
+			if err := deps.client.PushBranch(ctx, picked.BranchName); err != nil {
+				return fmt.Errorf("push reviewer commits of %q: %w", picked.BranchName, err)
+			}
+		}
+		fmt.Fprintf(deps.client.IO().Out, "Pull request #%s %s against %q\n", pr.Number, pr.URL, pr.Base)
+		base = pr.Base
+		forgeMerge = &mergeflow.ForgeMerge{Forge: forge, Number: pr.Number}
+	} else {
+		// Smart-default merge target, pre-selected in the picker: the configured
+		// base (or DefaultBaseBranch), redirected to the parent integration branch
+		// when the picked issue has a parent.
+		base, err = issueflow.ResolveParentBranch(ctx, deps.client, picked.IssueSlug, deps.cfg.Branch.Base)
+		if err != nil {
+			return err
+		}
 
-	base, err = chooseMergeTarget(ctx, deps, picked, base, prompter)
-	if err != nil {
-		return err
+		base, err = chooseMergeTarget(ctx, deps, picked, base, prompter)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Parent issue: block close until all children are merged. A child closed
@@ -302,6 +336,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		Target:             base,
 		SourceMaterialized: createdBranch,
 		SourceClient:       srcClient,
+		PullRequest:        forgeMerge,
 	}, prompter, prefill)
 	if err != nil {
 		return err
@@ -340,7 +375,12 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		return err
 	}
 
-	fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
+	if res.ViaForge {
+		fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q by pull request #%s and closed.\n",
+			picked.BranchName, base, pr.Number)
+	} else {
+		fmt.Fprintf(deps.client.IO().Out, "Branch %q merged into %q and closed.\n", picked.BranchName, base)
+	}
 
 	return proposeClosePush(ctx, deps, base)
 }
