@@ -43,6 +43,17 @@ type Opts struct {
 	// already merged) alongside the push preview.
 	IncludeMergePreview bool
 	Parent              string
+
+	// PullRequest, when set, is offered after a successful push.
+	PullRequest *PullRequestOffer
+}
+
+// PullRequestOffer, set on Opts, offers a pull request once the branch is
+// pushed: Open looks the branch up on the forge, asks, and opens one. It is
+// not run non-interactively. Its error is a warning: the push already
+// happened.
+type PullRequestOffer struct {
+	Open func(ctx context.Context) error
 }
 
 // Propose runs the preview → confirm → push step. It returns nil on every skip
@@ -92,6 +103,12 @@ func Propose(ctx context.Context, c Pusher, opts Opts, confirm ConfirmFunc) erro
 		return fmt.Errorf("push %q: %w", opts.Branch, err)
 	}
 	fmt.Fprintf(c.IO().Out, "Pushed %q to %s.\n", opts.Branch, remote)
+
+	if opts.PullRequest != nil && opts.PullRequest.Open != nil && !opts.NonInteractive {
+		if err := opts.PullRequest.Open(ctx); err != nil {
+			fmt.Fprintf(c.IO().Err, "warning: pull request: %v\n", err)
+		}
+	}
 
 	return nil
 }

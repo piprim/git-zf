@@ -337,3 +337,73 @@ func TestPropose_MergePreview(t *testing.T) {
 		}
 	})
 }
+
+func TestPropose_PullRequest(t *testing.T) {
+	t.Parallel()
+
+	offer := func(calls *int, err error) *PullRequestOffer {
+		return &PullRequestOffer{Open: func(context.Context) error { *calls++; return err }}
+	}
+
+	t.Run("runs after a confirmed push", func(t *testing.T) {
+		t.Parallel()
+		f := newFake()
+		calls := 0
+		if err := Propose(t.Context(), f, Opts{Branch: "b", PullRequest: offer(&calls, nil)}, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if len(f.pushed) != 1 || calls != 1 {
+			t.Fatalf("pushed %v, offer calls %d", f.pushed, calls)
+		}
+	})
+
+	t.Run("not after a declined push", func(t *testing.T) {
+		t.Parallel()
+		f := newFake()
+		calls := 0
+		if err := Propose(t.Context(), f, Opts{Branch: "b", PullRequest: offer(&calls, nil)}, no); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if calls != 0 {
+			t.Fatalf("offer calls %d, want 0", calls)
+		}
+	})
+
+	t.Run("not when nothing is to push", func(t *testing.T) {
+		t.Parallel()
+		f := newFake()
+		f.dryOK = false
+		calls := 0
+		if err := Propose(t.Context(), f, Opts{Branch: "b", PullRequest: offer(&calls, nil)}, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if calls != 0 {
+			t.Fatalf("offer calls %d, want 0", calls)
+		}
+	})
+
+	t.Run("not non-interactively, even with --push", func(t *testing.T) {
+		t.Parallel()
+		f := newFake()
+		calls := 0
+		opts := Opts{Branch: "b", AutoConfirm: true, NonInteractive: true, PullRequest: offer(&calls, nil)}
+		if err := Propose(t.Context(), f, opts, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if len(f.pushed) != 1 || calls != 0 {
+			t.Fatalf("pushed %v, offer calls %d", f.pushed, calls)
+		}
+	})
+
+	t.Run("a failing offer is a warning, the push stands", func(t *testing.T) {
+		t.Parallel()
+		f := newFake()
+		calls := 0
+		if err := Propose(t.Context(), f, Opts{Branch: "b", PullRequest: offer(&calls, errors.New("forge down"))}, yes); err != nil {
+			t.Fatalf("Propose: %v", err)
+		}
+		if !strings.Contains(f.out.String(), "warning: pull request: forge down") {
+			t.Fatalf("output %q lacks the warning", f.out.String())
+		}
+	})
+}
