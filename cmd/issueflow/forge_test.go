@@ -150,6 +150,6 @@ func (downForge) CreatePullRequest(context.Context, string, string, string, stri
 	return tracker.PullRequest{}, errors.New("forge down")
 }
 
-func (downForge) MergePullRequest(context.Context, string, tracker.MergeMethod) error {
+func (downForge) MergePullRequest(context.Context, string, tracker.MergeMethod, string) error {
 	return errors.New("forge down")
 }

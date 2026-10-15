@@ -154,7 +154,11 @@ type PullRequest struct {
 // Clean drops the control characters, as Issue.Clean does, and the blanks at
 // the ends a newline leaves behind.
 func (p PullRequest) Clean() PullRequest {
-	p.Number, p.URL, p.Head, p.Base = strings.TrimSpace(text.Line(p.Number)), strings.TrimSpace(text.Line(p.URL)), strings.TrimSpace(text.Line(p.Head)), strings.TrimSpace(text.Line(p.Base))
+	clean := func(s string) string { return strings.TrimSpace(text.Line(s)) }
+	p.Number = clean(p.Number)
+	p.URL = clean(p.URL)
+	p.Head = clean(p.Head)
+	p.Base = clean(p.Base)
 
 	return p
 }
@@ -179,9 +183,11 @@ type PullRequests interface {
 	FindPullRequest(ctx context.Context, branch string) (PullRequest, error)
 	// CreatePullRequest opens one and returns it with its number and URL.
 	CreatePullRequest(ctx context.Context, head, base, title, body string) (PullRequest, error)
-	// MergePullRequest merges number with method. A refusal of the forge
-	// (checks failing, not mergeable) is an error carrying its message.
-	MergePullRequest(ctx context.Context, number string, method MergeMethod) error
+	// MergePullRequest merges number with method, provided the pull request's
+	// head is still head (the commit hash the caller verified); the forge
+	// refuses when the head moved. A refusal of the forge (checks failing,
+	// not mergeable, head moved) is an error carrying its message.
+	MergePullRequest(ctx context.Context, number string, method MergeMethod, head string) error
 }
 
 // PullRequestsOf returns t's capability, or nil when the tracker has none

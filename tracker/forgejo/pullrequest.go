@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/piprim/git-zf/tracker"
 )
@@ -61,7 +62,7 @@ func (a *forgejoAdapter) FindPullRequest(ctx context.Context, branch string) (tr
 		}
 		for i := range batch {
 			pr := &batch[i]
-			if pr.Head.Ref == branch && (pr.Head.Repo == nil || pr.Head.Repo.FullName == project) {
+			if pr.Head.Ref == branch && (pr.Head.Repo == nil || strings.EqualFold(pr.Head.Repo.FullName, project)) {
 				return toPullRequest(pr), nil
 			}
 		}
@@ -93,9 +94,9 @@ func (a *forgejoAdapter) CreatePullRequest(ctx context.Context, head, base, titl
 }
 
 // MergePullRequest merges the pull request with method via
-// POST /repos/{owner}/{repo}/pulls/{index}/merge. A refusal (405) carries the
-// API's message.
-func (a *forgejoAdapter) MergePullRequest(ctx context.Context, number string, method tracker.MergeMethod) error {
+// POST /repos/{owner}/{repo}/pulls/{index}/merge, provided its head is still
+// head (head_commit_id). A refusal (405, 409) carries the API's message.
+func (a *forgejoAdapter) MergePullRequest(ctx context.Context, number string, method tracker.MergeMethod, head string) error {
 	path, _, err := a.pullsPath()
 	if err != nil {
 		return err
@@ -105,8 +106,9 @@ func (a *forgejoAdapter) MergePullRequest(ctx context.Context, number string, me
 	}
 
 	req := struct {
-		Do string `json:"Do"` //nolint:tagliatelle // Forgejo wire format
-	}{Do: string(method)}
+		Do           string `json:"Do"`             //nolint:tagliatelle // Forgejo wire format
+		HeadCommitID string `json:"head_commit_id"` //nolint:tagliatelle // Forgejo wire format
+	}{Do: string(method), HeadCommitID: head}
 	if err := a.doJSON(ctx, http.MethodPost, path+"/"+number+"/merge", req, nil); err != nil {
 		return fmt.Errorf("forgejo: merge pull request #%s: %w", number, err)
 	}

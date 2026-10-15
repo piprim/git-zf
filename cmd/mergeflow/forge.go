@@ -14,6 +14,11 @@ import (
 type ForgeMerge struct {
 	Forge  tracker.PullRequests
 	Number string
+	// PushFirst pushes Source right before the merge: the caller merged
+	// reviewer commits into it after checking it against the remote. The
+	// push is deferred to here so that a close declined at the confirm, or
+	// stopped by a conflict or an open sub-task, leaves the remote untouched.
+	PushFirst bool
 }
 
 // methodOf maps the picked strategy to the forge's merge method.
@@ -28,12 +33,22 @@ func methodOf(s commit.MergeStrategy) tracker.MergeMethod {
 	}
 }
 
-// forge merges on the forge, then fetches and fast-forwards the local target.
-// A refusal of the forge is the error: nothing changed locally. A target that
-// cannot be fast-forwarded (local commits of its own) is a warning: the forge
-// merge is done.
+// forge pushes Source when asked, merges on the forge the head this clone
+// holds, then fetches and fast-forwards the local target. A refusal of the
+// forge (the head moved included) is the error: nothing changed locally. A
+// target that cannot be fast-forwarded (local commits of its own) is a
+// warning: the forge merge is done.
 func (r *run) forge(ctx context.Context, f *ForgeMerge, s commit.MergeStrategy) error {
-	if err := f.Forge.MergePullRequest(ctx, f.Number, methodOf(s)); err != nil {
+	if f.PushFirst {
+		if err := r.client.PushBranch(ctx, r.source); err != nil {
+			return fmt.Errorf("push %q before the merge: %w", r.source, err)
+		}
+	}
+	head, err := r.client.ResolveRef("refs/heads/" + r.source)
+	if err != nil {
+		return fmt.Errorf("resolve %q: %w", r.source, err)
+	}
+	if err := f.Forge.MergePullRequest(ctx, f.Number, methodOf(s), string(head)); err != nil {
 		return fmt.Errorf("merge pull request #%s on the forge: %w", f.Number, err)
 	}
 	fmt.Fprintf(r.client.IO().Out, "Pull request #%s merged on the forge (%s).\n", f.Number, s)

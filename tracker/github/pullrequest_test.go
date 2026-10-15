@@ -94,11 +94,12 @@ func TestCreatePullRequest(t *testing.T) {
 func TestMergePullRequest(t *testing.T) {
 	t.Parallel()
 
-	t.Run("sends the merge method", func(t *testing.T) {
+	t.Run("sends the merge method and the head", func(t *testing.T) {
 		t.Parallel()
 
 		var sent struct {
 			MergeMethod string `json:"merge_method"`
+			SHA         string `json:"sha"`
 		}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/repos/a/b/pulls/12/merge", func(w http.ResponseWriter, r *http.Request) {
@@ -113,11 +114,14 @@ func TestMergePullRequest(t *testing.T) {
 		srv := httptest.NewServer(mux)
 		defer srv.Close()
 
-		if err := newTestAdapter(t, srv, []string{"a/b"}).MergePullRequest(t.Context(), "12", tracker.MergeMethodSquash); err != nil {
+		if err := newTestAdapter(t, srv, []string{"a/b"}).MergePullRequest(t.Context(), "12", tracker.MergeMethodSquash, "abc123"); err != nil {
 			t.Fatalf("MergePullRequest: %v", err)
 		}
 		if sent.MergeMethod != "squash" {
 			t.Errorf("merge_method = %q", sent.MergeMethod)
+		}
+		if sent.SHA != "abc123" {
+			t.Errorf("sha = %q", sent.SHA)
 		}
 	})
 
@@ -132,7 +136,7 @@ func TestMergePullRequest(t *testing.T) {
 		srv := httptest.NewServer(mux)
 		defer srv.Close()
 
-		err := newTestAdapter(t, srv, []string{"a/b"}).MergePullRequest(t.Context(), "12", tracker.MergeMethodMerge)
+		err := newTestAdapter(t, srv, []string{"a/b"}).MergePullRequest(t.Context(), "12", tracker.MergeMethodMerge, "abc123")
 		if err == nil || !strings.Contains(err.Error(), "not mergeable") {
 			t.Errorf("err = %v", err)
 		}
@@ -144,7 +148,7 @@ func TestMergePullRequest(t *testing.T) {
 		srv := httptest.NewServer(http.NewServeMux())
 		defer srv.Close()
 
-		if err := newTestAdapter(t, srv, []string{"a/b"}).MergePullRequest(t.Context(), "x", tracker.MergeMethodMerge); err == nil {
+		if err := newTestAdapter(t, srv, []string{"a/b"}).MergePullRequest(t.Context(), "x", tracker.MergeMethodMerge, "abc123"); err == nil {
 			t.Error("want an error")
 		}
 	})

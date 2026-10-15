@@ -51,10 +51,10 @@ func (a *githubAdapter) CreatePullRequest(ctx context.Context, head, base, title
 	return toPullRequest(pr), nil
 }
 
-// MergePullRequest merges the pull request with method. GitHub answers 405
-// when it is not mergeable and 409 when the head moved; go-github returns
-// both with the API's message.
-func (a *githubAdapter) MergePullRequest(ctx context.Context, number string, method tracker.MergeMethod) error {
+// MergePullRequest merges the pull request with method, provided its head is
+// still head. GitHub answers 405 when it is not mergeable and 409 when the
+// head moved; go-github returns both with the API's message.
+func (a *githubAdapter) MergePullRequest(ctx context.Context, number string, method tracker.MergeMethod, head string) error {
 	owner, repo, err := a.ownerRepo()
 	if err != nil {
 		return err
@@ -64,7 +64,7 @@ func (a *githubAdapter) MergePullRequest(ctx context.Context, number string, met
 		return fmt.Errorf("github: invalid pull request number %q: %w", number, err)
 	}
 
-	res, _, err := a.client.PullRequests.Merge(ctx, owner, repo, n, "", &gogithub.PullRequestOptions{MergeMethod: string(method)})
+	res, _, err := a.client.PullRequests.Merge(ctx, owner, repo, n, "", &gogithub.PullRequestOptions{MergeMethod: string(method), SHA: head})
 	if err != nil {
 		return fmt.Errorf("github: merge pull request #%d: %w", n, err)
 	}

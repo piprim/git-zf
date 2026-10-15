@@ -1,6 +1,7 @@
 package issue
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -47,6 +48,10 @@ func TestClose_PullRequest_HappyPath(t *testing.T) {
 	rig := newPrCloseRig(t)
 	forgeMerged(t, rig)
 	p := prPrompter(rig, commitpkg.MergeStrategySquash)
+	head, herr := rig.client.ResolveRef("refs/heads/ABC-1@feat@add-thing") // deleted by the close
+	if herr != nil {
+		t.Fatalf("ResolveRef: %v", herr)
+	}
 
 	err := runClose(t.Context(), rig.deps(), p)
 
@@ -55,9 +60,10 @@ func TestClose_PullRequest_HappyPath(t *testing.T) {
 			t.Fatalf("runClose: %v", err)
 		}
 	})
-	t.Run("the forge merged with the picked strategy", func(t *testing.T) {
-		if len(rig.tracker.RecordedMerges) != 1 || rig.tracker.RecordedMerges[0] != (fake.Merge{Number: "7", Method: tracker.MergeMethodSquash}) {
-			t.Errorf("RecordedMerges = %+v", rig.tracker.RecordedMerges)
+	t.Run("the forge merged the local tip with the picked strategy", func(t *testing.T) {
+		want := fake.Merge{Number: "7", Method: tracker.MergeMethodSquash, Head: string(head)}
+		if len(rig.tracker.RecordedMerges) != 1 || rig.tracker.RecordedMerges[0] != want {
+			t.Errorf("RecordedMerges = %+v, want [%+v]", rig.tracker.RecordedMerges, want)
 		}
 	})
 	t.Run("no commit message was composed, no base was picked", func(t *testing.T) {
@@ -166,6 +172,73 @@ func TestClose_PullRequest_ForgeRefusal(t *testing.T) {
 	})
 }
 
+func TestClose_PullRequest_HeadMovedRefused(t *testing.T) {
+	rig := newPrCloseRig(t)
+	rig.tracker.HeadSHA = map[string]string{"7": "0000000000000000000000000000000000000000"}
+
+	err := runClose(t.Context(), rig.deps(), prPrompter(rig, commitpkg.MergeStrategySquash))
+
+	t.Run("the forge's refusal is the error", func(t *testing.T) {
+		if err == nil || !strings.Contains(err.Error(), "head moved") {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("main is untouched", func(t *testing.T) {
+		if got := rig.headSubject(t, "main"); got != "chore: init" {
+			t.Errorf("main head = %q", got)
+		}
+	})
+	t.Run("the branch is still in progress", func(t *testing.T) {
+		if got := rig.statusOf(t, "ABC-1@feat@add-thing"); got != branch.StatusInProgress {
+			t.Errorf("status = %q", got)
+		}
+	})
+}
+
+// downForge has the capability but every call fails.
+type downForge struct{ tracker.Tracker }
+
+func (downForge) FindPullRequest(context.Context, string) (tracker.PullRequest, error) {
+	return tracker.PullRequest{}, errors.New("forge down")
+}
+
+func (downForge) CreatePullRequest(context.Context, string, string, string, string) (tracker.PullRequest, error) {
+	return tracker.PullRequest{}, errors.New("forge down")
+}
+
+func (downForge) MergePullRequest(context.Context, string, tracker.MergeMethod, string) error {
+	return errors.New("forge down")
+}
+
+func TestClose_PullRequest_ForgeDownMergesLocally(t *testing.T) {
+	rig := newPrCloseRig(t)
+	d := rig.deps()
+	d.tracker = downForge{Tracker: rig.tracker}
+
+	err := runClose(t.Context(), d, prPrompter(rig, commitpkg.MergeStrategySquash))
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("a warning says it merges locally", func(t *testing.T) {
+		if s := rig.stderr.String(); !strings.Contains(s, "warning") || !strings.Contains(s, "merging locally") {
+			t.Errorf("stderr %q", s)
+		}
+	})
+	t.Run("main holds the local squash", func(t *testing.T) {
+		if got := rig.headSubject(t, "main"); got != "feat(thing): close ABC-1" {
+			t.Errorf("main head = %q", got)
+		}
+	})
+	t.Run("the forge merged nothing", func(t *testing.T) {
+		if len(rig.tracker.RecordedMerges) != 0 {
+			t.Errorf("merges %+v", rig.tracker.RecordedMerges)
+		}
+	})
+}
+
 func TestClose_PullRequest_NoCapabilityMergesLocally(t *testing.T) {
 	rig := newPrCloseRig(t)
 	d := rig.deps()
@@ -220,6 +293,48 @@ func TestClose_PullRequest_ReviewedBranchIsPushedFirst(t *testing.T) {
 		}
 		if len(rig.tracker.RecordedMerges) != 1 {
 			t.Errorf("merges %+v", rig.tracker.RecordedMerges)
+		}
+	})
+}
+
+// A close declined at the confirm must leave the remote as it was: the push of
+// the reviewer commits is deferred to the engine, right before the merge.
+func TestClose_PullRequest_ReviewedBranchDeclinedLeavesOriginUntouched(t *testing.T) {
+	rig := newPrCloseRig(t)
+	mustRunGitAt(t, rig.dir, "checkout", "-q", "-b", "ABC-1@review", "ABC-1@feat@add-thing")
+	if err := os.WriteFile(filepath.Join(rig.dir, "feature.txt"), []byte("feature\nreviewer fix\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	mustRunGitAt(t, rig.dir, "add", "feature.txt")
+	mustRunGitAt(t, rig.dir, "commit", "-q", "-m", "fix: reviewer fix")
+	mustRunGitAt(t, rig.dir, "push", "-q", "origin", "ABC-1@review")
+	mustRunGitAt(t, rig.dir, "checkout", "-q", "main")
+	featureSHA, _ := rig.client.ResolveRef("refs/heads/ABC-1@feat@add-thing")
+	reviewtest.Seed(t, rig.client, "ABC-1", reviewpkg.StatusApproved, 1, featureSHA.String())
+	p := prPrompter(rig, commitpkg.MergeStrategyClassic)
+	p.Confirm = false
+
+	err := runClose(t.Context(), rig.deps(), p)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+	})
+	t.Run("the close says it aborted", func(t *testing.T) {
+		if !strings.Contains(rig.stdout.String(), "Aborted.") {
+			t.Errorf("stdout %q", rig.stdout.String())
+		}
+	})
+	t.Run("nothing merged", func(t *testing.T) {
+		if len(rig.tracker.RecordedMerges) != 0 {
+			t.Errorf("merges %+v", rig.tracker.RecordedMerges)
+		}
+	})
+	t.Run("the remote branch was not pushed", func(t *testing.T) {
+		mustRunGitAt(t, rig.dir, "fetch", "-q", "origin")
+		if got := rig.headSubject(t, "origin/ABC-1@feat@add-thing"); got != "feat: add thing" {
+			t.Errorf("origin feature head = %q", got)
 		}
 	})
 }

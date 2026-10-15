@@ -9,7 +9,10 @@ import (
 	"github.com/piprim/git-zf/tracker"
 )
 
-var _ tracker.Tracker = (*Tracker)(nil)
+var (
+	_ tracker.Tracker      = (*Tracker)(nil)
+	_ tracker.PullRequests = (*Tracker)(nil)
+)
 
 func TestFake_Mirror(t *testing.T) {
 	t.Parallel()
@@ -260,14 +263,14 @@ func TestFake_PullRequests(t *testing.T) {
 		}
 	})
 
-	t.Run("MergePullRequest records the method and removes the pull request", func(t *testing.T) {
+	t.Run("MergePullRequest records the method and head and removes the pull request", func(t *testing.T) {
 		t.Parallel()
 
 		ft := &Tracker{PullRequests: []tracker.PullRequest{{Number: "7", Head: "feat", Base: "main"}}}
-		if err := ft.MergePullRequest(ctx, "7", tracker.MergeMethodSquash); err != nil {
+		if err := ft.MergePullRequest(ctx, "7", tracker.MergeMethodSquash, "abc123"); err != nil {
 			t.Fatalf("MergePullRequest: %v", err)
 		}
-		if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != (Merge{Number: "7", Method: tracker.MergeMethodSquash}) {
+		if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != (Merge{Number: "7", Method: tracker.MergeMethodSquash, Head: "abc123"}) {
 			t.Errorf("RecordedMerges = %+v", ft.RecordedMerges)
 		}
 		if _, err := ft.FindPullRequest(ctx, "feat"); !errors.Is(err, tracker.ErrNoPullRequest) {
@@ -278,7 +281,7 @@ func TestFake_PullRequests(t *testing.T) {
 	t.Run("MergePullRequest of an unknown number is an error", func(t *testing.T) {
 		t.Parallel()
 
-		if err := (&Tracker{}).MergePullRequest(ctx, "9", tracker.MergeMethodMerge); err == nil {
+		if err := (&Tracker{}).MergePullRequest(ctx, "9", tracker.MergeMethodMerge, "abc123"); err == nil {
 			t.Error("want an error")
 		}
 	})
@@ -290,8 +293,24 @@ func TestFake_PullRequests(t *testing.T) {
 			PullRequests: []tracker.PullRequest{{Number: "7", Head: "feat", Base: "main"}},
 			MergeError:   errors.New("Pull Request is not mergeable"),
 		}
-		err := ft.MergePullRequest(ctx, "7", tracker.MergeMethodMerge)
+		err := ft.MergePullRequest(ctx, "7", tracker.MergeMethodMerge, "abc123")
 		if err == nil || !strings.Contains(err.Error(), "not mergeable") {
+			t.Errorf("err = %v", err)
+		}
+		if len(ft.RecordedMerges) != 0 || len(ft.PullRequests) != 1 {
+			t.Errorf("merges %+v, open %+v", ft.RecordedMerges, ft.PullRequests)
+		}
+	})
+
+	t.Run("a head other than HeadSHA's is refused: nothing is recorded or removed", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{
+			PullRequests: []tracker.PullRequest{{Number: "7", Head: "feat", Base: "main"}},
+			HeadSHA:      map[string]string{"7": "def456"},
+		}
+		err := ft.MergePullRequest(ctx, "7", tracker.MergeMethodMerge, "abc123")
+		if err == nil || !strings.Contains(err.Error(), "head moved") {
 			t.Errorf("err = %v", err)
 		}
 		if len(ft.RecordedMerges) != 0 || len(ft.PullRequests) != 1 {

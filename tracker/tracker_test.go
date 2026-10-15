@@ -154,7 +154,7 @@ func (prTracker) CreatePullRequest(_ context.Context, _, _, _, _ string) (tracke
 	return tracker.PullRequest{}, nil
 }
 
-func (prTracker) MergePullRequest(_ context.Context, _ string, _ tracker.MergeMethod) error {
+func (prTracker) MergePullRequest(_ context.Context, _ string, _ tracker.MergeMethod, _ string) error {
 	return nil
 }
 
@@ -189,11 +189,18 @@ func TestPullRequestClean(t *testing.T) {
 
 	got := tracker.PullRequest{Number: "7\n", URL: "https://x/pull/7\x1b[31m", Head: "feat\x07", Base: "main\r"}.Clean()
 
-	t.Run("every field is one line without control characters", func(t *testing.T) {
-		t.Parallel()
+	for _, c := range []struct{ field, got, want string }{
+		{"Number", got.Number, "7"},
+		{"URL", got.URL, "https://x/pull/7[31m"},
+		{"Head", got.Head, "feat"},
+		{"Base", got.Base, "main"},
+	} {
+		t.Run(c.field+" is one line without control characters", func(t *testing.T) {
+			t.Parallel()
 
-		if got.Number != "7" || got.URL != "https://x/pull/7[31m" || got.Head != "feat" || got.Base != "main" {
-			t.Errorf("got %+v", got)
-		}
-	})
+			if c.got != c.want {
+				t.Errorf("%s = %q, want %q", c.field, c.got, c.want)
+			}
+		})
+	}
 }

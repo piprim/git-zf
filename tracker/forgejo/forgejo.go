@@ -128,8 +128,9 @@ func New(cfg config.IssueTrackerConfig) (tracker.Tracker, error) {
 // JSON-encoded; a non-nil dst receives the decoded response. Non-2xx
 // responses are returned as *httpError so callers can branch on the status.
 //
-// Error messages quote the caller's path only, never the final URL, so the
-// token added for the basic-auth-gate case cannot leak into warnings or logs.
+// Error messages quote the caller's path only, never the final URL: a
+// transport failure (*url.Error) is unwrapped to its cause, so the token added
+// to the query for the basic-auth-gate case cannot leak into warnings or logs.
 func (a *forgejoAdapter) doJSON(ctx context.Context, method, path string, body, dst any) error {
 	var payload io.Reader = http.NoBody
 
@@ -162,6 +163,13 @@ func (a *forgejoAdapter) doJSON(ctx context.Context, method, path string, body, 
 
 	resp, err := a.http.Do(req)
 	if err != nil {
+		// A *url.Error quotes the final URL, which carries the token behind a
+		// basic-auth gate: keep only the transport cause.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 

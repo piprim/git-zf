@@ -68,8 +68,13 @@ func TestRun_Forge(t *testing.T) {
 			if !res.ViaForge || res.Strategy != tc.strategy {
 				t.Errorf("result = %+v", res)
 			}
-			if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != (fake.Merge{Number: "7", Method: tc.method}) {
-				t.Errorf("RecordedMerges = %+v", ft.RecordedMerges)
+			head, err := rig.client.ResolveRef("refs/heads/feature")
+			if err != nil {
+				t.Fatalf("ResolveRef: %v", err)
+			}
+			want := fake.Merge{Number: "7", Method: tc.method, Head: string(head)}
+			if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != want {
+				t.Errorf("RecordedMerges = %+v, want [%+v]", ft.RecordedMerges, want)
 			}
 			if got := rig.headSubject(t, "master"); got != "feat: feature work" {
 				t.Errorf("master head = %q, want the forge's merge", got)
@@ -97,6 +102,60 @@ func TestRun_Forge(t *testing.T) {
 		if got := rig.headSubject(t, "master"); got != "chore: init" {
 			t.Errorf("master head = %q, want untouched", got)
 		}
+	})
+
+	t.Run("PushFirst pushes the source before the merge", func(t *testing.T) {
+		rig, _ := newForgeRig(t)
+		gitRun(t, rig.dir, "switch", "feature")
+		writeFile(t, rig.dir, "review.txt", "review\n")
+		gitRun(t, rig.dir, "add", "review.txt")
+		gitRun(t, rig.dir, "commit", "-m", "fix: reviewer change")
+		gitRun(t, rig.dir, "switch", "master")
+		ft := &fake.Tracker{PullRequests: []tracker.PullRequest{{Number: "7", Head: "feature", Base: "master"}}}
+		p := &scriptedMergePrompter{Strategy: commit.MergeStrategySquash, Confirm: true}
+
+		_, err := Run(t.Context(), rig.client, Params{
+			Source: "feature", Target: "master", PullRequest: &ForgeMerge{Forge: ft, Number: "7", PushFirst: true},
+		}, p, plainPrefill)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		gitRun(t, rig.dir, "fetch", "-q", "origin")
+
+		t.Run("origin's feature holds the local commit", func(t *testing.T) {
+			if got := rig.headSubject(t, "origin/feature"); got != "fix: reviewer change" {
+				t.Errorf("origin/feature head = %q", got)
+			}
+		})
+		t.Run("the merge is recorded", func(t *testing.T) {
+			if len(ft.RecordedMerges) != 1 {
+				t.Errorf("RecordedMerges = %+v", ft.RecordedMerges)
+			}
+		})
+	})
+
+	t.Run("the fake refuses a moved head", func(t *testing.T) {
+		rig, _ := newForgeRig(t)
+		ft := &fake.Tracker{
+			PullRequests: []tracker.PullRequest{{Number: "7", Head: "feature", Base: "master"}},
+			HeadSHA:      map[string]string{"7": "0000000000000000000000000000000000000000"},
+		}
+		p := &scriptedMergePrompter{Strategy: commit.MergeStrategySquash, Confirm: true}
+
+		_, err := Run(t.Context(), rig.client, Params{
+			Source: "feature", Target: "master", PullRequest: &ForgeMerge{Forge: ft, Number: "7"},
+		}, p, plainPrefill)
+
+		t.Run("the error says the head moved", func(t *testing.T) {
+			if err == nil || !strings.Contains(err.Error(), "head moved") {
+				t.Errorf("err = %v", err)
+			}
+		})
+		t.Run("master is untouched", func(t *testing.T) {
+			if got := rig.headSubject(t, "master"); got != "chore: init" {
+				t.Errorf("master head = %q", got)
+			}
+		})
 	})
 
 	t.Run("a declined confirm merges nothing on the forge", func(t *testing.T) {

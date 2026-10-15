@@ -60,6 +60,23 @@ func TestFindPullRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("the head repository matches the project whatever its case", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") == "1" {
+				fmt.Fprint(w, `[{"number":6,"head":{"ref":"feat","repo":{"full_name":"A/B"}},"base":{"ref":"main"}}]`)
+
+				return
+			}
+			fmt.Fprint(w, `[]`)
+		})
+
+		if pr, err := a.FindPullRequest(t.Context(), "feat"); err != nil || pr.Number != "6" {
+			t.Errorf("pr = %+v, err = %v", pr, err)
+		}
+	})
+
 	t.Run("no match is ErrNoPullRequest", func(t *testing.T) {
 		t.Parallel()
 
@@ -107,10 +124,13 @@ func TestCreatePullRequest(t *testing.T) {
 func TestMergePullRequest(t *testing.T) {
 	t.Parallel()
 
-	t.Run("posts the merge method", func(t *testing.T) {
+	t.Run("posts the merge method and the head", func(t *testing.T) {
 		t.Parallel()
 
-		var sent struct{ Do string }
+		var sent struct {
+			Do           string `json:"Do"`             //nolint:tagliatelle // Forgejo wire format
+			HeadCommitID string `json:"head_commit_id"` //nolint:tagliatelle // Forgejo wire format
+		}
 		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != "/api/v1/repos/a/b/pulls/9/merge" {
 				http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
@@ -121,11 +141,14 @@ func TestMergePullRequest(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		})
 
-		if err := a.MergePullRequest(t.Context(), "9", tracker.MergeMethodRebase); err != nil {
+		if err := a.MergePullRequest(t.Context(), "9", tracker.MergeMethodRebase, "abc123"); err != nil {
 			t.Fatalf("MergePullRequest: %v", err)
 		}
 		if sent.Do != "rebase" {
 			t.Errorf("Do = %q", sent.Do)
+		}
+		if sent.HeadCommitID != "abc123" {
+			t.Errorf("head_commit_id = %q", sent.HeadCommitID)
 		}
 	})
 
@@ -137,7 +160,7 @@ func TestMergePullRequest(t *testing.T) {
 			fmt.Fprint(w, `{"message":"Please try again later"}`)
 		})
 
-		err := a.MergePullRequest(t.Context(), "9", tracker.MergeMethodMerge)
+		err := a.MergePullRequest(t.Context(), "9", tracker.MergeMethodMerge, "abc123")
 		if err == nil || !strings.Contains(err.Error(), "405") || !strings.Contains(err.Error(), "Please try again later") {
 			t.Errorf("err = %v", err)
 		}

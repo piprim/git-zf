@@ -124,6 +124,35 @@ func TestNew(t *testing.T) {
 	})
 }
 
+// TestTransportErrorHidesToken pins that a transport failure behind a
+// basic-auth gate (the token rides in the query) never quotes the token.
+func TestTransportErrorHidesToken(t *testing.T) {
+	t.Parallel()
+
+	a, err := New(config.IssueTrackerConfig{
+		URL:      "http://u:p@127.0.0.1:1/", // port 1 is closed
+		Token:    "SECRET-TOKEN",
+		Projects: withProjects("a/b"),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, err = a.ListIssues(context.Background())
+
+	t.Run("the request fails", func(t *testing.T) {
+		if err == nil {
+			t.Fatal("ListIssues against a closed port: expected error, got nil")
+		}
+	})
+
+	t.Run("the error does not quote the token", func(t *testing.T) {
+		if err != nil && strings.Contains(err.Error(), "SECRET-TOKEN") {
+			t.Errorf("error leaks the token: %v", err)
+		}
+	})
+}
+
 func TestListStatuses(t *testing.T) {
 	t.Parallel()
 

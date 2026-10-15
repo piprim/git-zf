@@ -83,6 +83,10 @@ type Tracker struct {
 	// MergeError, when non-nil, is returned by MergePullRequest: the forge
 	// refuses the merge (checks failing, not mergeable).
 	MergeError error
+	// HeadSHA, by pull request number, is the head the forge holds; a
+	// MergePullRequest whose head differs is refused ("head moved"), as the
+	// forge does. Numbers absent from the map accept any head.
+	HeadSHA map[string]string
 
 	ticks   int
 	nextCID int
@@ -110,6 +114,7 @@ type PullRequestCreate struct {
 type Merge struct {
 	Number string
 	Method tracker.MergeMethod
+	Head   string
 }
 
 // LabelSet captures one SetLabels call.
@@ -552,8 +557,8 @@ func (t *Tracker) CreatePullRequest(_ context.Context, head, base, title, body s
 }
 
 // MergePullRequest records the merge and removes the pull request, or
-// returns MergeError untouched.
-func (t *Tracker) MergePullRequest(_ context.Context, number string, method tracker.MergeMethod) error {
+// returns MergeError untouched, or refuses a head other than HeadSHA's.
+func (t *Tracker) MergePullRequest(_ context.Context, number string, method tracker.MergeMethod, head string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -565,8 +570,11 @@ func (t *Tracker) MergePullRequest(_ context.Context, number string, method trac
 	if i < 0 {
 		return fmt.Errorf("fake: no open pull request #%s", number)
 	}
+	if want, ok := t.HeadSHA[number]; ok && want != head {
+		return fmt.Errorf("fake: pull request #%s: head moved (want %s, got %s)", number, want, head)
+	}
 	t.PullRequests = slices.Delete(t.PullRequests, i, i+1)
-	t.RecordedMerges = append(t.RecordedMerges, Merge{Number: number, Method: method})
+	t.RecordedMerges = append(t.RecordedMerges, Merge{Number: number, Method: method, Head: head})
 
 	return nil
 }

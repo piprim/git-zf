@@ -710,6 +710,7 @@ func TestRunMerge_PullRequest(t *testing.T) {
 	d := r.deps(declinePush)
 	d.tracker = ft
 	p := &scriptedMergePrompter{Source: SourceBranch{Name: "feat-x"}, Strategy: commit.MergeStrategyRebase, Confirm: true}
+	head := r.gitOut(t, "rev-parse", "feat-x")
 
 	err := runMerge(t.Context(), d, p)
 
@@ -718,9 +719,10 @@ func TestRunMerge_PullRequest(t *testing.T) {
 			t.Fatalf("runMerge: %v", err)
 		}
 	})
-	t.Run("the forge merged with the picked strategy", func(t *testing.T) {
-		if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != (fake.Merge{Number: "3", Method: tracker.MergeMethodRebase}) {
-			t.Errorf("RecordedMerges = %+v", ft.RecordedMerges)
+	t.Run("the forge merged the local tip with the picked strategy", func(t *testing.T) {
+		want := fake.Merge{Number: "3", Method: tracker.MergeMethodRebase, Head: head}
+		if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != want {
+			t.Errorf("RecordedMerges = %+v, want [%+v]", ft.RecordedMerges, want)
 		}
 	})
 	t.Run("master is the forge's", func(t *testing.T) {

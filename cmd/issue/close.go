@@ -282,18 +282,14 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	var forgeMerge *mergeflow.ForgeMerge
 	if pr != nil {
 		// The review preflight merged reviewer commits into the branch: the
-		// forge must see them before it merges. They already live on the remote's
-		// @review branch, so the push adds nothing new; it happens only when the
-		// preflight moved the tip.
+		// forge must see them before it merges. The engine pushes them right
+		// before the merge (PushFirst), only when the preflight moved the tip,
+		// so a close declined at the confirm or stopped earlier leaves the
+		// remote untouched.
 		tipAfter, _ := deps.client.ResolveRef("refs/heads/" + picked.BranchName)
-		if tipAfter != tipBefore {
-			if err := deps.client.PushBranch(ctx, picked.BranchName); err != nil {
-				return fmt.Errorf("push reviewer commits of %q: %w", picked.BranchName, err)
-			}
-		}
 		fmt.Fprintf(deps.client.IO().Out, "Pull request #%s %s against %q\n", pr.Number, pr.URL, pr.Base)
 		base = pr.Base
-		forgeMerge = &mergeflow.ForgeMerge{Forge: forge, Number: pr.Number}
+		forgeMerge = &mergeflow.ForgeMerge{Forge: forge, Number: pr.Number, PushFirst: tipAfter != tipBefore}
 	} else {
 		// Smart-default merge target, pre-selected in the picker: the configured
 		// base (or DefaultBaseBranch), redirected to the parent integration branch
