@@ -37,7 +37,7 @@ type listFlags struct {
 
 func (b Branch) GetRootCmd() *cobra.Command {
 	// The registration order is also the menu order.
-	subs := []*cobra.Command{b.listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd()}
+	subs := []*cobra.Command{b.listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd(), b.prCmd()}
 
 	cmd := &cobra.Command{
 		Use:   "branch",

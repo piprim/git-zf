@@ -186,3 +186,21 @@ func TestBranchList_ShowsABranchStartedInAnotherClone(t *testing.T) {
 		}
 	})
 }
+
+func TestPrCmd(t *testing.T) {
+	root := New(&config.AppConfig{}).GetRootCmd()
+
+	t.Run("branch pr is registered", func(t *testing.T) {
+		if _, _, err := root.Find([]string{"pr"}); err != nil {
+			t.Fatalf("find pr: %v", err)
+		}
+	})
+	t.Run("pr's RunE on the root command tolerates the undefined flags", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		sub, _, _ := root.Find([]string{"pr"})
+		err := sub.RunE(root, nil) // what the branch menu does
+		if err == nil || strings.Contains(err.Error(), "flag accessed but not defined") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
