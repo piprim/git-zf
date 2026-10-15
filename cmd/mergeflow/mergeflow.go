@@ -33,6 +33,11 @@ type Params struct {
 	// source-side steps (merge, soft reset, commit) on that tree, because git
 	// refuses to check out a branch that another worktree holds.
 	SourceClient *git.Client
+
+	// PullRequest, when set, merges Source's pull request on the forge
+	// instead of locally (see ForgeMerge). The dry-run, the strategy picker
+	// and the confirm run as for a local merge; no commit message is composed.
+	PullRequest *ForgeMerge
 }
 
 // Prompter resolves the generic user-facing merge decisions. HuhPrompter is
@@ -52,6 +57,7 @@ type Result struct {
 	Strategy            commit.MergeStrategy
 	Aborted             bool // user declined at ConfirmMerge
 	FastForwardDeferred bool // rebase committed on Source but post-FF of Target failed
+	ViaForge            bool // the forge merged the pull request; Target was fast-forwarded
 }
 
 // errFastForwardDeferred is internal; Run surfaces it as Result.FastForwardDeferred.
@@ -99,6 +105,14 @@ func Run(ctx context.Context, client *git.Client, p Params, prompter Prompter, p
 	}
 	if !confirmed {
 		return Result{Strategy: strategy, Aborted: true}, nil
+	}
+
+	if p.PullRequest != nil {
+		if err := r.forge(ctx, p.PullRequest, strategy); err != nil {
+			return Result{Strategy: strategy}, err
+		}
+
+		return Result{Strategy: strategy, ViaForge: true}, nil
 	}
 
 	switch strategy {
