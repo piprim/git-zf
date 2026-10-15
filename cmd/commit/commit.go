@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/piprim/git-zf/branch"
+	branchcmd "github.com/piprim/git-zf/cmd/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/pushflow"
@@ -136,6 +137,8 @@ func proposeCommitPush(cmd *cobra.Command, client *git.Client, cfg *config.AppCo
 		NonInteractive:      yes,
 		IncludeMergePreview: includeMerge,
 		Parent:              parent,
+		PullRequest: pullRequestOffer(client, cfg, forgeOf(cfg, client.IO().Err), branchName,
+			branchcmd.HuhPullRequestConfirm()),
 	}, pushflow.NewHuhConfirm())
 }
 
