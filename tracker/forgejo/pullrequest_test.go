@@ -60,6 +60,23 @@ func TestFindPullRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("a pull request whose head repository was deleted (null head.repo) is ignored", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") == "1" {
+				fmt.Fprint(w, `[{"number":7,"head":{"ref":"feat"},"base":{"ref":"main"}}]`)
+
+				return
+			}
+			fmt.Fprint(w, `[]`)
+		})
+
+		if _, err := a.FindPullRequest(t.Context(), "feat"); !errors.Is(err, tracker.ErrNoPullRequest) {
+			t.Errorf("err = %v", err)
+		}
+	})
+
 	t.Run("the head repository matches the project whatever its case", func(t *testing.T) {
 		t.Parallel()
 

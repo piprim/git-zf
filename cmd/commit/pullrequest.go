@@ -30,13 +30,14 @@ func forgeOf(cfg *config.AppConfig, errOut io.Writer) tracker.PullRequests {
 }
 
 // pullRequestOffer is the push step's offer for branchName: nil without a
-// forge, or when the branch is the base itself. Open prefills from the
-// branch chain and asks form, one yes/no question in production.
+// tracker type, or when the branch is the base itself. The forge is built
+// lazily by Open (a commit that never pushes never builds the tracker), which
+// does nothing when it cannot be built. Open prefills from the branch chain
+// and asks form, one yes/no question in production.
 func pullRequestOffer(
-	client *git.Client, cfg *config.AppConfig, forge tracker.PullRequests,
-	branchName string, form branchcmd.PullRequestForm,
+	client *git.Client, cfg *config.AppConfig, branchName string, form branchcmd.PullRequestForm,
 ) *pushflow.PullRequestOffer {
-	if forge == nil {
+	if cfg.IssueTracker.Type == "" {
 		return nil
 	}
 	base := cfg.Branch.Base
@@ -48,6 +49,10 @@ func pullRequestOffer(
 	}
 
 	return &pushflow.PullRequestOffer{Open: func(ctx context.Context) error {
+		forge := forgeOf(cfg, client.IO().Err)
+		if forge == nil {
+			return nil
+		}
 		draft := branchcmd.PullRequestDraftFor(ctx, client, cfg.Branch.Base, branchName)
 
 		return branchcmd.OpenPullRequest(ctx, client.IO().Out, forge, branchName, draft, form)

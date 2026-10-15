@@ -137,7 +137,7 @@ func proposeCommitPush(cmd *cobra.Command, client *git.Client, cfg *config.AppCo
 		NonInteractive:      yes,
 		IncludeMergePreview: includeMerge,
 		Parent:              parent,
-		PullRequest: pullRequestOffer(client, cfg, forgeOf(cfg, client.IO().Err), branchName,
+		PullRequest: pullRequestOffer(client, cfg, branchName,
 			branchcmd.HuhPullRequestConfirm()),
 	}, pushflow.NewHuhConfirm())
 }

@@ -6,13 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	branchcmd "github.com/piprim/git-zf/cmd/branch"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
-	"github.com/piprim/git-zf/tracker/fake"
+	_ "github.com/piprim/git-zf/tracker/fake"
 )
 
 // newOfferRepo is a repo with master and a branch "feat" one commit ahead.
@@ -55,31 +56,45 @@ func newOfferRepo(t *testing.T) *git.Client {
 func yesForm(context.Context, string, *branchcmd.PullRequestDraft) (bool, error) { return true, nil }
 
 func TestPullRequestOffer(t *testing.T) {
-	cfg := &config.AppConfig{}
-	cfg.Branch.Base = "master"
+	newCfg := func(typ string) *config.AppConfig {
+		cfg := &config.AppConfig{}
+		cfg.Branch.Base = "master"
+		cfg.IssueTracker.Type = typ
 
-	t.Run("no forge: no offer", func(t *testing.T) {
-		if pullRequestOffer(newOfferRepo(t), cfg, nil, "feat", yesForm) != nil {
+		return cfg
+	}
+
+	t.Run("no tracker type: no offer", func(t *testing.T) {
+		if pullRequestOffer(newOfferRepo(t), newCfg(""), "feat", yesForm) != nil {
 			t.Error("want nil")
 		}
 	})
 	t.Run("the base branch: no offer", func(t *testing.T) {
-		if pullRequestOffer(newOfferRepo(t), cfg, &fake.Tracker{}, "master", yesForm) != nil {
+		if pullRequestOffer(newOfferRepo(t), newCfg("fake"), "master", yesForm) != nil {
 			t.Error("want nil")
 		}
 	})
 	t.Run("a feature branch: yes opens the pull request from the prefill", func(t *testing.T) {
-		ft := &fake.Tracker{}
-		offer := pullRequestOffer(newOfferRepo(t), cfg, ft, "feat", yesForm)
+		// tracker.New returns a fresh fake: its recorded create is out of reach.
+		offer := pullRequestOffer(newOfferRepo(t), newCfg("fake"), "feat", yesForm)
 		if offer == nil {
 			t.Fatal("want an offer")
 		}
 		if err := offer.Open(t.Context()); err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		want := fake.PullRequestCreate{Head: "feat", Base: "master", Title: "feat"}
-		if len(ft.RecordedPullRequests) != 1 || ft.RecordedPullRequests[0] != want {
-			t.Errorf("RecordedPullRequests = %+v", ft.RecordedPullRequests)
+	})
+	t.Run("a tracker that cannot be built: Open warns and creates nothing", func(t *testing.T) {
+		client := newOfferRepo(t)
+		offer := pullRequestOffer(client, newCfg("nope"), "feat", yesForm)
+		if offer == nil {
+			t.Fatal("want an offer")
+		}
+		if err := offer.Open(t.Context()); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if got := client.IO().Err.(*bytes.Buffer).String(); !strings.Contains(got, "warning: init tracker") {
+			t.Errorf("Err = %q", got)
 		}
 	})
 }

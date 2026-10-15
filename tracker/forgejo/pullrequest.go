@@ -39,7 +39,8 @@ func (a *forgejoAdapter) pullsPath() (path, project string, err error) {
 
 // FindPullRequest walks the open pull requests of the repository and returns
 // the one whose head is branch in this repository (the API has no head
-// filter; a fork's pull request with the same ref is not ours).
+// filter; a fork's pull request with the same ref is not ours, nor is one
+// whose head repository was deleted: its head.repo is null).
 func (a *forgejoAdapter) FindPullRequest(ctx context.Context, branch string) (tracker.PullRequest, error) {
 	path, project, err := a.pullsPath()
 	if err != nil {
@@ -62,7 +63,7 @@ func (a *forgejoAdapter) FindPullRequest(ctx context.Context, branch string) (tr
 		}
 		for i := range batch {
 			pr := &batch[i]
-			if pr.Head.Ref == branch && (pr.Head.Repo == nil || strings.EqualFold(pr.Head.Repo.FullName, project)) {
+			if pr.Head.Ref == branch && pr.Head.Repo != nil && strings.EqualFold(pr.Head.Repo.FullName, project) {
 				return toPullRequest(pr), nil
 			}
 		}
