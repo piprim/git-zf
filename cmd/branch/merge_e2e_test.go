@@ -14,6 +14,8 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
+	"github.com/piprim/git-zf/tracker"
+	"github.com/piprim/git-zf/tracker/fake"
 )
 
 // mergeRig bundles a real on-disk repo for branch-merge E2E
@@ -694,6 +696,59 @@ func TestRunMerge_SourceHeldByMainTree_FromWorktree(t *testing.T) {
 	t.Run("main tree still present and on master", func(t *testing.T) {
 		if got := rig.gitOut(t, "rev-parse", "--abbrev-ref", "HEAD"); got != "master" {
 			t.Fatalf("main tree HEAD = %q", got)
+		}
+	})
+}
+
+func TestRunMerge_PullRequest(t *testing.T) {
+	r := newMergeRig(t)
+	r.addOrigin(t)
+	r.addLocalBranch(t, "feat-x")
+	r.git(t, "push", "-q", "origin", "feat-x")
+	r.git(t, "push", "-q", "origin", "feat-x:master") // the forge merged
+	ft := &fake.Tracker{PullRequests: []tracker.PullRequest{{Number: "3", URL: "fake://pr/3", Head: "feat-x", Base: "master"}}}
+	d := r.deps(declinePush)
+	d.tracker = ft
+	p := &scriptedMergePrompter{Source: SourceBranch{Name: "feat-x"}, Strategy: commit.MergeStrategyRebase, Confirm: true}
+
+	err := runMerge(t.Context(), d, p)
+
+	t.Run("no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("runMerge: %v", err)
+		}
+	})
+	t.Run("the forge merged with the picked strategy", func(t *testing.T) {
+		if len(ft.RecordedMerges) != 1 || ft.RecordedMerges[0] != (fake.Merge{Number: "3", Method: tracker.MergeMethodRebase}) {
+			t.Errorf("RecordedMerges = %+v", ft.RecordedMerges)
+		}
+	})
+	t.Run("master is the forge's", func(t *testing.T) {
+		if got := r.headSubject(t, "master"); got != "feat: feat-x" {
+			t.Errorf("master head = %q", got)
+		}
+	})
+	t.Run("the closing line names the pull request", func(t *testing.T) {
+		if !strings.Contains(r.stdout.String(), "pull request #3") {
+			t.Errorf("stdout %q", r.stdout.String())
+		}
+	})
+}
+
+func TestRunMerge_PullRequest_BaseIsNotTheCurrentBranch(t *testing.T) {
+	r := newMergeRig(t)
+	r.addOrigin(t)
+	r.addLocalBranch(t, "feat-x")
+	r.git(t, "push", "-q", "origin", "feat-x")
+	ft := &fake.Tracker{PullRequests: []tracker.PullRequest{{Number: "3", Head: "feat-x", Base: "develop"}}}
+	d := r.deps(declinePush)
+	d.tracker = ft
+
+	err := runMerge(t.Context(), d, &scriptedMergePrompter{Source: SourceBranch{Name: "feat-x"}, Strategy: commit.MergeStrategyRebase, Confirm: true})
+
+	t.Run("refused: the pull request targets another branch", func(t *testing.T) {
+		if err == nil || !strings.Contains(err.Error(), "develop") || len(ft.RecordedMerges) != 0 {
+			t.Errorf("err %v, merges %+v", err, ft.RecordedMerges)
 		}
 	})
 }

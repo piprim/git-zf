@@ -305,6 +305,32 @@ close`). When changing the refusal or the shared engine, keep the close E2E
 suite green — it is the regression net for the extraction.
 
 
+### Testing the pull requests
+
+On GitHub and Forgejo the tracker is also the forge: `tracker.PullRequests`
+(`tracker/tracker.go`, discovered with `tracker.PullRequestsOf`) finds, opens
+and merges a pull request. `git zf commit` offers one after a push of a
+feature branch (one yes/no question, `pushflow.PullRequestOffer`), `git zf
+branch pr [branch]` opens one with an editable form (`cmd/branch/pr.go`,
+`OpenPullRequest` is the shared step), and `issue close` / `branch merge`
+merge a branch that has an open pull request on the forge
+(`mergeflow.ForgeMerge`): strategy picker and confirm as today, then the
+forge merges and the local base is fast-forwarded. The branch must be at the
+remote's tip (`issueflow.CheckPushed`). The fake tracker plays the forge:
+`PullRequests`, `RecordedPullRequests`, `RecordedMerges`, `MergeError`; wrap
+it in `struct{ tracker.Tracker }{fake}` for a tracker without the capability.
+
+    mise exec -- go test ./tracker/... -run "PullRequest" -v
+    mise exec -- go test ./cmd/pushflow/... -run "PullRequest" -v
+    mise exec -- go test ./cmd/branch/... -run "^TestRunPr_|^TestPrCmd|^TestOpenPullRequest|^TestPullRequestDraftFor|^TestRunMerge_PullRequest" -v
+    mise exec -- go test ./cmd/commit/... -run "TestPullRequestOffer|TestForgeOf" -v
+    mise exec -- go test ./cmd/mergeflow/... -run "TestRun_Forge|TestMethodOf" -v
+    mise exec -- go test ./cmd/issueflow/... -run "TestCheckPushed|TestForgePullRequest" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestClose_PullRequest" -v
+
+A fork's pull request with the same head ref is not the branch's (Forgejo
+filters on `head.repo.full_name`; GitHub's head filter is `owner:branch`).
+
 ## Architecture
 
 Main packages under `github.com/piprim/git-zf`:

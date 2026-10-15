@@ -13,6 +13,7 @@ import (
 	"github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
 )
 
@@ -43,6 +44,14 @@ func (b Branch) mergeRunE(cmd *cobra.Command, _ []string) error {
 		client: c, cfg: b.appConfig,
 		push: push, noPush: noPush, pushConfirm: pushflow.NewHuhConfirm(),
 	}
+	if b.appConfig.IssueTracker.Type != "" {
+		t, err := tracker.New(b.appConfig.IssueTracker)
+		if err != nil {
+			fmt.Fprintf(c.IO().Err, "warning: init tracker: %v\n", err)
+		} else {
+			d.tracker = t
+		}
+	}
 
 	return runMerge(ctx, d, newHuhMergePrompter(c, b.appConfig))
 }
@@ -53,6 +62,7 @@ type mergeDeps struct {
 	cfg          *config.AppConfig
 	push, noPush bool
 	pushConfirm  pushflow.ConfirmFunc
+	tracker      tracker.Tracker // nil ⇒ no forge
 }
 
 // runMerge merges a picked source branch into the current branch via the shared
@@ -118,6 +128,22 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		}
 	}()
 
+	// A source with an open pull request is merged by the forge; the pull
+	// request must target the current branch and the source must be the one
+	// the forge shows.
+	forge, pr := issueflow.ForgePullRequest(ctx, d.tracker, d.client.IO().Err, source.Name)
+	var forgeMerge *mergeflow.ForgeMerge
+	if pr != nil {
+		if pr.Base != target {
+			return fmt.Errorf("pull request #%s targets %q, not the current branch %q", pr.Number, pr.Base, target)
+		}
+		if err := issueflow.CheckPushed(ctx, d.client, source.Name); err != nil {
+			return err //nolint:wrapcheck // says what to do
+		}
+		fmt.Fprintf(d.client.IO().Out, "Pull request #%s %s against %q\n", pr.Number, pr.URL, pr.Base)
+		forgeMerge = &mergeflow.ForgeMerge{Forge: forge, Number: pr.Number}
+	}
+
 	// A source checked out in a linked worktree cannot be checked out here;
 	// give the engine a client on that worktree instead.
 	srcClient, wt, err := mergeflow.SourceTree(ctx, d.client, source.Name)
@@ -130,7 +156,7 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 	}
 
 	res, err := mergeflow.Run(ctx, d.client, mergeflow.Params{
-		Source: source.Name, Target: target, SourceMaterialized: created, SourceClient: srcClient,
+		Source: source.Name, Target: target, SourceMaterialized: created, SourceClient: srcClient, PullRequest: forgeMerge,
 	}, prompter, prefill)
 	if err != nil {
 		return err
@@ -192,7 +218,11 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		}
 	}
 
-	fmt.Fprintf(d.client.IO().Out, "Branch %q merged into %q.\n", source.Name, target)
+	if res.ViaForge {
+		fmt.Fprintf(d.client.IO().Out, "Branch %q merged into %q by pull request #%s.\n", source.Name, target, pr.Number)
+	} else {
+		fmt.Fprintf(d.client.IO().Out, "Branch %q merged into %q.\n", source.Name, target)
+	}
 
 	return nil
 }
