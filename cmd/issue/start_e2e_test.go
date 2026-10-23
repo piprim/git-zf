@@ -174,76 +174,6 @@ func TestRunIssueStart_BranchHappyPath_NoTracker(t *testing.T) {
 	})
 }
 
-func TestRunIssueStart_BranchHappyPath_WithTracker(t *testing.T) {
-	t.Parallel()
-
-	rig := newStartRig(t)
-	flags := issuepkg.IssueStartFlags{Tracker: true, Variant: ""}
-
-	rig.tracker.ProjectIssues = []tracker.Issue{
-		{ID: "ABC-3", Subject: "Implement OAuth", TrackerType: "fake"},
-	}
-
-	pickedFromTracker := &issuepkg.Issue{
-		Type: "feat",
-		Issue: tracker.Issue{
-			ID:          "ABC-3",
-			Subject:     "Implement OAuth",
-			TrackerType: "fake",
-		},
-	}
-
-	prompter := &scriptedStartPrompter{
-		PickSlug:         "ABC-3",
-		IssueFromTracker: pickedFromTracker,
-		UseWorktree:      false,
-		ConfirmBranch:    true,
-		TrackerStatus:    "In Progress",
-	}
-
-	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
-		t.Fatalf("RunIssueStart: %v", err)
-	}
-
-	wantBranch := "ABC-3@feat@implement-oauth"
-
-	t.Run("branch ref exists", func(t *testing.T) {
-		exists, err := rig.client.BranchExists(wantBranch)
-		if err != nil {
-			t.Fatalf("BranchExists: %v", err)
-		}
-
-		if !exists {
-			t.Errorf("branch %q was not created", wantBranch)
-		}
-	})
-
-	t.Run("tracker received one UpdateIssueStatus call", func(t *testing.T) {
-		if got := len(rig.tracker.RecordedUpdates); got != 1 {
-			t.Fatalf("RecordedUpdates len = %d, want 1", got)
-		}
-
-		got := rig.tracker.RecordedUpdates[0]
-		want := fake.Update{IssueID: "ABC-3", StatusName: "In Progress"}
-		if got != want {
-			t.Errorf("RecordedUpdates[0] = %+v, want %+v", got, want)
-		}
-	})
-
-	t.Run("branch ref records the originating tracker type", func(t *testing.T) {
-		ref, err := branch.Load(t.Context(), rig.client, "ABC-3")
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if ref == nil {
-			t.Fatal("expected a branch chain, got none")
-		}
-		if ref.TrackerType != "fake" {
-			t.Errorf("TrackerType: got %q, want %q", ref.TrackerType, "fake")
-		}
-	})
-}
-
 func TestRunIssueStart_WorktreeHappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -429,7 +359,7 @@ func TestRunIssueStart_AbortOnCollision(t *testing.T) {
 
 // Review Focus 4. The tracker is down: a warning, and the table is offered
 // the repository's rows.
-func TestRunIssueStart_TrackerDownOffersTheRepositoryRows(t *testing.T) {
+func TestStartRow_TrackerDownListsTheRepositoryRows(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
@@ -440,23 +370,20 @@ func TestRunIssueStart_TrackerDownOffersTheRepositoryRows(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	prompter := &scriptedStartPrompter{PickSlug: rec.ShortID(), ConfirmBranch: true}
+	flags := issuepkg.IssueStartFlags{Tracker: true}
+	row := rowOf(t, rig, flags, rec.ShortID()) // listed with the warning, the tracker down
+	prompter := &scriptedStartPrompter{ConfirmBranch: true}
 
-	runErr := issueflow.RunIssueStart(ctx, rig.deps(issuepkg.IssueStartFlags{Tracker: true}), prompter)
+	runErr := issueflow.StartRow(ctx, rig.deps(flags), prompter, row)
 
 	t.Run("no error", func(t *testing.T) {
 		if runErr != nil {
-			t.Fatalf("RunIssueStart: %v", runErr)
+			t.Fatalf("StartRow: %v", runErr)
 		}
 	})
 	t.Run("the warning names the tracker failure", func(t *testing.T) {
 		if got := rig.stderr.String(); !strings.Contains(got, "warning: tracker unavailable") {
 			t.Errorf("stderr = %q", got)
-		}
-	})
-	t.Run("the repository's row was offered", func(t *testing.T) {
-		if len(prompter.OfferedRows) != 1 || prompter.OfferedRows[0].IssueSlug != rec.ShortID() {
-			t.Errorf("offered = %+v", prompter.OfferedRows)
 		}
 	})
 	t.Run("the branch was created", func(t *testing.T) {
@@ -467,7 +394,7 @@ func TestRunIssueStart_TrackerDownOffersTheRepositoryRows(t *testing.T) {
 	})
 }
 
-func TestRunIssueStart_NoTrackerStatusUpdate(t *testing.T) {
+func TestStartRow_NoTrackerStatusUpdate(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
@@ -487,15 +414,15 @@ func TestRunIssueStart_NoTrackerStatusUpdate(t *testing.T) {
 	}
 
 	prompter := &scriptedStartPrompter{
-		PickSlug:         "ABC-9",
 		IssueFromTracker: pickedFromTracker,
 		UseWorktree:      false,
 		ConfirmBranch:    true,
 		TrackerStatus:    "", // empty = skip
 	}
+	row := rowOf(t, rig, flags, "ABC-9")
 
-	if err := issueflow.RunIssueStart(t.Context(), rig.deps(flags), prompter); err != nil {
-		t.Fatalf("RunIssueStart: %v", err)
+	if err := issueflow.StartRow(t.Context(), rig.deps(flags), prompter, row); err != nil {
+		t.Fatalf("StartRow: %v", err)
 	}
 
 	t.Run("branch was still created", func(t *testing.T) {
@@ -569,7 +496,7 @@ func TestRunIssueStart_UseWorktreeConfigOverride(t *testing.T) {
 }
 
 // Review Focus 5. branch new (Tracker false) never asks the tracker, even
-// with issues in it: the table is empty and the manual form opens.
+// with issues in it: the manual form opens.
 func TestRunIssueStart_BranchNewNeverAsksTheTracker(t *testing.T) {
 	t.Parallel()
 
@@ -591,11 +518,6 @@ func TestRunIssueStart_BranchNewNeverAsksTheTracker(t *testing.T) {
 	t.Run("the tracker was never listed", func(t *testing.T) {
 		if rig.tracker.ListCalls != 0 {
 			t.Errorf("ListCalls = %d", rig.tracker.ListCalls)
-		}
-	})
-	t.Run("the table was not opened: nothing to list offline", func(t *testing.T) {
-		if prompter.OfferedRows != nil {
-			t.Errorf("offered = %+v", prompter.OfferedRows)
 		}
 	})
 	t.Run("the manual branch was created", func(t *testing.T) {
@@ -639,7 +561,6 @@ func TestRunIssueStart_PickerSelectsParent(t *testing.T) {
 		Issue: tracker.Issue{ID: "X.1", Subject: "sub-task one"},
 	}
 	prompter := &scriptedStartPrompter{
-		PickNew:       true, // a branch is seeded: the table has a row
 		IssueFromUser: pickedIssue,
 		BaseBranch:    parentBranch, // picker selects the parent branch
 		UseWorktree:   false,
@@ -863,7 +784,6 @@ func TestRunIssueStart_WritesBranchRef_WithParent(t *testing.T) {
 	runGitInRig(t, rig, "checkout", "main")
 
 	prompter := &scriptedStartPrompter{
-		PickNew: true, // a branch is seeded: the table has a row
 		IssueFromUser: &issuepkg.Issue{
 			Type: "feat",
 			Issue: tracker.Issue{

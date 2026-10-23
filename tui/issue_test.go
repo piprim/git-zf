@@ -607,16 +607,7 @@ func TestIssueTable_Pick(t *testing.T) {
 		}
 	})
 
-	t.Run("n in pick mode with NewIssue quits asking for a new issue", func(t *testing.T) {
-		m := newTable(t, IssueActions{Pick: true, NewIssue: true})
-		m, cmd := m.Update(runeKey('n'))
-		pick, slug := PickedIssue(m)
-		if !quits(cmd) || pick != IssuePickNew || slug != "" {
-			t.Errorf("quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
-		}
-	})
-
-	t.Run("n in pick mode without NewIssue does nothing", func(t *testing.T) {
+	t.Run("n in pick mode does nothing", func(t *testing.T) {
 		m := newTable(t, IssueActions{Pick: true})
 		m, cmd := m.Update(runeKey('n'))
 		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone {
@@ -647,16 +638,12 @@ func TestIssueTable_Pick(t *testing.T) {
 
 	t.Run("the hint names the keys of the mode", func(t *testing.T) {
 		list := newTable(t, IssueActions{Show: show}).View()
-		pick := newTable(t, IssueActions{Pick: true, NewIssue: true}).View()
-		record := newTable(t, IssueActions{Pick: true}).View()
+		pick := newTable(t, IssueActions{Pick: true}).View()
 		if !strings.Contains(list, "enter: show · e: edit · s: start") {
 			t.Errorf("list hint missing in %q", list)
 		}
-		if !strings.Contains(pick, "enter: pick · n: new issue") {
-			t.Errorf("pick hint missing in %q", pick)
-		}
-		if !strings.Contains(record, "enter: pick ·") || strings.Contains(record, "n: new issue") {
-			t.Errorf("record hint wrong in %q", record)
+		if !strings.Contains(pick, "enter: pick · q: quit") || strings.Contains(pick, "n: new") {
+			t.Errorf("pick hint wrong in %q", pick)
 		}
 	})
 
@@ -695,7 +682,7 @@ func TestIssueTable_PickRefusesAClosedRow(t *testing.T) {
 		return ok
 	}
 
-	for name, mode := range map[string]IssueActions{"list mode": {Start: true}, "start pick mode": {Pick: true, NewIssue: true, Start: true}} {
+	for name, mode := range map[string]IssueActions{"list mode": {Start: true}, "start pick mode": {Pick: true, Start: true}} {
 		t.Run(name+": s on a closed record shows a notice and stays", func(t *testing.T) {
 			m, err := IssueTableModel(rows, "all", mode)
 			if err != nil {
@@ -797,7 +784,7 @@ func TestIssueTable_ActionKeys(t *testing.T) {
 
 	for _, key := range []rune{'c', 'l', 'r'} {
 		t.Run(string(key)+" in pick mode does nothing", func(t *testing.T) {
-			m := newTable(t, IssueActions{Pick: true, NewIssue: true, Start: true})
+			m := newTable(t, IssueActions{Pick: true, Start: true})
 			m, cmd := m.Update(runeKey(key))
 			if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone {
 				t.Errorf("quits = %v, pick = %v", quits(cmd), pick)

@@ -47,11 +47,6 @@ func TestStartID_RepoIssueByPrefix(t *testing.T) {
 			t.Errorf("ref = %+v, %v", ref, err)
 		}
 	})
-	t.Run("the table was not opened", func(t *testing.T) {
-		if prompter.OfferedRows != nil {
-			t.Errorf("offered = %+v", prompter.OfferedRows)
-		}
-	})
 }
 
 // With the mirror on an id the repo knows is started without a reconcile:

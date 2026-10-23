@@ -90,13 +90,13 @@ func allowedTypes(deps StartDeps) ([]string, error) {
 	return types, nil
 }
 
-// RunIssueStart is the prompter-driven issue-start flow: the open issues
-// are listed (ListRows), one is picked in the table (PickRow) or a new one
-// is asked for in the manual form, and StartIssue creates its branch.
-// Called from cmd/branch's newRunE with a HuhStartPrompter; tests call it
-// with a scripted one. `issue start` does not: without an ID it is the list,
-// with one it is StartID. An empty table is skipped: the manual form opens
-// at once.
+// RunIssueStart is the prompter-driven flow of `branch new`: the manual
+// form asks for the issue (an empty ID creates a repo issue, a typed one
+// creates no record) and StartIssue creates its branch. The issues in the
+// repository are not offered, whatever it holds: `s` in `issue list` starts
+// one (StartRow), `issue start <id>` names one (StartID). Called from
+// cmd/branch's newRunE with a HuhStartPrompter; tests call it with a
+// scripted one.
 //
 // Returns nil on the non-error exits: the operator aborted at the confirm
 // or in the conflict loop, or a test prompter returned no issue.
@@ -106,32 +106,7 @@ func RunIssueStart(ctx context.Context, deps StartDeps, prompter StartPrompter) 
 		return err
 	}
 
-	// The picker has no `r` key: it fetches, and with the mirror on
-	// reconciles, once, so an issue a teammate just filed is offered and not
-	// filed again.
-	FetchIssues(ctx, deps.Client)
-	if deps.Flags.Tracker {
-		ReconcileIssues(ctx, deps.Client, deps.Mirror)
-	}
-
-	rows, err := ListRows(ctx, deps, issue.StateOpen)
-	if err != nil {
-		return fmt.Errorf("list issues: %w", err)
-	}
-
-	var row *issue.Row
-	if len(rows) > 0 {
-		if row, err = prompter.PickRow(ctx, rows); err != nil {
-			return fmt.Errorf("pick issue: %w", err)
-		}
-	}
-
-	var picked *issue.Issue
-	if row == nil {
-		picked, err = newIssueFromUser(ctx, deps.Client, prompter, "", types)
-	} else {
-		picked, err = issueFromRow(ctx, deps, prompter, row, types)
-	}
+	picked, err := newIssueFromUser(ctx, deps.Client, prompter, "", types)
 	if err != nil || picked == nil {
 		return err
 	}

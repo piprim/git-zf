@@ -51,22 +51,23 @@ The issue-start flow (used by `issue start`, `branch new` and `s` in
 `start_id_e2e_test.go`. The pattern mirrors
 the close-flow tests: a real on-disk repo, the fake tracker at
 `tracker/fake/`, and a `scriptedStartPrompter` that returns canned answers
-for every form. The picker is the `issue list` table over
-`issueflow.ListRows`: a script picks a row by slug (`PickSlug`), asks for a
-new issue (`PickNew`) and reads what it was offered in `OfferedRows`. An
-empty table is skipped: the manual form opens at once. That picker
-(`RunIssueStart`) is `branch new`'s alone: `issue start <id>` resolves the
-ID after a fetch (`issueflow.StartID`; only an unknown ID reconciles with
-the mirror, and an ID nothing knows opens the manual form with it filled
-in) and `issue start` without an ID is `issue list`, no sync.
+for every form. `branch new` (`RunIssueStart`) opens the manual form at
+once, whatever the repository holds: it creates a branch, never picks an
+issue. The branch needs an ID for its first segment: a typed one is used
+as is (an issue living where git-zf does not look, no record), an empty one
+is minted by filing a repo issue.
+`issue start <id>` resolves the ID after a fetch (`issueflow.StartID`; only
+an unknown ID reconciles with the mirror, and an ID nothing knows opens the
+manual form with it filled in) and `issue start` without an ID is `issue
+list`, no sync, whose `s` starts the row under the cursor
+(`issueflow.StartRow`; a test lists the rows with `rowOf`).
 
 To exercise just the start-flow tests:
 
     mise exec -- go test ./cmd/issue/... -run "^TestRunIssueStart_|^TestStartRow_|^TestStartID_|^TestStartCmd_" -v
 
-`branch new` lists the branches and the repo issues alone
-(`IssueStartFlags.Tracker` false); `issue start` and `issue list` list the
-tracker too. When adding a toggle, confirm or picker form, extend
+`IssueStartFlags.Tracker` is false for `branch new`, which never asks the
+tracker, and true for `issue start` and `issue list`. When adding a toggle, confirm or picker form, extend
 `StartPrompter` and add a matching E2E test alongside the existing
 happy-path and failure-mode tests.
 
@@ -352,7 +353,7 @@ Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.to
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (5232 symbols, 22684 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (5485 symbols, 24356 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

@@ -2,7 +2,6 @@ package issue
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
@@ -23,17 +22,6 @@ type scriptedStartPrompter struct {
 	IssueFromUser    *issuepkg.Issue
 	IssueFromTracker *issuepkg.Issue
 	OfferedID        string
-
-	// PickRow answers: PickSlug names the row to pick among those offered;
-	// PickNew picks "new issue" instead (nil, nil); PickRowErr fails the
-	// pick. A PickSlug that is not offered is an error: the test scripted
-	// a row the flow did not list.
-	PickSlug   string
-	PickNew    bool
-	PickRowErr error
-	// OfferedRows records what PickRow was offered; nil ⇒ the table was
-	// never opened (RunIssueStart skips it when there are no rows).
-	OfferedRows []issuepkg.Row
 
 	// Toggle return value.
 	UseWorktree bool
@@ -86,23 +74,6 @@ func (s *scriptedStartPrompter) PickIssueFromTracker(_ context.Context, _ []trac
 	}
 
 	return s.IssueFromTracker, nil
-}
-
-func (s *scriptedStartPrompter) PickRow(_ context.Context, rows []issuepkg.Row) (*issuepkg.Row, error) {
-	s.OfferedRows = rows
-	if s.PickRowErr != nil {
-		return nil, s.PickRowErr
-	}
-	if s.PickNew {
-		return nil, nil
-	}
-	for i := range rows {
-		if rows[i].IssueSlug == s.PickSlug {
-			return &rows[i], nil
-		}
-	}
-
-	return nil, fmt.Errorf("scripted PickRow: no row %q among the %d offered", s.PickSlug, len(rows))
 }
 
 func (s *scriptedStartPrompter) PickUseWorktree(_ context.Context) (bool, error) {

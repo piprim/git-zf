@@ -148,9 +148,8 @@ type IssueActions struct {
 	// Edit saves the edit form and returns the line the table shows.
 	Edit func(slug, title, description string) (string, error)
 	// Pick is set when the table picks an issue: enter and s pick the row
-	// under the cursor and quit. With NewIssue, n picks "new issue".
-	Pick     bool
-	NewIssue bool
+	// under the cursor and quit; n, c, l and r do nothing.
+	Pick bool
 	// Start is set when a pick starts a branch (s in the list, the start
 	// flow's table): a closed issue is then refused with a notice. The
 	// record picker leaves it unset and picks closed records too.
@@ -581,7 +580,7 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 	case "s":
 		return m.pickRow(IssuePickRow)
 	case "n":
-		if !m.actions.Pick || m.actions.NewIssue {
+		if !m.actions.Pick {
 			m.pick = IssuePickNew
 
 			return m, tea.Quit, true
@@ -744,9 +743,6 @@ func (m *issueTableModel) hint() string {
 	keys := "enter: show · e: edit · s: start · n: new · c: close · l: label · r: sync"
 	if m.actions.Pick {
 		keys = "enter: pick"
-		if m.actions.NewIssue {
-			keys += " · n: new issue"
-		}
 	}
 
 	return keys + " · q: quit"

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
@@ -18,10 +16,6 @@ import (
 // test implementation in cmd/issue's start_prompter_test.go returns canned
 // values. The order below mirrors the order calls happen in RunIssueStart.
 type StartPrompter interface {
-	// PickRow opens the issue table over rows. A nil row with a nil error
-	// means "new issue": the flow falls through to PickIssueFromUser.
-	PickRow(ctx context.Context, rows []issuepkg.Row) (*issuepkg.Row, error)
-
 	// PickIssueFromTracker asks the branch type of a tracker issue: the
 	// form lists issues (one, from now on) and the types.
 	PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error)
@@ -135,35 +129,6 @@ func (p *HuhStartPrompter) PickIssueFromTracker(ctx context.Context, issues []tr
 	got.TrackerType = pickedIssue.TrackerType
 
 	return &got, nil
-}
-
-// PickRow opens the issue table over rows: enter or s picks the row under
-// the cursor, n asks for a new issue, q gives up (huh.ErrUserAborted, as the
-// huh picker's Esc was).
-func (*HuhStartPrompter) PickRow(ctx context.Context, rows []issuepkg.Row) (*issuepkg.Row, error) {
-	m, err := tui.IssueTableModel(rows, issuepkg.StateOpen, tui.IssueActions{Pick: true, NewIssue: true, Start: true})
-	if err != nil {
-		return nil, fmt.Errorf("issue table: %w", err)
-	}
-	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
-	if err != nil {
-		return nil, fmt.Errorf("issue table: %w", err)
-	}
-
-	pick, slug := tui.PickedIssue(final)
-	switch pick {
-	case tui.IssuePickNew:
-		return nil, nil
-	case tui.IssuePickRow:
-		for i := range rows {
-			if rows[i].IssueSlug == slug {
-				return &rows[i], nil
-			}
-		}
-	case tui.IssuePickNone:
-	}
-
-	return nil, huh.ErrUserAborted
 }
 
 func (p *HuhStartPrompter) PickUseWorktree(ctx context.Context) (bool, error) {

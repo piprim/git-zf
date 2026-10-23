@@ -103,11 +103,6 @@ func TestStartRow_RepoRow(t *testing.T) {
 			t.Errorf("ref = %+v, %v", ref, err)
 		}
 	})
-	t.Run("the table was not opened", func(t *testing.T) {
-		if prompter.OfferedRows != nil {
-			t.Errorf("offered = %+v", prompter.OfferedRows)
-		}
-	})
 }
 
 // Review Focus 1. A branch started under another slug is joined to its
@@ -144,38 +139,34 @@ func TestStartRow_RowJoinedByIssueID(t *testing.T) {
 }
 
 // Review finding. A branch started with a typed ID (no record, not listed by
-// the tracker) is a manual branch: picking its row in branch new, with a
-// tracker configured, must neither ask the tracker nor record a tracker
-// origin on the new chain entry.
-func TestRunIssueStart_BranchNewPicksAManualBranchRow(t *testing.T) {
+// the tracker) is a manual branch: starting its row, with a tracker
+// configured, must neither ask the tracker nor record a tracker origin on
+// the new chain entry.
+func TestStartRow_ManualBranchRow(t *testing.T) {
 	t.Parallel()
 
 	rig := newStartRig(t)
 	ctx := t.Context()
-	flags := issuepkg.IssueStartFlags{Tracker: false}
+	flags := issuepkg.IssueStartFlags{Tracker: true}
 	branchtest.Seed(t, rig.client, branch.Op{Branch: "ABC-5@feat@manual", Title: "Manual"}, branch.StatusInProgress)
+	row := rowOf(t, rig, flags, "ABC-5")
+	listed := rig.tracker.ListCalls // the listing asked it; the start must not
 
 	prompter := &scriptedStartPrompter{
-		PickSlug:         "ABC-5",
 		IssueFromTracker: &issuepkg.Issue{Type: "feat"},
 		ConfirmBranch:    true,
 		TrackerStatus:    "In Progress",
 	}
 
-	err := issueflow.RunIssueStart(ctx, rig.deps(flags), prompter)
+	err := issueflow.StartRow(ctx, rig.deps(flags), prompter, row)
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
-			t.Fatalf("RunIssueStart: %v", err)
-		}
-	})
-	t.Run("the row was offered and picked", func(t *testing.T) {
-		if len(prompter.OfferedRows) != 1 || prompter.OfferedRows[0].IssueSlug != "ABC-5" {
-			t.Errorf("offered = %+v", prompter.OfferedRows)
+			t.Fatalf("StartRow: %v", err)
 		}
 	})
 	t.Run("the tracker was never asked", func(t *testing.T) {
-		if rig.tracker.ListCalls != 0 || len(rig.tracker.RecordedUpdates) != 0 {
+		if rig.tracker.ListCalls != listed || len(rig.tracker.RecordedUpdates) != 0 {
 			t.Errorf("ListCalls = %d, updates = %+v", rig.tracker.ListCalls, rig.tracker.RecordedUpdates)
 		}
 	})
