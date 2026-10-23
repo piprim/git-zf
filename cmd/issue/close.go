@@ -248,7 +248,8 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	// A branch with an open pull request is merged by the forge, against the
 	// pull request's base: no target picker. The branch must be the one the
 	// forge shows, checked before the review preflight can add commits.
-	forge, pr := issueflow.ForgePullRequest(ctx, deps.tracker, deps.client.IO().Err, picked.BranchName)
+	head := issueflow.PullRequestHead(deps.client, &deps.cfg.IssueTracker, picked.BranchName)
+	forge, pr := issueflow.ForgePullRequest(ctx, deps.tracker, deps.client.IO().Err, head)
 
 	var tipBefore git.Hash
 	if pr != nil {
@@ -289,7 +290,10 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 		tipAfter, _ := deps.client.ResolveRef("refs/heads/" + picked.BranchName)
 		fmt.Fprintf(deps.client.IO().Out, "Pull request #%s %s against %q\n", pr.Number, pr.URL, pr.Base)
 		base = pr.Base
-		forgeMerge = &mergeflow.ForgeMerge{Forge: forge, Number: pr.Number, PushFirst: tipAfter != tipBefore}
+		forgeMerge = &mergeflow.ForgeMerge{
+			Forge: forge, Number: pr.Number, PushFirst: tipAfter != tipBefore,
+			Upstream: issueflow.ForkUpstream(deps.client, &deps.cfg.IssueTracker),
+		}
 	} else {
 		// Smart-default merge target, pre-selected in the picker: the configured
 		// base (or DefaultBaseBranch), redirected to the parent integration branch

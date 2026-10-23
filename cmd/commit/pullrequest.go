@@ -53,7 +53,7 @@ func pullRequestOffer(
 		if forge == nil {
 			return nil
 		}
-		draft := branchcmd.PullRequestDraftFor(ctx, client, cfg.Branch.Base, branchName)
+		draft := branchcmd.PullRequestDraftFor(ctx, client, cfg, branchName)
 
 		return branchcmd.OpenPullRequest(ctx, client.IO().Out, forge, branchName, draft, form)
 	}}

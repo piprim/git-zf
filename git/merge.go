@@ -208,6 +208,18 @@ func (c *Client) Fetch(ctx context.Context) error {
 	return nil
 }
 
+// FetchRef runs `git fetch <from> <ref>`: from is a remote name or a URL,
+// and the fetched tip is FETCH_HEAD. It bypasses remoteCmd's latch: from is
+// not necessarily the configured remote, and its death says nothing about
+// that remote.
+func (c *Client) FetchRef(ctx context.Context, from, ref string) error {
+	if err := c.runInteractive(ctx, c.root, "fetch", from, ref); err != nil {
+		return fmt.Errorf("fetch %s from %s: %w", ref, from, err)
+	}
+
+	return nil
+}
+
 // IsAncestor reports whether child is an ancestor of ancestor (or equal).
 // Wraps `git merge-base --is-ancestor child ancestor`: exit code 0 → true,
 // exit code 1 → false, any other exit code → wrapped error.

@@ -329,8 +329,19 @@ it in `struct{ tracker.Tracker }{fake}` for a tracker without the capability.
     mise exec -- go test ./cmd/issueflow/... -run "TestCheckPushed|TestForgePullRequest" -v
     mise exec -- go test ./cmd/issue/... -run "^TestClose_PullRequest" -v
 
-A fork's pull request with the same head ref is not the branch's (Forgejo
-filters on `head.repo.full_name`; GitHub's head filter is `owner:branch`).
+The head of a branch's pull request is `issueflow.PullRequestHead`: the bare
+branch when the clone's remote is the tracker's project, `owner:branch` when
+the remote is a fork of it (the remote URL's owner differs from the
+project's; a path remote is never a fork). Both adapters take the head as
+given: GitHub's head filter is `owner:branch`, Forgejo matches the owner of
+`head.repo.full_name` and the ref. A fork's pull request is found only by
+that head: asked with the bare branch, it is not the branch's. After a forge
+merge from a fork the base is fetched from the upstream
+(`issueflow.ForkUpstream`, `ForgeMerge.Upstream`), fast-forwarded and pushed
+to the fork.
+
+    mise exec -- go test ./cmd/issueflow/... -run "TestPullRequestHead" -v
+    mise exec -- go test ./cmd/branch/... -run "^TestRunPr_FromAFork" -v
 
 ## Architecture
 

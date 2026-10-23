@@ -43,12 +43,13 @@ func TestFindPullRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("a pull request from a fork with the same head ref is ignored", func(t *testing.T) {
+	t.Run("a pull request from a fork with the same head ref is ignored, a fork under the same owner included", func(t *testing.T) {
 		t.Parallel()
 
 		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Query().Get("page") == "1" {
-				fmt.Fprint(w, `[{"number":5,"head":{"ref":"feat","repo":{"full_name":"fork/b"}},"base":{"ref":"main"}}]`)
+				fmt.Fprint(w, `[{"number":5,"head":{"ref":"feat","repo":{"full_name":"fork/b"}},"base":{"ref":"main"}},`+
+					`{"number":8,"head":{"ref":"feat","repo":{"full_name":"a/b-copy"}},"base":{"ref":"main"}}]`)
 
 				return
 			}
@@ -57,6 +58,25 @@ func TestFindPullRequest(t *testing.T) {
 
 		if _, err := a.FindPullRequest(t.Context(), "feat"); !errors.Is(err, tracker.ErrNoPullRequest) {
 			t.Errorf("err = %v", err)
+		}
+	})
+
+	t.Run("a fork's pull request is found by owner:branch, a renamed fork included", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") == "1" {
+				fmt.Fprint(w, `[{"number":4,"head":{"ref":"feat","repo":{"full_name":"a/b"}},"base":{"ref":"main"}},`+
+					`{"number":5,"html_url":"https://f/a/b/pulls/5","head":{"ref":"feat","repo":{"full_name":"Fork/renamed"}},"base":{"ref":"main"}}]`)
+
+				return
+			}
+			fmt.Fprint(w, `[]`)
+		})
+
+		pr, err := a.FindPullRequest(t.Context(), "fork:feat")
+		if err != nil || pr.Number != "5" || pr.Head != "feat" {
+			t.Errorf("pr = %+v, err = %v", pr, err)
 		}
 	})
 

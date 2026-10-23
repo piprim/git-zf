@@ -9,6 +9,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
+	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
 )
@@ -112,6 +113,11 @@ func TestOpenPullRequest(t *testing.T) {
 	})
 }
 
+// baseCfg is a config whose base branch is base, no tracker.
+func baseCfg(base string) *config.AppConfig {
+	return &config.AppConfig{Branch: config.BranchConfig{Base: base}}
+}
+
 func TestPullRequestDraftFor(t *testing.T) {
 	t.Parallel()
 
@@ -119,8 +125,8 @@ func TestPullRequestDraftFor(t *testing.T) {
 		t.Parallel()
 		r := newMergeRig(t)
 		r.addLocalBranch(t, "feat-x")
-		got := PullRequestDraftFor(t.Context(), r.client, "master", "feat-x")
-		if got != (PullRequestDraft{Title: "feat-x", Base: "master"}) {
+		got := PullRequestDraftFor(t.Context(), r.client, baseCfg("master"), "feat-x")
+		if got != (PullRequestDraft{Title: "feat-x", Base: "master", Head: "feat-x"}) {
 			t.Errorf("draft = %+v", got)
 		}
 	})
@@ -130,7 +136,7 @@ func TestPullRequestDraftFor(t *testing.T) {
 		r := newMergeRig(t)
 		r.addLocalBranch(t, "ABC-1@feat@add-thing")
 		branchtest.Seed(t, r.client, branch.Op{Branch: "ABC-1@feat@add-thing", Title: "Add thing"}, branch.StatusInProgress)
-		got := PullRequestDraftFor(t.Context(), r.client, "master", "ABC-1@feat@add-thing")
+		got := PullRequestDraftFor(t.Context(), r.client, baseCfg("master"), "ABC-1@feat@add-thing")
 		if got.Title != "Add thing" || got.Base != "master" || got.Body != "" {
 			t.Errorf("draft = %+v", got)
 		}
@@ -140,7 +146,7 @@ func TestPullRequestDraftFor(t *testing.T) {
 		t.Parallel()
 		r := newMergeRig(t)
 		r.addLocalBranch(t, "feat-x")
-		if got := PullRequestDraftFor(t.Context(), r.client, "", "feat-x"); got.Base != "master" {
+		if got := PullRequestDraftFor(t.Context(), r.client, baseCfg(""), "feat-x"); got.Base != "master" {
 			t.Errorf("draft = %+v", got)
 		}
 	})

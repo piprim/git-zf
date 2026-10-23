@@ -131,7 +131,8 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 	// A source with an open pull request is merged by the forge; the pull
 	// request must target the current branch and the source must be the one
 	// the forge shows.
-	forge, pr := issueflow.ForgePullRequest(ctx, d.tracker, d.client.IO().Err, source.Name)
+	head := issueflow.PullRequestHead(d.client, &d.cfg.IssueTracker, source.Name)
+	forge, pr := issueflow.ForgePullRequest(ctx, d.tracker, d.client.IO().Err, head)
 	var forgeMerge *mergeflow.ForgeMerge
 	if pr != nil {
 		if pr.Base != target {
@@ -141,7 +142,9 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 			return err //nolint:wrapcheck // says what to do
 		}
 		fmt.Fprintf(d.client.IO().Out, "Pull request #%s %s against %q\n", pr.Number, pr.URL, pr.Base)
-		forgeMerge = &mergeflow.ForgeMerge{Forge: forge, Number: pr.Number}
+		forgeMerge = &mergeflow.ForgeMerge{
+			Forge: forge, Number: pr.Number, Upstream: issueflow.ForkUpstream(d.client, &d.cfg.IssueTracker),
+		}
 	}
 
 	// A source checked out in a linked worktree cannot be checked out here;

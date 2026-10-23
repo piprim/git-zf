@@ -38,13 +38,26 @@ func (a *forgejoAdapter) pullsPath() (path, project string, err error) {
 }
 
 // FindPullRequest walks the open pull requests of the repository and returns
-// the one whose head is branch in this repository (the API has no head
-// filter; a fork's pull request with the same ref is not ours, nor is one
-// whose head repository was deleted: its head.repo is null).
-func (a *forgejoAdapter) FindPullRequest(ctx context.Context, branch string) (tracker.PullRequest, error) {
+// the one whose head is head: a branch of this repository (its head.repo is
+// the repository itself), or "owner:branch" held by that owner's fork (the
+// API has no head filter; a fork's pull request with the same ref is not the
+// repository's, nor is one whose head repository was deleted: its head.repo
+// is null).
+func (a *forgejoAdapter) FindPullRequest(ctx context.Context, head string) (tracker.PullRequest, error) {
 	path, project, err := a.pullsPath()
 	if err != nil {
 		return tracker.PullRequest{}, err
+	}
+	headOwner, ref, fromFork := strings.Cut(head, ":")
+	if !fromFork {
+		ref = head
+	}
+	heldBy := func(fullName string) bool {
+		if fromFork {
+			return strings.EqualFold(ownerOf(fullName), headOwner)
+		}
+
+		return strings.EqualFold(fullName, project)
 	}
 
 	q := url.Values{}
@@ -63,13 +76,20 @@ func (a *forgejoAdapter) FindPullRequest(ctx context.Context, branch string) (tr
 		}
 		for i := range batch {
 			pr := &batch[i]
-			if pr.Head.Ref == branch && pr.Head.Repo != nil && strings.EqualFold(pr.Head.Repo.FullName, project) {
+			if pr.Head.Ref == ref && pr.Head.Repo != nil && heldBy(pr.Head.Repo.FullName) {
 				return toPullRequest(pr), nil
 			}
 		}
 	}
 
 	return tracker.PullRequest{}, tracker.ErrNoPullRequest
+}
+
+// ownerOf is the owner of an "owner/repo" full name.
+func ownerOf(fullName string) string {
+	owner, _, _ := strings.Cut(fullName, "/")
+
+	return owner
 }
 
 // CreatePullRequest opens a pull request of head against base.

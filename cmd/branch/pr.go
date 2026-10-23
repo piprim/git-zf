@@ -19,9 +19,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// PullRequestDraft is what a pull request is opened with.
+// PullRequestDraft is what a pull request is opened with. Head is the
+// forge's name of the branch (issueflow.PullRequestHead): the branch, or
+// "owner:branch" from a fork; "" stands for the branch.
 type PullRequestDraft struct {
-	Title, Body, Base string
+	Title, Body, Base, Head string
 }
 
 // PullRequestForm shows the draft of branchName's pull request and reports
@@ -36,7 +38,11 @@ func OpenPullRequest(
 	ctx context.Context, out io.Writer, forge tracker.PullRequests,
 	branchName string, draft PullRequestDraft, form PullRequestForm,
 ) error {
-	pr, err := forge.FindPullRequest(ctx, branchName)
+	head := draft.Head
+	if head == "" {
+		head = branchName
+	}
+	pr, err := forge.FindPullRequest(ctx, head)
 	switch {
 	case err == nil:
 		fmt.Fprintf(out, "Pull request #%s is open for %q: %s\n", pr.Number, branchName, pr.URL)
@@ -54,7 +60,7 @@ func OpenPullRequest(
 		return nil
 	}
 
-	pr, err = forge.CreatePullRequest(ctx, branchName, draft.Base, draft.Title, draft.Body)
+	pr, err = forge.CreatePullRequest(ctx, head, draft.Base, draft.Title, draft.Body)
 	if err != nil {
 		return fmt.Errorf("open a pull request for %q: %w", branchName, err)
 	}
@@ -64,10 +70,13 @@ func OpenPullRequest(
 }
 
 // PullRequestDraftFor prefills from what the branch chain records: the issue
-// title (else the branch name), the parent branch (else cfgBase, else the
-// default base branch) and "Closes #N" when the issue has a tracker number.
-func PullRequestDraftFor(ctx context.Context, c *git.Client, cfgBase, branchName string) PullRequestDraft {
-	d := PullRequestDraft{Title: branchName, Base: cfgBase}
+// title (else the branch name), the parent branch (else the configured base,
+// else the default base branch), "Closes #N" when the issue has a tracker
+// number, and the head the forge knows the branch by.
+func PullRequestDraftFor(ctx context.Context, c *git.Client, cfg *config.AppConfig, branchName string) PullRequestDraft {
+	cfgBase := cfg.Branch.Base
+	head := issueflow.PullRequestHead(c, &cfg.IssueTracker, branchName)
+	d := PullRequestDraft{Title: branchName, Base: cfgBase, Head: head}
 	if d.Base == "" {
 		if b, err := c.DefaultBaseBranch(); err == nil {
 			d.Base = b
@@ -205,7 +214,7 @@ func runPr(ctx context.Context, d prDeps, branchName string) error {
 		return fmt.Errorf("branch %q does not exist in this clone", branchName)
 	}
 
-	draft := PullRequestDraftFor(ctx, d.client, d.cfg.Branch.Base, branchName)
+	draft := PullRequestDraftFor(ctx, d.client, d.cfg, branchName)
 	if branchName == draft.Base {
 		return fmt.Errorf("%q is the base branch: a pull request needs a feature branch", branchName)
 	}

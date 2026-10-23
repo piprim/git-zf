@@ -10,25 +10,25 @@ import (
 	"github.com/piprim/git-zf/tracker"
 )
 
-// ForgePullRequest returns the tracker's forge and branchName's open pull
-// request on it. Without the capability, or without a pull request, the pull
-// request is nil and the caller merges locally. A forge that cannot be asked
-// is a warning and the same nil: the merge then runs locally, as it did
-// before the forge existed.
+// ForgePullRequest returns the tracker's forge and the open pull request of
+// head (PullRequestHead's) on it. Without the capability, or without a pull
+// request, the pull request is nil and the caller merges locally. A forge
+// that cannot be asked is a warning and the same nil: the merge then runs
+// locally, as it did before the forge existed.
 func ForgePullRequest(
-	ctx context.Context, t tracker.Tracker, errOut io.Writer, branchName string,
+	ctx context.Context, t tracker.Tracker, errOut io.Writer, head string,
 ) (tracker.PullRequests, *tracker.PullRequest) {
 	forge := tracker.PullRequestsOf(t)
 	if forge == nil {
 		return nil, nil
 	}
 
-	pr, err := forge.FindPullRequest(ctx, branchName)
+	pr, err := forge.FindPullRequest(ctx, head)
 	switch {
 	case errors.Is(err, tracker.ErrNoPullRequest):
 		return forge, nil
 	case err != nil:
-		fmt.Fprintf(errOut, "warning: pull request of %q not looked up, merging locally: %v\n", branchName, err)
+		fmt.Fprintf(errOut, "warning: pull request of %q not looked up, merging locally: %v\n", head, err)
 
 		return nil, nil
 	}

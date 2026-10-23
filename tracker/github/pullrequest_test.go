@@ -40,6 +40,24 @@ func TestFindPullRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("a head naming its owner (a fork's) is listed as given", func(t *testing.T) {
+		t.Parallel()
+
+		var gotHead string
+		mux := http.NewServeMux()
+		mux.HandleFunc("/repos/a/b/pulls", func(w http.ResponseWriter, r *http.Request) {
+			gotHead = r.URL.Query().Get("head")
+			fmt.Fprint(w, `[{"number":3,"html_url":"https://github.com/a/b/pull/3","head":{"ref":"feat"},"base":{"ref":"main"}}]`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		pr, err := newTestAdapter(t, srv, []string{"a/b"}).FindPullRequest(t.Context(), "fork:feat")
+		if err != nil || gotHead != "fork:feat" || pr.Number != "3" {
+			t.Errorf("pr = %+v, err = %v, query head = %q", pr, err, gotHead)
+		}
+	})
+
 	t.Run("an empty listing is ErrNoPullRequest", func(t *testing.T) {
 		t.Parallel()
 

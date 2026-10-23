@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	gogithub "github.com/google/go-github/v73/github"
 
@@ -14,18 +15,23 @@ import (
 var _ tracker.PullRequests = (*githubAdapter)(nil)
 
 // FindPullRequest lists the open pull requests whose head is owner:branch
-// and returns the first; GitHub allows one open pull request per head.
-func (a *githubAdapter) FindPullRequest(ctx context.Context, branch string) (tracker.PullRequest, error) {
+// (head as given when it names its owner, a fork's) and returns the first;
+// GitHub allows one open pull request per head.
+func (a *githubAdapter) FindPullRequest(ctx context.Context, head string) (tracker.PullRequest, error) {
 	owner, repo, err := a.ownerRepo()
 	if err != nil {
 		return tracker.PullRequest{}, err
 	}
+	qualified := head
+	if !strings.Contains(head, ":") {
+		qualified = owner + ":" + head
+	}
 
 	prs, _, err := a.client.PullRequests.List(ctx, owner, repo, &gogithub.PullRequestListOptions{
-		State: statusOpen, Head: owner + ":" + branch, ListOptions: gogithub.ListOptions{PerPage: 1},
+		State: statusOpen, Head: qualified, ListOptions: gogithub.ListOptions{PerPage: 1},
 	})
 	if err != nil {
-		return tracker.PullRequest{}, fmt.Errorf("github: list pull requests of %q: %w", branch, err)
+		return tracker.PullRequest{}, fmt.Errorf("github: list pull requests of %q: %w", qualified, err)
 	}
 	if len(prs) == 0 {
 		return tracker.PullRequest{}, tracker.ErrNoPullRequest

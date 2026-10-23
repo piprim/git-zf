@@ -508,6 +508,20 @@ func (c *Client) LocalBranchNames() ([]string, error) {
 	return names, nil
 }
 
+// RemoteURL returns the fetch URL of the configured remote, "" without one.
+func (c *Client) RemoteURL() (string, error) {
+	remote, err := c.Remote()
+	if err != nil || remote == "" {
+		return "", err
+	}
+	u, err := c.output(context.Background(), "remote", "get-url", remote)
+	if err != nil {
+		return "", fmt.Errorf("url of remote %s: %w", remote, err)
+	}
+
+	return u, nil
+}
+
 // RepoName returns a short identifier for this repository.
 // Resolution order:
 //

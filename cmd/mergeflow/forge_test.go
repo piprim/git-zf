@@ -85,6 +85,41 @@ func TestRun_Forge(t *testing.T) {
 		})
 	}
 
+	t.Run("from a fork: master is fetched from the upstream and pushed to the fork", func(t *testing.T) {
+		rig, stderr := newForgeRig(t)
+		upstream := t.TempDir()
+		if out, err := exec.CommandContext(t.Context(), "git", "init", "-q", "--bare", "-b", "master", upstream).CombinedOutput(); err != nil {
+			t.Fatalf("git init --bare: %v\n%s", err, out)
+		}
+		gitRun(t, rig.dir, "push", "-q", upstream, "feature:master") // the forge merged there; origin (the fork) did not move
+		ft := &fake.Tracker{PullRequests: []tracker.PullRequest{{Number: "7", Head: "fork:feature", Base: "master"}}}
+		p := &scriptedMergePrompter{Strategy: commit.MergeStrategyClassic, Confirm: true}
+
+		_, err := Run(t.Context(), rig.client, Params{
+			Source: "feature", Target: "master", PullRequest: &ForgeMerge{Forge: ft, Number: "7", Upstream: upstream},
+		}, p, plainPrefill)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		gitRun(t, rig.dir, "fetch", "-q", "origin")
+
+		t.Run("local master is the upstream's", func(t *testing.T) {
+			if got := rig.headSubject(t, "master"); got != "feat: feature work" {
+				t.Errorf("master head = %q", got)
+			}
+		})
+		t.Run("the fork's master is pushed", func(t *testing.T) {
+			if got := rig.headSubject(t, "origin/master"); got != "feat: feature work" {
+				t.Errorf("origin/master head = %q", got)
+			}
+		})
+		t.Run("no warning", func(t *testing.T) {
+			if strings.Contains(stderr.String(), "warning") {
+				t.Errorf("stderr = %q", stderr.String())
+			}
+		})
+	})
+
 	t.Run("the forge's refusal is the error and nothing changes locally", func(t *testing.T) {
 		rig, _ := newForgeRig(t)
 		ft := &fake.Tracker{

@@ -1305,3 +1305,27 @@ func TestMergeInProgress(t *testing.T) {
 		}
 	})
 }
+
+func TestFetchRef(t *testing.T) {
+	t.Parallel()
+
+	c, _, originDir := newDiskRepoWithOrigin(t)
+
+	t.Run("fetches one ref from a URL into FETCH_HEAD", func(t *testing.T) {
+		if err := c.FetchRef(t.Context(), originDir, "main"); err != nil {
+			t.Fatalf("FetchRef: %v", err)
+		}
+		if _, err := c.ResolveRef("FETCH_HEAD"); err != nil {
+			t.Errorf("FETCH_HEAD: %v", err)
+		}
+	})
+
+	t.Run("a dead URL is an error that does not latch the configured remote", func(t *testing.T) {
+		if err := c.FetchRef(t.Context(), t.TempDir(), "main"); err == nil {
+			t.Fatal("want an error")
+		}
+		if err := c.Fetch(t.Context()); err != nil {
+			t.Errorf("Fetch after a dead URL: %v", err)
+		}
+	})
+}

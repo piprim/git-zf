@@ -167,11 +167,14 @@ $ git zf branch merge          # merge a branch via TUI
 $ git zf branch prune          # record branches merged or deleted outside git-zf
 $ git zf branch close <name>   # record one branch as closed (abandoned)
 $ git zf branch prune-tracker  # reap branches whose tracker issue is closed
+$ git zf branch pr [branch]    # open a pull request on the forge (GitHub, Forgejo)
 ```
 
 **`branch new`** — the `issue start` flow with manual input pre-selected. Accepts `--variant=<label>` too.
 
 **`branch list`** — tracked branches with their status, yours and the ones other clones started. It does not contact the remote: it shows what the last `git fetch` brought. Flags: `--status in_progress|merged|closed|all`, `--stdout`, `--json`.
+
+**`branch pr`** — open a pull request for the branch (the current one by default) on the tracker's forge, GitHub or Forgejo: the form is prefilled with the issue's title, the parent branch as the base and `Closes #N` for a mirrored issue; the branch is pushed first when needed. `git zf commit` offers the same after pushing a feature branch, and `issue close` / `branch merge` merge through the forge a branch that has an open pull request. **From a fork**: configure the upstream repository as the tracker's project and push to your fork as usual; the pull request is opened on the upstream with `you:branch` as its head, the owner being read from the remote's URL. Closing it through the forge fetches the base from the upstream, fast-forwards it locally and pushes it to your fork.
 
 **`branch merge`** — pick a local or remote-only branch and merge it into the current branch with one of the [merge strategies](#merge-strategies), then offer to delete the source (local + remote) and propose a push. Issue branches are refused: use `git zf issue close` for those, so the review, tracker and store steps still run. A source branch checked out in another working tree is merged in place; when that tree is a linked worktree you are offered to remove it after the commit lands (the main checkout is never removed). A branch held by a stale worktree entry is refused with a `git worktree prune` hint.
 
@@ -440,7 +443,7 @@ id   = "owner/repo"                 # what the tracker calls it
 |-----|-------------|
 | `type` | `"redmine"`, `"github"`, `"forgejo"` or `"gitea"` (the last two share one adapter). |
 | `url` | Redmine: instance URL. GitHub: `https://api.github.com`, or `https://github.example.com/api/v3/` for Enterprise. Forgejo/Gitea: instance root, `/api/v1` is appended. |
-| `token` | Redmine API key; GitHub personal access token with `repo` scope; Forgejo/Gitea access token with the `issue` scope. |
+| `token` | Redmine API key; GitHub personal access token with the `repo` scope (fine-grained: Issues, Contents and Pull requests, read and write); Forgejo/Gitea access token with the `issue` scope, plus `repository` for pull requests. |
 | `projects` | Optional list of projects, one `[[issue-tracker.projects]]` table each. `id` is the tracker's name for the project (Redmine: a slug or numeric ID; GitHub/Forgejo/Gitea: `"owner/repo"`); `name` is a stable local name, so renaming the project in the tracker only means editing `id`. Every open issue of those projects is listed, whoever it is assigned to, on every tracker. Omitted = every open issue you can see across the tracker (GitHub: the issues involving you, assigned, created, mentioned or subscribed). In `issue list`, `m` keeps only the issues assigned to you. **Exactly one entry is required** to update issue status on GitHub/Forgejo/Gitea, whose issue endpoints are scoped to one repository. |
 | `mirror` | `true` mirrors the project's issues with the issues stored in the repository. Needs a tracker type and exactly one project. See `docs/issue-refs.md`. |
 

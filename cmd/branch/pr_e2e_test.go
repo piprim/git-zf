@@ -214,3 +214,38 @@ func TestRunPr_MirroredIssueClosesItsNumber(t *testing.T) {
 		}
 	})
 }
+
+// A clone of a fork: the remote's owner is not the project's, so the pull
+// request is opened on the project with the fork's owner in its head, and
+// found again by that head. The fetch URL names the fork on the forge; the
+// push URL stays the rig's origin so the push lands.
+func TestRunPr_FromAFork(t *testing.T) {
+	r, ft := newPrRig(t)
+	r.git(t, "remote", "set-url", "--push", "origin", r.originDir)
+	r.git(t, "remote", "set-url", "origin", "git@github.com:fork/sandbox.git")
+	r.rebuildClient(t)
+	r.cfg.IssueTracker = config.IssueTrackerConfig{
+		Type: "fake", URL: "https://github.com", Projects: []config.TrackerProject{{ID: "up/sandbox"}},
+	}
+	form := &scriptedPullRequestForm{Open: true}
+
+	err := runPr(t.Context(), r.prDeps(ft, form), "feat-x")
+
+	t.Run("opened with the fork's owner in the head", func(t *testing.T) {
+		if err != nil || len(ft.RecordedPullRequests) != 1 || ft.RecordedPullRequests[0].Head != "fork:feat-x" || ft.RecordedPullRequests[0].Base != "master" {
+			t.Errorf("err %v, opened %+v", err, ft.RecordedPullRequests)
+		}
+	})
+	t.Run("the message names the branch, not the head", func(t *testing.T) {
+		if out := r.stdout.String(); !strings.Contains(out, `for "feat-x" against "master"`) {
+			t.Errorf("stdout = %q", out)
+		}
+	})
+	t.Run("run again: the fork's pull request is found", func(t *testing.T) {
+		form := &scriptedPullRequestForm{Open: true}
+		err := runPr(t.Context(), r.prDeps(ft, form), "feat-x")
+		if err != nil || form.Calls != 0 || len(ft.RecordedPullRequests) != 1 {
+			t.Errorf("err %v, calls %d, opened %+v", err, form.Calls, ft.RecordedPullRequests)
+		}
+	})
+}

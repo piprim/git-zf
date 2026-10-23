@@ -179,9 +179,11 @@ var ErrNoPullRequest = errors.New("tracker: no open pull request")
 // PullRequests is the optional capability of a tracker that is also the forge
 // hosting the repository: GitHub and Forgejo. Discover it with PullRequestsOf.
 type PullRequests interface {
-	// FindPullRequest returns the open pull request whose head is branch.
-	FindPullRequest(ctx context.Context, branch string) (PullRequest, error)
-	// CreatePullRequest opens one and returns it with its number and URL.
+	// FindPullRequest returns the open pull request whose head is head: a
+	// branch of the repository, or "owner:branch" for a fork's.
+	FindPullRequest(ctx context.Context, head string) (PullRequest, error)
+	// CreatePullRequest opens one of head (a branch, or "owner:branch" from
+	// a fork) against base and returns it with its number and URL.
 	CreatePullRequest(ctx context.Context, head, base, title, body string) (PullRequest, error)
 	// MergePullRequest merges number with method, provided the pull request's
 	// head is still head (the commit hash the caller verified); the forge
