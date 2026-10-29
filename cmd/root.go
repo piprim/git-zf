@@ -46,8 +46,22 @@ func GetRootCmd() (*cobra.Command, error) {
 	}
 
 	rootCmd := &cobra.Command{
-		Use:  appConfig.ProgName,
-		Long: `Command line utility to standardize git commit messages, golang version.`,
+		Use:   appConfig.ProgName,
+		Short: "Git Zen workFlow: issue → branch → commit → review → close",
+		Long: `A TUI powered CLI that wraps a git-flow workflow (issue → branch → commit →
+review → close) with optional issue-tracker integration.
+
+Every command is interactive by default: it asks what it needs in a form.
+Passing a flag skips the matching prompt, and --help lists the flags of any
+command.
+
+Without a subcommand, git zf opens a menu of the workflow commands (commit,
+issue, branch, review, log) and runs the one you pick with its interactive
+defaults. git zf branch and git zf review do the same one level down; git zf
+issue opens the issue table. Esc or ctrl+c leaves the menu quietly. When stdin
+is not a terminal (a script, CI) the menu is skipped and this help is printed.
+The setup commands (init, install, uninstall, config, completion, version)
+are not in the menu.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmdutil.RunMenu(cmd, appConfig.ProgName+":", menuSubs(cmd), cmdutil.NewHuhMenuPrompter())
 		},

@@ -72,6 +72,7 @@ func (v Version) GetRootCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print version information and quit",
+		Long:  `Print the version, the commit and the build date of this binary.`,
 		Run: func(_ *cobra.Command, _ []string) {
 			fmt.Println(v.buildInfo())
 		},

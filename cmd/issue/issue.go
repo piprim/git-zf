@@ -21,6 +21,19 @@ func (i Issue) GetRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "issue",
 		Short: "Manage issues",
+		Long: `An issue is a piece of work with an identity: a ticket in the configured
+tracker (Redmine, GitHub, Forgejo/Gitea), or an issue stored in the
+repository itself under refs/zf/issues/ when there is no tracker. Repository
+issues travel with git zf issue sync, so a fresh clone sees the same backlog,
+descriptions and comments, with no account anywhere.
+
+From the moment an issue is started it has a branch, named after it:
+git zf issue start creates the branch, git zf commit pre-fills the commit
+form from it, and git zf issue close merges it into the base and offers to
+update the tracker. new, show, edit, comment and label work on repository
+issues.
+
+Without a subcommand the issue table opens, as git zf issue list does.`,
 		// No subcommand: the list, whose table starts, shows and edits
 		// an issue. The git zf menu runs this with the root command.
 		RunE: func(cmd *cobra.Command, _ []string) error {

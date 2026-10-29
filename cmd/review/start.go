@@ -13,7 +13,16 @@ func (r Review) getStartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "start",
 		Short: "Begin reviewing an issue (creates <IssueID>@review branch from the locked snapshot)",
-		Args:  cobra.NoArgs,
+		Long: `Run git fetch first, then pick an issue awaiting review. A branch named
+<IssueID>@review is created and checked out at the commit captured when the
+developer requested the review, and your identity is recorded on the review
+ref as the reviewer.
+
+Review the code there. You may commit fixes on the @review branch and push
+them: the developer incorporates them with git zf review sync, or git zf
+issue close does it at the end. When you are done, run git zf review approve
+or git zf review reject.`,
+		Args: cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewStartInteractive(ctx, deps, &huhReviewPrompter{})
 		}),

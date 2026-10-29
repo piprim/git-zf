@@ -1,9 +1,14 @@
-# Merge strategies — design notes
+---
+sidebar_position: 4
+title: Merge engine internals
+---
+
+# Merge engine internals
 
 `git zf issue close` and `git zf branch merge` share one merge engine
 (`cmd/mergeflow`). This document describes how each strategy works under the
 hood and what happens on failure. For day-to-day usage see the
-[README](../README.md#merge-strategies).
+[merge strategies](../reference/merge-strategies.md) page.
 
 | Strategy | Mechanism | History on base | Submodule-safe |
 |---|---|---|---|
@@ -21,7 +26,7 @@ Every strategy starts the same way:
 2. Checkout the feature branch (idempotent, no `post-checkout` hook fires when
    already there) and capture its tip SHA for rollback.
 3. `git fetch <remote>` to pick up the latest remote base. No-op when no remote
-   is configured (see remote auto-detection in the README); in that case
+   is configured (see [remote auto-detection](../reference/configuration.md#branch)); in that case
    `<remote>/<base>` below means the local `<base>` branch.
 4. `git merge-base --is-ancestor feature <remote>/<base>` — abort cleanly if the
    feature has no commits ahead of the base ("already integrated?"). This avoids

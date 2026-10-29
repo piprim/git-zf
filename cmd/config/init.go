@@ -19,7 +19,13 @@ func (c Config) getInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
 		Short: "Write a default config file to home or repo directory",
-		RunE:  c.initRunE,
+		Long: `Write the built-in default configuration to a file, to edit from there.
+
+Outside a repository, or when no home file exists yet, it goes to
+$HOME/.git-zf.toml. Otherwise a picker offers the home file or
+<repo>/.git/.git-zf.toml. An existing file is overwritten only after
+confirmation.`,
+		RunE: c.initRunE,
 	}
 }
 

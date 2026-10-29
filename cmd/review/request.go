@@ -16,7 +16,19 @@ func (r Review) getRequestCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "request",
 		Short: "Submit an issue branch for code review (locks the branch)",
-		Args:  cobra.NoArgs,
+		Long: `Pick an in-progress branch (the current one is pre-selected) and submit it
+for review. Its review ref becomes "in_review" and the branch is locked: the
+pre-push hook installed by git zf init rejects pushes to it until the
+reviewer decides (bypass: git push --no-verify).
+
+On a branch that was already reviewed, this starts the next round: the round
+counter goes up and the stale <IssueID>@review branch is removed. If that
+branch still carries reviewer commits not yet in yours, the request refuses to
+delete them and offers to merge them in first.
+
+The review record is pushed (--push / --no-push skip the proposal), and when
+the issue came from a tracker a status update is proposed.`,
+		Args: cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewRequestInteractive(ctx, deps, &huhReviewPrompter{})
 		}),

@@ -2,3 +2,8 @@ bin
 COMMIT_MSG
 git-bug.md
 wt/
+
+# documentation site
+website/node_modules/
+website/build/
+website/.docusaurus/

@@ -12,7 +12,10 @@ func (r Review) getListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all issues currently in review or approved",
-		RunE:  withDeps(r.appConfig, runReviewList),
+		Long: `Print every open review, "in_review" or "approved", with its round number.
+It reads refs/zf/reviews/* and so works on a fresh clone after a git fetch.
+A closed review stays in the repository but is not listed.`,
+		RunE: withDeps(r.appConfig, runReviewList),
 	}
 }
 

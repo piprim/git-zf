@@ -1,3 +1,7 @@
+---
+sidebar_position: 2
+---
+
 # Issue refs
 
 git-zf stores each issue in the repository as a chain of commits under

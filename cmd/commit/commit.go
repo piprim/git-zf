@@ -29,8 +29,22 @@ func New(appConfig *config.AppConfig) Commit {
 func (c Commit) GetRootCmd() *cobra.Command {
 	var opts tui.CommitOption
 
-	desc := "Open the " + c.appConfig.ProgName +
-		" TUI to compose a standardised commit message, then commit using go-git."
+	desc := `Compose a commit message in a form (type, scope, subject, body, footer)
+followed by an options page (stage all, amend, sign-off, hooks, push), then
+commit. Every option has a flag; if any commit flag is passed the options
+page is skipped and the flags are used directly.
+
+On an issue branch the form is pre-filled from the branch name: the type,
+the issue ID as the scope, and the footer from ref-format. Every field stays
+editable.
+
+On a feature branch whose review left reviewer commits on <IssueID>@review
+that are not yet in the branch, the command offers to merge them in before
+opening the form; declining aborts with a hint to run git zf review sync.
+--no-verify skips the guard, as it does the pre-commit hook.
+
+A push is proposed afterwards (--push / --no-push answer it), and after a
+push of a feature branch the forge may be offered a pull request.`
 	cmd := &cobra.Command{
 		Use:   "commit",
 		Short: "Record changes to the repository",

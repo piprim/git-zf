@@ -13,7 +13,17 @@ func (r Review) getApproveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "approve",
 		Short: "Approve a review — signals the branch is ready to close",
-		Args:  cobra.NoArgs,
+		Long: `Pick a review you started and approve it. Its status becomes "approved"
+and the developer can run git zf issue close, which incorporates any commit
+you left on <IssueID>@review before merging.
+
+With require-signed = true under [review] in the config, the approval is a
+signed commit, and git zf issue close refuses to merge without an approval
+that git verify-commit accepts and that covers the commit being merged.
+
+The review record is pushed (--push / --no-push skip the proposal), and when
+the issue came from a tracker a status update is proposed.`,
+		Args: cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewApproveInteractive(ctx, deps, &huhReviewPrompter{})
 		}),

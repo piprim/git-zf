@@ -16,7 +16,17 @@ func (r Review) getSyncCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "sync",
 		Short: "Bring a branch up to date: merge pending reviewer commits, then parent drift",
-		Args:  cobra.NoArgs,
+		Long: `Pick an in-progress branch (the current one is pre-selected) and bring it up
+to date in two steps.
+
+First, reviewer commits pending on <IssueID>@review are merged in. On a
+conflict the merge is left in progress for you to resolve, then git zf
+commit concludes it. A dirty working tree is refused for this step: git
+stash first.
+
+Then, for a sub-task branch only, the parent branch (<remote>/<parent>) is
+merged into it. A conflict there is aborted and reported.`,
+		Args: cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewSyncInteractive(ctx, deps, &huhReviewPrompter{})
 		}),

@@ -34,4 +34,16 @@ test:
 lint:
 	golangci-lint run ./...
 
-.PHONY: all install clean build test lint
+docs-gen:
+	go run ./internal/docgen -out website/docs/reference/commands
+
+docs-check:
+	go test ./internal/docgen/...
+
+docs: docs-gen
+	cd website && npm ci && npm run build
+
+docs-serve: docs-gen
+	cd website && npm start
+
+.PHONY: all install clean build test lint docs-gen docs-check docs docs-serve

@@ -17,7 +17,19 @@ func (r Review) getRejectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "reject",
 		Short: "Request changes on a review — unlocks the branch for the next iteration",
-		Args:  cobra.NoArgs,
+		Long: `Pick a review you started and request changes, with a reason (-m, or -F
+for a file). Its status becomes "changes_requested" and the branch is
+unlocked for the developer.
+
+An empty <IssueID>@review branch is deleted, locally and on the remote. One
+carrying your commits is kept for the developer to inspect (git log
+<feature>..<IssueID>@review); until git zf review sync merges them in, new
+commits on the feature branch are blocked by the pre-commit hook (bypass:
+--no-verify).
+
+The review record is pushed (--push / --no-push skip the proposal), and when
+the issue came from a tracker a status update is proposed.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			deps, err := buildReviewDeps(ctx, cmd, r.appConfig)

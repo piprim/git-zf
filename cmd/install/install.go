@@ -17,6 +17,12 @@ func Cmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install this tool to git-core as " + config.SubCommandName,
+		Long: `Copy this binary into git's exec path (git --exec-path), so that git
+knows it as "git zf". Run it with sudo when that directory is not writable
+by you; a Homebrew git on macOS does not need it.
+
+Check with git zf version. Then run git zf init once per repository to
+install the hooks. git zf uninstall removes the binary.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			appFilePath, err := exec.LookPath(os.Args[0])
 			if err != nil {

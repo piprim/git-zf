@@ -1,3 +1,7 @@
+---
+sidebar_position: 1
+---
+
 # Branch refs
 
 git-zf records the branches of an issue in the repository as a chain of commits
@@ -118,31 +122,3 @@ started it and wherever it exists, and touches no git branch.
 
 A close is not final. Checking the branch out and running `git zf issue track`
 puts it back in progress.
-
-## Upgrading from the SQLite store
-
-Before branch refs were chains, git-zf kept branches in `.git/git-zf.db` and
-wrote a JSON blob at `refs/zf/branches/<slug>`. Neither is migrated.
-
-- Upgrade every clone of a repository together. An older git-zf does not see a
-  chain, and its `issue start` force-pushes a blob over the one on the remote.
-  If that happens, a push says so and names the command that deletes the blob:
-  `git push <remote> --delete refs/zf/branches/<slug>`.
-- After the upgrade no branch is tracked. For each branch still in progress,
-  check it out and run `git zf issue track`. When the ref is still a blob, its
-  parent, tracker type and issue ID are carried over to the new chain. The
-  history of merged and closed branches is not.
-- `issue close` and `review sync` refuse a sub-task whose parent is still a
-  blob: track the parent's branch first.
-- Blobs you never track again are reported in one warning by every listing.
-  To drop the local ones:
-
-  ```
-  git for-each-ref --format='%(objecttype) %(refname)' refs/zf/branches |
-    awk '$1 == "blob" { print $2 }' | xargs -r -n1 git update-ref -d
-  ```
-
-- Re-run `git zf init`: it adds the new fetch refspec.
-- `.git/git-zf.db` is no longer read and can be deleted. The history of the
-  commit form (`ctrl+r`) starts empty; it now lives in
-  `.git/git-zf-history.jsonl`.

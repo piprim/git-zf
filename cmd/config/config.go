@@ -20,6 +20,15 @@ func (c Config) GetRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage git-zf configuration",
+		Long: `The configuration is a TOML file read from two places, the repository one
+taking precedence over the home one:
+
+  $HOME/.git-zf.toml            applied everywhere
+  <repo>/.git/.git-zf.toml      inside .git/, never committed, may hold a
+                                token
+
+Every key is optional: the built-in defaults apply where a file says
+nothing. init writes a default file, show prints the effective result.`,
 	}
 	cmd.AddCommand(c.getShowCmd(), c.getInitCmd())
 

@@ -42,6 +42,21 @@ func (b Branch) GetRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "branch",
 		Short: "Manage local branches",
+		Long: `A branch is where the work happens in git. It does not need an issue
+behind it: git zf branch new creates one with a typed ID that is looked up
+nowhere, and git zf branch merge merges a branch with no tracker step. If
+there is a ticket, go through git zf issue instead.
+
+list shows the tracked branches, yours and the ones other clones started.
+prune records what happened to in-progress branches outside git-zf, and
+prune-tracker reaps local branches whose tracker issue is closed. pr opens
+a pull request on the forge.
+
+branch close <name> does not merge: it records a branch as abandoned. The
+action that merges an issue branch and updates the tracker is git zf issue
+close.
+
+Without a subcommand a menu offers these actions.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmdutil.RunMenu(cmd, "Branch action:", subs, cmdutil.NewHuhMenuPrompter())
 		},
@@ -59,6 +74,12 @@ func (b Branch) listCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List branches",
+		Long: `List the tracked branches with their status: yours and the ones other
+clones started. It does not contact the remote: it shows what the last git
+fetch brought.
+
+--status filters on in_progress, merged, closed or all; --stdout prints the
+table without the TUI, --json prints the rows.`,
 	}
 
 	f := cmd.Flags()
@@ -162,7 +183,15 @@ func (b Branch) newCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "new",
 		Short: "Create a new branch (manual input)",
-		Long:  "Enter issue details manually, then a named branch is created and checked out.",
+		Long: `Create a branch from a form, with no issue behind it: the ID, the type and
+the title are typed, then a branch named <id>@<type>@<slug> is created and
+checked out, or a worktree is created for it. It never asks the tracker.
+
+A typed ID is used as is: an issue living where git-zf does not look. An
+empty ID files an issue in the repository and uses its ID. The branch is
+recorded in the repository and pushed, as git zf issue start does. If there
+is a ticket, use git zf issue start instead. --variant creates a parallel
+branch on an issue that already has one.`,
 	}
 
 	cmd.Flags().String("variant", "",

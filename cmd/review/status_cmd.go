@@ -14,7 +14,10 @@ func (r Review) getStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show the full review history for an issue",
-		Args:  cobra.NoArgs,
+		Long: `Pick an issue and print its review round by round: status, reviewer,
+timestamps, and whether the reviewer pushed commits. It is read from the
+review chain, so it is the same on every clone.`,
+		Args: cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewStatusInteractive(ctx, deps, &huhReviewPrompter{})
 		}),

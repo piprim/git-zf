@@ -12,7 +12,9 @@ func (c Config) getShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show",
 		Short: "Show active config file path and effective configuration",
-		RunE:  c.showRunE,
+		Long: `Print the path of the configuration files in use and the effective
+configuration as JSON, defaults included. The tracker token is masked.`,
+		RunE: c.showRunE,
 	}
 }
 

@@ -1,3 +1,7 @@
+---
+sidebar_position: 3
+---
+
 # Review refs
 
 git-zf stores the review of an issue in the repository as a chain of commits
@@ -99,9 +103,3 @@ reports), `signed, not verified` or `unsigned`. Trust is git's own: the GPG
 keyring, or `gpg.ssh.allowedSignersFile` for SSH signatures. git-zf does not
 check who the signer is. With GPG, any key in the keyring verifies unless
 `gpg.minTrustLevel` is raised.
-
-## Reviews written by an older git-zf
-
-Before this format a review was a JSON blob at the same ref name. Such a ref is
-not migrated. `git zf review request` replaces it; `git zf issue close` refuses
-to merge while it exists and prints the command to delete it.

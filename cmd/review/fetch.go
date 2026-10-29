@@ -12,7 +12,12 @@ func (r Review) getFetchCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "fetch",
 		Short: "Sync review refs with the remote: fetch, merge, and push the ones it lacks",
-		RunE:  withDeps(r.appConfig, runReviewFetch),
+		Long: `Fetch the review chains from the remote, merge them with the local ones,
+and push the ones the remote lacks. Nothing is pruned locally.
+
+The interactive review commands sync on their own; run this before scripting
+around review state.`,
+		RunE: withDeps(r.appConfig, runReviewFetch),
 	}
 }
 

@@ -136,7 +136,9 @@ record the branch as merged, update the remote tracker, then optionally delete t
 With <id>, close an issue stored in the repository without merging anything: for
 a duplicate or an issue that will not be worked on. <id> is the full ID or a
 unique prefix of at least 4 characters. It is refused while a branch of the
-issue is in progress, and it takes none of the flags below.`,
+issue is in progress: merge it with git zf issue close, or abandon it with
+git zf branch close <branch-name>, then close the issue. With <id> none of
+the flags below apply.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: i.closeRunE,
 	}
