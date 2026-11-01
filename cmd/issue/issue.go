@@ -42,7 +42,7 @@ Without a subcommand the issue table opens, as git zf issue list does.`,
 	}
 
 	cmd.AddCommand(
-		i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(),
+		i.getStartCmd(), i.getIssueListCmd(), i.getCloseCmd(), i.getAbandonCmd(),
 		i.getNewCmd(), i.getShowCmd(), i.getEditCmd(), i.getCommentCmd(), i.getLabelCmd(), i.getSyncCmd(),
 		review.TrackCmd(i.appConfig), // CLI-only here; the review menu offers it
 	)

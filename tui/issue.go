@@ -160,12 +160,13 @@ type IssueActions struct {
 type IssuePick int
 
 const (
-	IssuePickNone  IssuePick = iota // q or ctrl+c: nothing picked
-	IssuePickRow                    // s or enter: the slug is the row's issue
-	IssuePickNew                    // n: a new issue
-	IssuePickClose                  // c: close the row's issue (list mode)
-	IssuePickLabel                  // l: label the row's issue (list mode)
-	IssuePickSync                   // r: sync the issues (list mode)
+	IssuePickNone    IssuePick = iota // q or ctrl+c: nothing picked
+	IssuePickRow                      // s or enter: the slug is the row's issue
+	IssuePickNew                      // n: a new issue
+	IssuePickClose                    // c: close the row's issue by merging its branch (list mode)
+	IssuePickAbandon                  // a twice: abandon the row's issue (list mode)
+	IssuePickLabel                    // l: label the row's issue (list mode)
+	IssuePickSync                     // r: sync the issues (list mode)
 )
 
 // PickedIssue reports how the table was quit and, for IssuePickRow, the
@@ -181,8 +182,9 @@ func PickedIssue(m tea.Model) (IssuePick, string) {
 
 // IssueTableModel is the issue table. In list mode enter opens the row's
 // issue in a dialog that replaces the table, e opens its edit form (esc
-// closes either), and s, c, l, n and r quit with the action picked (start,
-// close or label the row, a new issue, a sync: see PickedIssue); in pick
+// closes either), and s, c, a, l, n and r quit with the action picked (start,
+// close by merging, abandon or label the row, a new issue, a sync: see
+// PickedIssue); in pick
 // mode (actions.Pick) enter and s pick, n asks for a new issue.
 func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueActions) (tea.Model, error) {
 	projects := issue.UniqueProjects(rows)
@@ -349,9 +351,9 @@ type issueTableModel struct {
 	editSlug, editTitle, editDescription string
 	// notice is the line under the table until the next key.
 	notice string
-	// armClose is the slug a first c armed: a second c closes it, any other
-	// key disarms. A close has no undo and no reopen command.
-	armClose string
+	// armAbandon is the slug a first a armed: a second a abandons it, any
+	// other key disarms. An abandon has no undo and no reopen command.
+	armAbandon string
 	// pick and pickedSlug are how the table was quit: see PickedIssue.
 	pick       IssuePick
 	pickedSlug string
@@ -377,8 +379,8 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		m.notice = ""
-		if key.String() != "c" {
-			m.armClose = ""
+		if key.String() != "a" {
+			m.armAbandon = ""
 		}
 		if m.picking {
 			return m.updatePicking(key)
@@ -594,17 +596,23 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 
 		return m.pickRow(IssuePickLabel)
 	case "c":
-		c := m.table.Cursor()
-		if m.actions.Pick || c < 0 || c >= len(m.visible) {
-			return m, nil, true
-		}
-		if slug := m.visible[c].IssueSlug; m.armClose != slug {
-			m.armClose, m.notice = slug, "c again closes "+slug+" (no undo)"
-
+		if m.actions.Pick {
 			return m, nil, true
 		}
 
 		return m.pickRow(IssuePickClose)
+	case "a":
+		c := m.table.Cursor()
+		if m.actions.Pick || c < 0 || c >= len(m.visible) {
+			return m, nil, true
+		}
+		if slug := m.visible[c].IssueSlug; m.armAbandon != slug {
+			m.armAbandon, m.notice = slug, "a again abandons "+slug+" (no undo)"
+
+			return m, nil, true
+		}
+
+		return m.pickRow(IssuePickAbandon)
 	case "r":
 		if m.actions.Pick {
 			return m, nil, true
@@ -738,14 +746,14 @@ func (m *issueTableModel) filterHint() string {
 	return keys + " · m: mine · /: filter"
 }
 
-// hint is the key line under the filters, for the mode.
+// hint is the key line under the filters, for the mode. The list line names
+// every action and fits 90 columns without q, which every table quits with.
 func (m *issueTableModel) hint() string {
-	keys := "enter: show · e: edit · s: start · n: new · c: close · l: label · r: sync"
 	if m.actions.Pick {
-		keys = "enter: pick"
+		return "enter: pick · q: quit"
 	}
 
-	return keys + " · q: quit"
+	return "enter: show · e: edit · s: start · n: new · c: close · a: abandon · l: label · r: sync"
 }
 
 // BranchPicker presents a list of branches under title (close and the review

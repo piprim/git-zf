@@ -32,6 +32,10 @@ To exercise just the close-flow tests:
 
     mise exec -- go test ./cmd/issue/... -run "^TestClose_" -v
 
+`issue close <id>` filters the candidates by the issue (`TestClose_ByID`,
+`TestCloseCmd_ByID`); `issue abandon [<id>]` closes a repository issue without
+a merge (`TestRunAbandon`, `TestAbandonCmd`).
+
 When adding a new merge strategy or changing the merge/record/tracker
 sequencing, add a corresponding E2E test alongside the existing happy-path
 and failure-mode tests.
@@ -106,12 +110,12 @@ levels, all on real on-disk repos:
 - `issue/repo_test.go` — the glue (`Create`, `Append`, `Load`, `Resolve`,
   `Sync`), including two clones diverging and merging.
 - `cmd/issue/record_e2e_test.go`, `record_ops_e2e_test.go` — the `new`, `show`,
-  `edit`, `comment`, `label`, `sync` and `close <id>` commands, driven by a
+  `edit`, `comment`, `label`, `sync` and `abandon [<id>]` commands, driven by a
   `scriptedRecordPrompter` on a `recordRig` (`newRecordRig(t, user, origin)`;
   pass `newBareOrigin(t)` to two rigs to get two clones of one remote).
 
     mise exec -- go test ./issue/... ./git/... -run "TestFold|TestIssueRef_|TestPushFetchSync" -v
-    mise exec -- go test ./cmd/issue/... -run "^TestRun(New|Show|Edit|Comment|Label|Sync|CloseByID)" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestRun(New|Show|Edit|Comment|Label|Sync|Abandon)|^TestAbandonCmd" -v
 
 The start, close and list integrations live next to their flows:
 `start_record_e2e_test.go`, `close_record_e2e_test.go`, `list_record_test.go`.
@@ -278,7 +282,8 @@ To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`),
 `cmd/branch/branch.go`, and extend the matching test. `git zf issue` has no
 menu: it runs `issue list` (`TestIssueRootCmd_ListsByDefault`), whose table
 prints to stdout when stdin is not a terminal. The table's keys `s`, `n`,
-`c` (pressed twice: a close has no undo), `l` and `r` quit it with a
+`c` (the merge flow of `issue close <id>`), `a` (pressed twice: an abandon
+has no undo), `l` and `r` quit it with a
 `tui.IssuePick` (`TestIssueTable_ActionKeys`);
 `listAction` (`cmd/issue/list.go`, `TestListAction`) runs the command behind
 the key with the terminal free and the list loop reopens the table. To add a
@@ -364,7 +369,7 @@ Config file: `.git-zf.toml` in the repository's git dir (`<repo>/.git/.git-zf.to
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **git-zf** (5495 symbols, 24434 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **git-zf** (5885 symbols, 25018 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

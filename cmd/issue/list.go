@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
+	"github.com/piprim/git-zf/cmd/pushflow"
 	"github.com/piprim/git-zf/git"
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
@@ -41,6 +42,10 @@ type issueListInfra struct {
 	mirror *issuepkg.Mirror
 	// startFlags are the flags of the start behind `s`; Tracker is forced.
 	startFlags issuepkg.IssueStartFlags
+	// close is the merge flow behind `c`, anchored on the main tree as
+	// `issue close` is (a squash checks the base out there); listAction
+	// fills issueID. A nil pushConfirm (the tests) disables the push step.
+	close closeDeps
 }
 
 func (ir Issue) getIssueListCmd() *cobra.Command {
@@ -58,10 +63,12 @@ Created. Labels follow the title in brackets. "∅" means no branch started
 yet; "N.A." means the row has neither a tracker nor a repository issue.
 
 Keys: enter shows the issue, e edits it, s starts it, n files a new one,
-c twice closes the one under the cursor (as git zf issue close <id>: the
-first press asks for the second, there is no undo), l edits its labels,
-r syncs, / filters the rows, tab cycles open/closed/all, p picks the
-project, m keeps the issues assigned to you, q quits.
+c closes the one under the cursor by merging its branch (as git zf issue
+close <id>; a row without a branch is told so), a twice abandons it (as
+git zf issue abandon <id>: the first press asks for the second, there is
+no undo), l edits its labels, r syncs, / filters the rows, tab cycles
+open/closed/all, p picks the project, m keeps the issues assigned to you,
+q quits.
 
 --stdout prints the table without the TUI, --json prints the rows.`,
 	}
@@ -98,6 +105,10 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 	if err != nil {
 		return fmt.Errorf("open repository: %w", err)
 	}
+	mainClient, invokedFrom, err := cmdutil.NewMainClientForCmd(cmd, ir.appConfig)
+	if err != nil {
+		return fmt.Errorf("open main working tree: %w", err)
+	}
 
 	infra := issueListInfra{
 		tracker:    t,
@@ -105,6 +116,10 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		client:     client,
 		mirror:     issueflow.MirrorOf(ir.appConfig, t),
 		startFlags: flags.start,
+		close: closeDeps{
+			client: mainClient, cfg: ir.appConfig, tracker: t, invokedFrom: invokedFrom,
+			invokedBranch: invokedBranchFor(ctx, mainClient, invokedFrom), pushConfirm: pushflow.NewHuhConfirm(),
+		},
 	}
 
 	for {
@@ -112,7 +127,8 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		if err != nil {
 			return err
 		}
-		reopen, err := ir.listAction(ctx, infra, huhRecordPrompter{}, issueflow.NewHuhStartPrompter(), pick, row)
+		reopen, err := ir.listAction(ctx, infra, huhRecordPrompter{}, issueflow.NewHuhStartPrompter(),
+			newHuhPrompter(mainClient, ir.appConfig), pick, row)
 		if !reopen {
 			return err
 		}
@@ -127,7 +143,7 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 // reopens: a start leaves the operator on the new branch, and a form left
 // with esc is no error.
 func (ir Issue) listAction(
-	ctx context.Context, infra issueListInfra, p recordPrompter, sp issueflow.StartPrompter,
+	ctx context.Context, infra issueListInfra, p recordPrompter, sp issueflow.StartPrompter, cp ClosePrompter,
 	pick tui.IssuePick, row *issuepkg.Row,
 ) (reopen bool, err error) {
 	switch pick {
@@ -140,7 +156,13 @@ func (ir Issue) listAction(
 	case tui.IssuePickNew:
 		err = runNew(ctx, infra.client, ir.appConfig, issuepkg.NewIssue{}, p, infra.mirror)
 	case tui.IssuePickClose:
-		err = runCloseByID(ctx, infra.client, row.IssueSlug, infra.mirror)
+		// The merge flow of `issue close <id>`: the row's issue names the
+		// branch, the flow confirms on its own.
+		deps := infra.close
+		deps.issueID = row.IssueSlug
+		err = runClose(ctx, deps, cp)
+	case tui.IssuePickAbandon:
+		err = runAbandon(ctx, infra.client, p, []string{row.IssueSlug}, infra.mirror)
 	case tui.IssuePickLabel:
 		err = runLabel(ctx, infra.client, p, []string{row.IssueSlug}, infra.mirror)
 	case tui.IssuePickSync:

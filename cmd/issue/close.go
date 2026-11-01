@@ -50,6 +50,10 @@ type closeDeps struct {
 	// closeDeps directly, which disables the push step there.
 	push, noPush bool
 	pushConfirm  pushflow.ConfirmFunc
+
+	// issueID is the <id> argument ("" without one): the candidates are then
+	// the in-progress branches of that issue alone.
+	issueID string
 }
 
 // buildCloseDeps constructs the production closeDeps from a cobra command.
@@ -129,16 +133,24 @@ var ErrApprovalNotSigned = errors.New("no verified approval covers the branch")
 func (i Issue) getCloseCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "close [<id>]",
-		Short: "Close an issue (merge branch, record it, update the tracker)",
-		Long: `Pick an in-progress branch, merge it into the base branch (rebase, squash, or classic),
-record the branch as merged, update the remote tracker, then optionally delete the local branch.
+		Short: "Close an issue by merging its branch",
+		Long: `Pick an in-progress branch (the current one is pre-selected), merge it into
+the base branch (rebase, squash, or classic), record the branch as merged,
+update the remote tracker, then optionally delete the local branch.
 
-With <id>, close an issue stored in the repository without merging anything: for
-a duplicate or an issue that will not be worked on. <id> is the full ID or a
-unique prefix of at least 4 characters. It is refused while a branch of the
-issue is in progress: merge it with git zf issue close, or abandon it with
-git zf branch close <branch-name>, then close the issue. With <id> none of
-the flags below apply.`,
+With <id>, the branch of that issue is the one merged. <id> is resolved as
+git zf issue start <id> resolves it: the full ID of a repository issue, a
+unique prefix of at least 4 characters, or the number of a tracker issue. One
+branch in progress is picked without the picker; several (variants) are the
+only ones the picker offers. An issue with no branch in progress is told so:
+
+    Issue <id> has no branch in progress. To close it without a merge: git zf issue abandon <id>
+
+An ID that is neither an issue nor a branch is an error.
+
+Closing always merges. For a duplicate or an issue that will not be worked
+on, git zf issue abandon <id> closes it without a merge. --base, --push and
+--no-push apply with or without <id>.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: i.closeRunE,
 	}
@@ -154,10 +166,6 @@ the flags below apply.`,
 func (i Issue) closeRunE(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	if len(args) > 0 {
-		return i.closeByIDRunE(cmd, args[0])
-	}
-
 	deps, err := buildCloseDeps(ctx, cmd, i.appConfig)
 	if err != nil {
 		return err
@@ -167,25 +175,11 @@ func (i Issue) closeRunE(cmd *cobra.Command, args []string) error {
 	deps.baseOverride = cmdutil.StringFlag(cmd, "base")
 	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
 	deps.pushConfirm = pushflow.NewHuhConfirm()
+	if len(args) > 0 {
+		deps.issueID = args[0]
+	}
 
 	return runClose(ctx, deps, newHuhPrompter(deps.client, i.appConfig))
-}
-
-// closeByIDRunE runs `issue close <id>`. The merge flags mean nothing there:
-// passing one is refused instead of being silently ignored.
-func (i Issue) closeByIDRunE(cmd *cobra.Command, id string) error {
-	for _, name := range []string{"base", "push", "no-push"} {
-		if cmd.Flags().Changed(name) {
-			return fmt.Errorf("--%s applies to a merge: it cannot be combined with an issue ID", name)
-		}
-	}
-
-	client, err := cmdutil.NewClientForCmd(cmd, i.appConfig)
-	if err != nil {
-		return fmt.Errorf("open repository: %w", err)
-	}
-
-	return runCloseByID(cmd.Context(), client, id, openMirror(i.appConfig, client.IO().Err))
 }
 
 // runClose runs the full merge → record → tracker → delete-branch pipeline
@@ -199,7 +193,7 @@ func (i Issue) closeByIDRunE(cmd *cobra.Command, id string) error {
 //
 // Unexported because closeDeps is unexported (no cross-package caller).
 func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
-	picked, err := getPickedBranch(ctx, deps.client, deps.invokedBranch, prompter)
+	picked, err := getPickedBranch(ctx, deps.client, deps.invokedBranch, deps.issueID, prompter)
 	if err != nil {
 		return err
 	}
@@ -682,7 +676,7 @@ func reviewPreflight(
 // would name the wrong branch when the user is inside a linked worktree.
 func getPickedBranch(
 	ctx context.Context,
-	client *git.Client, invokedBranch string, prompter ClosePrompter) (*branch.Row, error) {
+	client *git.Client, invokedBranch, issueID string, prompter ClosePrompter) (*branch.Row, error) {
 	// A branch closed or started in a sibling clone is only on the remote's
 	// chains until they are fetched (best-effort).
 	if err := branch.Fetch(ctx, client); err != nil {
@@ -692,6 +686,32 @@ func getPickedBranch(
 	branches, err := issueflow.CloseCandidates(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("list close candidates: %w", err)
+	}
+
+	if issueID != "" {
+		// The user named the issue: its branches are the only candidates, and
+		// one needs no picker.
+		issueflow.FetchIssues(ctx, client)
+		slugs, known, err := issueSlugsOf(ctx, client, issueID)
+		if err != nil {
+			return nil, err
+		}
+		branches = slices.DeleteFunc(branches, func(r branch.Row) bool { return !slices.Contains(slugs, r.IssueSlug) })
+		switch len(branches) {
+		case 0:
+			if !known {
+				// Neither an issue nor a branch chain carries the ID: a typo or
+				// a stale number, not an issue waiting for a branch.
+				return nil, fmt.Errorf("no issue or in-progress branch matches %q", issueID)
+			}
+			fmt.Fprintf(client.IO().Out, noBranchHint, issueID, issueID)
+
+			return nil, nil
+		case 1:
+			return &branches[0], nil
+		}
+
+		return prompter.PickBranch(ctx, branches, invokedBranch) //nolint:wrapcheck // prompter error already wrapped
 	}
 
 	if len(branches) == 0 {
@@ -730,6 +750,27 @@ func getPickedBranch(
 	}
 
 	return picked, nil
+}
+
+// noBranchHint is printed by `issue close <id>` when the issue has no branch
+// in progress: closing always merges, abandon is the way out.
+const noBranchHint = "Issue %s has no branch in progress. To close it without a merge: git zf issue abandon %s\n"
+
+// issueSlugsOf returns the chain slugs a branch of id may sit under: the
+// display ID and the short ID of the repository issue id resolves to (a
+// branch started before the export sits under the short hash), or id itself
+// when the repository has no issue for it (a tracker issue with the mirror
+// off, a bare slug). known reports whether an issue was found.
+func issueSlugsOf(ctx context.Context, client *git.Client, id string) (slugs []string, known bool, err error) {
+	rec, err := issuepkg.Resolve(ctx, client, id)
+	if errors.Is(err, git.ErrIssueNotFound) {
+		return []string{id}, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve issue %s: %w", id, err)
+	}
+
+	return slices.Compact([]string{rec.DisplayID(), rec.ShortID()}), true, nil
 }
 
 // updateClosedStatus records the branch as merged on its chain and, when a

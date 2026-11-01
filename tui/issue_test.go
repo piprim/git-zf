@@ -747,7 +747,7 @@ func TestIssueTable_ActionKeys(t *testing.T) {
 	for key, want := range map[rune]struct {
 		pick IssuePick
 		slug string
-	}{'n': {IssuePickNew, ""}, 'l': {IssuePickLabel, "B"}, 'r': {IssuePickSync, ""}} {
+	}{'n': {IssuePickNew, ""}, 'c': {IssuePickClose, "B"}, 'l': {IssuePickLabel, "B"}, 'r': {IssuePickSync, ""}} {
 		t.Run(string(key)+" in list mode quits with its action", func(t *testing.T) {
 			m := newTable(t, IssueActions{Start: true})
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -759,30 +759,30 @@ func TestIssueTable_ActionKeys(t *testing.T) {
 		})
 	}
 
-	t.Run("c arms with a notice, a second c closes the row", func(t *testing.T) {
+	t.Run("a arms with a notice, a second a abandons the row", func(t *testing.T) {
 		m := newTable(t, IssueActions{Start: true})
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		m, cmd := m.Update(runeKey('c'))
-		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "c again closes B") {
-			t.Fatalf("first c: quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
+		m, cmd := m.Update(runeKey('a'))
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "a again abandons B (no undo)") {
+			t.Fatalf("first a: quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
 		}
-		m, cmd = m.Update(runeKey('c'))
-		if pick, slug := PickedIssue(m); !quits(cmd) || pick != IssuePickClose || slug != "B" {
-			t.Errorf("second c: quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
+		m, cmd = m.Update(runeKey('a'))
+		if pick, slug := PickedIssue(m); !quits(cmd) || pick != IssuePickAbandon || slug != "B" {
+			t.Errorf("second a: quits = %v, pick = %v, slug = %q", quits(cmd), pick, slug)
 		}
 	})
 
-	t.Run("any other key between two c disarms the close", func(t *testing.T) {
+	t.Run("any other key between two a disarms the abandon", func(t *testing.T) {
 		m := newTable(t, IssueActions{Start: true})
-		m, _ = m.Update(runeKey('c'))
+		m, _ = m.Update(runeKey('a'))
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		m, cmd := m.Update(runeKey('c'))
-		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "c again closes B") {
+		m, cmd := m.Update(runeKey('a'))
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "a again abandons B") {
 			t.Errorf("quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
 		}
 	})
 
-	for _, key := range []rune{'c', 'l', 'r'} {
+	for _, key := range []rune{'c', 'a', 'l', 'r'} {
 		t.Run(string(key)+" in pick mode does nothing", func(t *testing.T) {
 			m := newTable(t, IssueActions{Pick: true, Start: true})
 			m, cmd := m.Update(runeKey(key))
@@ -793,7 +793,7 @@ func TestIssueTable_ActionKeys(t *testing.T) {
 	}
 
 	t.Run("the list hint names the action keys", func(t *testing.T) {
-		if v := newTable(t, IssueActions{Start: true}).View(); !strings.Contains(v, "n: new · c: close · l: label · r: sync") {
+		if v := newTable(t, IssueActions{Start: true}).View(); !strings.Contains(v, "n: new · c: close · a: abandon · l: label · r: sync") {
 			t.Errorf("hint missing in %q", v)
 		}
 	})

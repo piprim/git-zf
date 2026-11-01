@@ -49,7 +49,8 @@ repository issue.
 | `e` | edits its title and description in place |
 | `s` | starts the issue under the cursor |
 | `n` | files a new issue |
-| `c` `c` | closes the issue under the cursor, as `issue close <id>` does |
+| `c` | merges the branch of the issue under the cursor, as `issue close <id>` does ([close an issue](close-an-issue.md)) |
+| `a` `a` | abandons the issue under the cursor, as `issue abandon <id>` does |
 | `l` | edits its labels |
 | `r` | syncs the issues |
 | `/` | filters the rows, any column, case-insensitive |
@@ -62,7 +63,7 @@ Each action runs once the table has exited and reopens it afterwards; a
 start leaves you on the new branch.
 
 :::warning
-`c` closes an issue without merging anything. The first press asks for the
+`a` closes an issue without merging anything. The first press asks for the
 second; there is no undo.
 :::
 

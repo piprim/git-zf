@@ -42,7 +42,8 @@ git zf issue [flags]
 ### SEE ALSO
 
 * [git zf](git_zf.md)	 - Git Zen workFlow: issue → branch → commit → review → close
-* [git zf issue close](git_zf_issue_close.md)	 - Close an issue (merge branch, record it, update the tracker)
+* [git zf issue abandon](git_zf_issue_abandon.md)	 - Close an issue without merging anything
+* [git zf issue close](git_zf_issue_close.md)	 - Close an issue by merging its branch
 * [git zf issue comment](git_zf_issue_comment.md)	 - Comment on an issue stored in the repository
 * [git zf issue edit](git_zf_issue_edit.md)	 - Edit the title and description of an issue stored in the repository
 * [git zf issue label](git_zf_issue_label.md)	 - Add or remove labels on an issue stored in the repository

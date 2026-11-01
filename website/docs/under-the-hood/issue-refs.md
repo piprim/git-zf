@@ -100,7 +100,7 @@ issues of the repository are one set:
 - every open repo-born issue is created in the tracker;
 - title, description, labels, comments and open/closed travel both ways.
 
-`git zf issue list`, `issue new`, `issue close <id>`, `issue close` (merge)
+`git zf issue list`, `issue new`, `issue abandon <id>`, `issue close` (merge)
 and `issue sync` reconcile the whole project. `edit`, `comment` and `label`
 sync the one issue they changed. `show` only reads the refs.
 
@@ -139,7 +139,7 @@ A mirrored issue is shown, and names its branches, by its tracker number,
 whether it was imported or exported: `issue new` with the mirror on announces
 `Created issue 57: …`. An unlinked issue is shown by its short hash. A branch
 started before the export keeps its slug: `issue list` shows its row as
-`a1b2c3d (#57)`, and `issue close 57` refuses while it is in progress. `issue
+`a1b2c3d (#57)`, and `issue abandon 57` refuses while it is in progress. `issue
 show 57` finds either. A commit on a branch of an exported issue refers to the
 tracker number, whatever the branch is named after: `Refs #57` while the work
 goes on, `Closes #57` on the merge commit.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
+	commitpkg "github.com/piprim/git-zf/commit"
 	"github.com/piprim/git-zf/config"
 	issuepkg "github.com/piprim/git-zf/issue"
 )
@@ -392,7 +393,7 @@ func TestRunEdit_Pushes(t *testing.T) {
 	})
 }
 
-func TestRunCloseByID(t *testing.T) {
+func TestRunAbandon(t *testing.T) {
 	t.Parallel()
 
 	origin := newBareOrigin(t)
@@ -423,13 +424,13 @@ func TestRunCloseByID(t *testing.T) {
 	dup := create(t, "Duplicate")
 
 	t.Run("an issue with no branch is closed and pushed", func(t *testing.T) {
-		if err := runCloseByID(ctx, rig.client, dup.ShortID(), nil); err != nil {
-			t.Fatalf("runCloseByID: %v", err)
+		if err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{}, []string{dup.ShortID()}, nil); err != nil {
+			t.Fatalf("runAbandon: %v", err)
 		}
 		if got := state(t, dup.ID); got != issuepkg.StateClosed {
 			t.Errorf("State = %q, want %q", got, issuepkg.StateClosed)
 		}
-		if want := "Closed issue " + dup.ShortID(); !strings.Contains(rig.stdout.String(), want) {
+		if want := "Abandoned issue " + dup.ShortID(); !strings.Contains(rig.stdout.String(), want) {
 			t.Errorf("stdout = %q, want %q in it", rig.stdout.String(), want)
 		}
 		ref := "refs/zf/issues/" + dup.ID
@@ -441,8 +442,8 @@ func TestRunCloseByID(t *testing.T) {
 	t.Run("an already closed issue writes no op", func(t *testing.T) {
 		ref := "refs/zf/issues/" + dup.ID
 		before := gitOutput(t, rig.dir, "rev-parse", ref)
-		if err := runCloseByID(ctx, rig.client, dup.ID, nil); err != nil {
-			t.Fatalf("runCloseByID: %v", err)
+		if err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{}, []string{dup.ID}, nil); err != nil {
+			t.Fatalf("runAbandon: %v", err)
 		}
 		if after := gitOutput(t, rig.dir, "rev-parse", ref); after != before {
 			t.Errorf("chain moved from %s to %s", before, after)
@@ -457,8 +458,9 @@ func TestRunCloseByID(t *testing.T) {
 		name := wip.ShortID() + "@feat@in-progress"
 		branchtest.Seed(t, rig.client, branch.Op{Branch: name, Title: wip.Title, IssueID: wip.ID}, branch.StatusInProgress)
 
-		err := runCloseByID(ctx, rig.client, wip.ID, nil)
-		if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "branch close") {
+		err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{}, []string{wip.ID}, nil)
+		if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "branch close") ||
+			!strings.Contains(err.Error(), "git zf issue close "+wip.ShortID()) {
 			t.Fatalf("err = %v", err)
 		}
 		if got := state(t, wip.ID); got != issuepkg.StateOpen {
@@ -475,7 +477,7 @@ func TestRunCloseByID(t *testing.T) {
 			t.Fatalf("Append: %v", err)
 		}
 
-		err := runCloseByID(ctx, rig.client, "11", nil)
+		err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{}, []string{"11"}, nil)
 		if err == nil || !strings.Contains(err.Error(), name) {
 			t.Fatalf("err = %v", err)
 		}
@@ -489,8 +491,8 @@ func TestRunCloseByID(t *testing.T) {
 		name := dropped.ShortID() + "@feat@abandoned"
 		branchtest.Seed(t, rig.client, branch.Op{Branch: name, Title: dropped.Title, IssueID: dropped.ID}, branch.StatusClosed)
 
-		if err := runCloseByID(ctx, rig.client, dropped.ID, nil); err != nil {
-			t.Fatalf("runCloseByID: %v", err)
+		if err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{}, []string{dropped.ID}, nil); err != nil {
+			t.Fatalf("runAbandon: %v", err)
 		}
 		if got := state(t, dropped.ID); got != issuepkg.StateClosed {
 			t.Errorf("State = %q, want %q", got, issuepkg.StateClosed)
@@ -498,15 +500,39 @@ func TestRunCloseByID(t *testing.T) {
 	})
 
 	t.Run("an unknown ID is an error", func(t *testing.T) {
-		if err := runCloseByID(ctx, rig.client, "ffffffff", nil); err == nil {
+		if err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{}, []string{"ffffffff"}, nil); err == nil {
 			t.Fatal("expected an error, got nil")
+		}
+	})
+
+	t.Run("without an ID the picker is offered and its pick is abandoned", func(t *testing.T) {
+		picked := create(t, "Picked")
+		p := &scriptedRecordPrompter{PickID: picked.ID}
+		if err := runAbandon(ctx, rig.client, p, nil, nil); err != nil {
+			t.Fatalf("runAbandon: %v", err)
+		}
+		if p.Picks != 1 || !slices.ContainsFunc(p.PickedFrom, func(r issuepkg.Record) bool { return r.ID == picked.ID }) {
+			t.Errorf("picks = %d, offered = %+v", p.Picks, p.PickedFrom)
+		}
+		if got := state(t, picked.ID); got != issuepkg.StateClosed {
+			t.Errorf("State = %q, want %q", got, issuepkg.StateClosed)
+		}
+	})
+
+	t.Run("a picker left with esc abandons nothing and is no error, as show and edit", func(t *testing.T) {
+		before, _, _ := issuepkg.List(ctx, rig.client)
+		err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, nil, nil)
+		after, _, _ := issuepkg.List(ctx, rig.client)
+		same := slices.EqualFunc(before, after, func(a, b issuepkg.Record) bool { return a.ID == b.ID && a.State == b.State })
+		if err != nil || !same {
+			t.Errorf("err = %v, records unchanged = %v", err, same)
 		}
 	})
 }
 
-// `issue close <id>` goes through cobra: the argument selects the close-by-ID
-// path, and the merge flags are refused with it. Not parallel: the command
-// opens the repository of the current directory.
+// `issue close <id>` goes through cobra: the argument pre-selects the
+// issue's branch and the merge flags apply. Not parallel: the command opens
+// the repository of the current directory.
 func TestCloseCmd_ByID(t *testing.T) {
 	rig := newRecordRig(t, "alice", "")
 	ctx := t.Context()
@@ -526,24 +552,54 @@ func TestCloseCmd_ByID(t *testing.T) {
 		return root.ExecuteContext(ctx)
 	}
 
-	t.Run("a merge flag with an ID is refused and the issue stays open", func(t *testing.T) {
-		err := run("close", rec.ShortID(), "--no-push")
-		if err == nil || !strings.Contains(err.Error(), "--no-push") {
-			t.Fatalf("err = %v", err)
+	t.Run("a merge flag with an ID is accepted; an issue with no branch prints the hint and stays open", func(t *testing.T) {
+		if err := run("close", rec.ShortID(), "--no-push"); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !strings.Contains(rig.stdout.String(), "git zf issue abandon "+rec.ShortID()) {
+			t.Errorf("stdout = %q", rig.stdout.String())
 		}
 		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
 		if loadErr != nil || got.State != issuepkg.StateOpen {
 			t.Errorf("State = %q (%v), want %q", got.State, loadErr, issuepkg.StateOpen)
 		}
 	})
+}
 
-	t.Run("close <id> closes the issue", func(t *testing.T) {
-		if err := run("close", rec.ShortID()); err != nil {
+// `issue abandon <id>` goes through cobra. Not parallel: the command opens
+// the repository of the current directory.
+func TestAbandonCmd(t *testing.T) {
+	rig := newRecordRig(t, "alice", "")
+	ctx := t.Context()
+	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Wontfix", BranchType: "feat"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	t.Chdir(rig.dir)
+
+	run := func(args ...string) error {
+		root := New(rig.cfg).GetRootCmd()
+		root.SetArgs(args)
+		root.SetOut(rig.stdout)
+		root.SetErr(rig.stderr)
+
+		return root.ExecuteContext(ctx)
+	}
+
+	t.Run("abandon <id> closes the issue", func(t *testing.T) {
+		if err := run("abandon", rec.ShortID()); err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
 		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
 		if loadErr != nil || got.State != issuepkg.StateClosed {
 			t.Errorf("State = %q (%v), want %q", got.State, loadErr, issuepkg.StateClosed)
+		}
+	})
+
+	t.Run("a second ID is refused", func(t *testing.T) {
+		if err := run("abandon", rec.ShortID(), rec.ShortID()); err == nil {
+			t.Fatal("expected a usage error")
 		}
 	})
 }
@@ -616,16 +672,44 @@ func TestListAction(t *testing.T) {
 	t.Parallel()
 
 	rig := newRecordRig(t, "alice", "")
+	rig.cfg.Branch.Base = "main"
 	ctx := t.Context()
 	rec, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Keyed", BranchType: "feat"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	infra := issueListInfra{client: rig.client, stderr: rig.stderr}
+	infra := issueListInfra{client: rig.client, stderr: rig.stderr, close: closeDeps{client: rig.client, cfg: rig.cfg}}
 	row := &issuepkg.Row{IssueSlug: rec.ShortID()}
+	rp, sp := &scriptedRecordPrompter{}, &scriptedStartPrompter{}
 
-	t.Run("c closes the record under the cursor and reopens", func(t *testing.T) {
-		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, &scriptedStartPrompter{}, tui.IssuePickClose, row)
+	t.Run("c on a row with no branch prints the abandon hint, keeps it open and reopens", func(t *testing.T) {
+		reopen, err := New(rig.cfg).listAction(ctx, infra, rp, sp, &scriptedPrompter{}, tui.IssuePickClose, row)
+		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
+		if !reopen || err != nil || loadErr != nil || got.State != issuepkg.StateOpen {
+			t.Errorf("reopen = %v, err = %v, state = %q (%v)", reopen, err, got.State, loadErr)
+		}
+		if !strings.Contains(rig.stdout.String(), "git zf issue abandon "+rec.ShortID()) {
+			t.Errorf("stdout = %q", rig.stdout.String())
+		}
+	})
+	t.Run("c on a row with a branch runs the merge flow", func(t *testing.T) {
+		wip, err := issuepkg.Create(ctx, rig.client, issuepkg.NewIssue{Title: "Wip", BranchType: "feat"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		name := wip.ShortID() + "@feat@wip"
+		runGitIn(t, rig.dir, "checkout", "-q", "-b", name)
+		runGitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "wip")
+		runGitIn(t, rig.dir, "checkout", "-q", "main")
+		branchtest.Seed(t, rig.client, branch.Op{Branch: name, Title: "Wip", IssueID: wip.ID}, branch.StatusInProgress)
+		cp := &scriptedPrompter{Strategy: commitpkg.MergeStrategyClassic, Confirm: false}
+		reopen, err := New(rig.cfg).listAction(ctx, infra, rp, sp, cp, tui.IssuePickClose, &issuepkg.Row{IssueSlug: wip.ShortID()})
+		if !reopen || err != nil || !strings.Contains(rig.stdout.String(), "Aborted.") {
+			t.Errorf("reopen = %v, err = %v, stdout = %q", reopen, err, rig.stdout.String())
+		}
+	})
+	t.Run("a abandons the record under the cursor and reopens", func(t *testing.T) {
+		reopen, err := New(rig.cfg).listAction(ctx, infra, rp, sp, &scriptedPrompter{}, tui.IssuePickAbandon, row)
 		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
 		if !reopen || err != nil || loadErr != nil || got.State != issuepkg.StateClosed {
 			t.Errorf("reopen = %v, err = %v, state = %q (%v)", reopen, err, got.State, loadErr)
@@ -633,27 +717,27 @@ func TestListAction(t *testing.T) {
 	})
 	t.Run("n creates an issue from the form and reopens", func(t *testing.T) {
 		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From the table", BranchType: "fix"}}
-		reopen, err := New(rig.cfg).listAction(ctx, infra, p, &scriptedStartPrompter{}, tui.IssuePickNew, nil)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickNew, nil)
 		recs, _, listErr := issuepkg.List(ctx, rig.client)
 		if !reopen || err != nil || listErr != nil || !slices.ContainsFunc(recs, func(r issuepkg.Record) bool { return r.Title == "From the table" }) {
 			t.Errorf("reopen = %v, err = %v, records = %+v (%v)", reopen, err, recs, listErr)
 		}
 	})
 	t.Run("a form left with esc reopens without an error", func(t *testing.T) {
-		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, &scriptedStartPrompter{}, tui.IssuePickNew, nil)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, sp, &scriptedPrompter{}, tui.IssuePickNew, nil)
 		if !reopen || err != nil {
 			t.Errorf("reopen = %v, err = %v", reopen, err)
 		}
 	})
 	t.Run("a start form left with esc reopens without an error", func(t *testing.T) {
 		sp := &scriptedStartPrompter{IssueFromTrackerErr: huh.ErrUserAborted}
-		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, sp, tui.IssuePickRow, &issuepkg.Row{IssueSlug: "T-1", Title: "manual"})
+		reopen, err := New(rig.cfg).listAction(ctx, infra, rp, sp, &scriptedPrompter{}, tui.IssuePickRow, &issuepkg.Row{IssueSlug: "T-1", Title: "manual"})
 		if !reopen || err != nil {
 			t.Errorf("reopen = %v, err = %v", reopen, err)
 		}
 	})
 	t.Run("nothing picked does not reopen", func(t *testing.T) {
-		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, &scriptedStartPrompter{}, tui.IssuePickNone, nil)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, rp, sp, &scriptedPrompter{}, tui.IssuePickNone, nil)
 		if reopen || err != nil {
 			t.Errorf("reopen = %v, err = %v", reopen, err)
 		}

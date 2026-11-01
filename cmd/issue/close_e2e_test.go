@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,10 +19,12 @@ import (
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/gittest"
 	"github.com/piprim/git-zf/internal/pkg"
+	issuepkg "github.com/piprim/git-zf/issue"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
+	"github.com/piprim/git-zf/tui"
 )
 
 // closeTestRig bundles a real on-disk git repo, a seeded store, and a fake
@@ -1486,7 +1489,7 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 	prompter := &scriptedPrompter{Branch: rig.pickedBranchRow()}
 
 	invoked := invokedBranchFor(t.Context(), rig.client, "")
-	if _, err := getPickedBranch(t.Context(), rig.client, invoked, prompter); err != nil {
+	if _, err := getPickedBranch(t.Context(), rig.client, invoked, "", prompter); err != nil {
 		t.Fatalf("getPickedBranch: %v", err)
 	}
 
@@ -2295,6 +2298,43 @@ func assertDirPresent(t *testing.T, dir string) {
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("%s missing: %v", dir, err)
 	}
+}
+
+// The table opened inside a linked worktree: c runs the merge on the main
+// tree, as `issue close` does from there, so Squash can check out the base
+// and the worktree the user stands in is removed with a cd hint.
+func TestListAction_Worktree_CloseRunsOnTheMainTree(t *testing.T) {
+	t.Parallel()
+
+	rig, wtDir := newWorktreeCloseRig(t)
+	ctx := t.Context()
+	wtClient, err := git.NewClientAt(&pkg.IO{In: bytes.NewReader(nil), Out: rig.stdout, Err: rig.stderr}, wtDir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+	deps := rig.deps()
+	deps.invokedFrom = wtDir
+	deps.invokedBranch = invokedBranchFor(ctx, rig.client, wtDir)
+	infra := issueListInfra{client: wtClient, stderr: rig.stderr, close: deps}
+	cp := worktreePrompter(rig, commitpkg.MergeStrategySquash, true)
+
+	reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{}, &scriptedStartPrompter{}, cp,
+		tui.IssuePickClose, &issuepkg.Row{IssueSlug: "ABC-1"})
+
+	t.Run("the merge lands on main and the table reopens", func(t *testing.T) {
+		if !reopen || err != nil {
+			t.Fatalf("reopen = %v, err = %v", reopen, err)
+		}
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1")
+	})
+	t.Run("the worktree the user stood in is removed with a cd hint", func(t *testing.T) {
+		if _, statErr := os.Stat(wtDir); !os.IsNotExist(statErr) {
+			t.Errorf("worktree still at %s (%v)", wtDir, statErr)
+		}
+		if !strings.Contains(rig.stdout.String(), cdHint(t, rig.dir)) {
+			t.Errorf("stdout = %q, want the cd hint", rig.stdout.String())
+		}
+	})
 }
 
 func TestClose_Worktree_RebaseRemovesWorktreeAndBranch(t *testing.T) {
@@ -3247,4 +3287,131 @@ func (r *closeTestRig) statusOf(t *testing.T, branchName string) string {
 	}
 
 	return e.Status
+}
+
+// `issue close <id>`: the candidates are the in-progress branches of that
+// issue. One is picked without the picker, none prints the abandon hint,
+// several reach the picker as the only candidates.
+func TestClose_ByID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one in-progress branch is merged without the picker", func(t *testing.T) {
+		t.Parallel()
+		rig := newCloseRig(t)
+		deps := rig.deps()
+		deps.issueID = "ABC-1" // a branch slug only, not a repository issue: the slug itself must match
+		prompter := &scriptedPrompter{
+			BranchErr:     errors.New("PickBranch must not be called for one candidate"),
+			Strategy:      commitpkg.MergeStrategyRebase,
+			Confirm:       true,
+			Message:       []byte("feat(thing): close ABC-1\n"),
+			TrackerStatus: "Closed",
+			DeleteBranch:  true,
+		}
+		if err := runClose(t.Context(), deps, prompter); err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): close ABC-1")
+		rows, err := branch.ListRows(t.Context(), rig.client, branch.StatusMerged)
+		if err != nil || len(rows) != 1 || rows[0].BranchName != "ABC-1@feat@add-thing" {
+			t.Errorf("merged rows = %+v (%v)", rows, err)
+		}
+	})
+
+	t.Run("a repository issue with no branch in progress prints the abandon hint and merges nothing", func(t *testing.T) {
+		t.Parallel()
+		rig := newCloseRig(t)
+		rec, err := issuepkg.Create(t.Context(), rig.client, issuepkg.NewIssue{Title: "No branch", BranchType: "feat"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		deps := rig.deps()
+		deps.issueID = rec.ShortID()
+		prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch must not be called")}
+		if err := runClose(t.Context(), deps, prompter); err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+		want := "Issue " + rec.ShortID() + " has no branch in progress. To close it without a merge: git zf issue abandon " + rec.ShortID()
+		if got := rig.stdout.String(); !strings.Contains(got, want) {
+			t.Errorf("stdout = %q, want %q", got, want)
+		}
+		rows, _ := branch.ListRows(t.Context(), rig.client, branch.StatusInProgress)
+		if len(rows) != 1 {
+			t.Errorf("in-progress rows = %+v, want the seeded one untouched", rows)
+		}
+	})
+
+	t.Run("an ID neither an issue nor a branch chain knows is an error", func(t *testing.T) {
+		t.Parallel()
+		rig := newCloseRig(t)
+		deps := rig.deps()
+		deps.issueID = "ZZZ-9"
+		prompter := &scriptedPrompter{BranchErr: errors.New("PickBranch must not be called")}
+		err := runClose(t.Context(), deps, prompter)
+		if err == nil || !strings.Contains(err.Error(), `no issue or in-progress branch matches "ZZZ-9"`) {
+			t.Fatalf("err = %v", err)
+		}
+		if got := rig.stdout.String(); strings.Contains(got, "abandon") {
+			t.Errorf("stdout = %q, want no abandon hint", got)
+		}
+	})
+
+	t.Run("two variants reach the picker as the only candidates", func(t *testing.T) {
+		t.Parallel()
+		rig := newCloseRig(t)
+		rig.addBranch(t, "ABC-1@feat@variant")
+		branchtest.Seed(t, rig.client, branch.Op{Branch: "ABC-1@feat@variant", Title: "Add thing"}, branch.StatusInProgress)
+		rig.addBranch(t, "DEF-2@feat@other")
+		branchtest.Seed(t, rig.client, branch.Op{Branch: "DEF-2@feat@other", Title: "Other"}, branch.StatusInProgress)
+		deps := rig.deps()
+		deps.issueID = "ABC-1"
+		prompter := &scriptedPrompter{BranchErr: errors.New("stop at the picker")}
+		_ = runClose(t.Context(), deps, prompter)
+		names := make([]string, len(prompter.PickBranchSeen))
+		for i, r := range prompter.PickBranchSeen {
+			names[i] = r.BranchName
+		}
+		slices.Sort(names)
+		if want := []string{"ABC-1@feat@add-thing", "ABC-1@feat@variant"}; !slices.Equal(names, want) {
+			t.Errorf("picker offered %v, want %v", names, want)
+		}
+	})
+
+	t.Run("a short-hash branch of an exported issue is found by the tracker number", func(t *testing.T) {
+		t.Parallel()
+		rig := newCloseRig(t)
+		rec, err := issuepkg.Create(t.Context(), rig.client, issuepkg.NewIssue{Title: "Early", BranchType: "feat"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		name := rec.ShortID() + "@feat@early"
+		rig.addBranch(t, name)
+		branchtest.Seed(t, rig.client, branch.Op{Branch: name, Title: "Early", IssueID: rec.ID}, branch.StatusInProgress)
+		link := &issuepkg.Op{Type: issuepkg.OpLinkTracker, TrackerType: "fake", Project: "zf", TrackerID: "11"}
+		if err := issuepkg.Append(t.Context(), rig.client, rec.ID, link); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		deps := rig.deps()
+		deps.issueID = "11"
+		prompter := &scriptedPrompter{BranchErr: errors.New("one candidate: no picker")}
+		_ = runClose(t.Context(), deps, prompter)
+		if got := rig.stdout.String(); strings.Contains(got, "no branch in progress") {
+			t.Errorf("stdout = %q: branch %s was not matched to issue 11", got, name)
+		}
+	})
+
+	t.Run("--base is accepted with an ID", func(t *testing.T) {
+		t.Parallel()
+		rig := newCloseRig(t)
+		deps := rig.deps()
+		deps.issueID = "ABC-1"
+		deps.baseOverride = "main"
+		prompter := &scriptedPrompter{Strategy: commitpkg.MergeStrategyClassic, Confirm: false}
+		if err := runClose(t.Context(), deps, prompter); err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+		if !strings.Contains(rig.stdout.String(), "Aborted.") {
+			t.Errorf("stdout = %q, want the flow to reach the confirm with --base", rig.stdout.String())
+		}
+	})
 }

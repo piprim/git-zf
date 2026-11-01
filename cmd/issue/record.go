@@ -242,14 +242,19 @@ func closeRepoIssue(ctx context.Context, client *git.Client, ref *branch.State, 
 	issueflow.ReconcileIssues(ctx, client, m)
 }
 
-// runCloseByID closes the repo issue named by query (full ID or unique prefix)
-// without merging anything: the way out for a duplicate or a wontfix. It
-// refuses while a branch of the issue is in progress, so that the work is
-// merged (`issue close`) or abandoned (`branch close`) knowingly.
-func runCloseByID(ctx context.Context, client *git.Client, query string, m *issuepkg.Mirror) error {
+// runAbandon closes the repo issue named by args (full ID or unique prefix;
+// a picker when empty) without merging anything: the way out for a duplicate
+// or a wontfix. It refuses while a branch of the issue is in progress, so
+// that the work is merged (`issue close <id>`) or abandoned (`branch close`)
+// knowingly.
+func runAbandon(ctx context.Context, client *git.Client, p recordPrompter, args []string, m *issuepkg.Mirror) error {
 	issueflow.FetchIssues(ctx, client)
 
-	rec, err := resolveRecord(ctx, client, nil, []string{query})
+	rec, err := resolveRecord(ctx, client, p, args)
+	if errors.Is(err, huh.ErrUserAborted) {
+		// The picker left with esc: no error, as withRecord.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -286,19 +291,19 @@ func runCloseByID(ctx context.Context, client *git.Client, query string, m *issu
 	}
 	if len(inProgress) > 0 {
 		return fmt.Errorf(
-			"issue %s has a branch in progress (%s): merge it with `git zf issue close`, "+
-				"or abandon it with `git zf branch close <branch-name>`, then close the issue",
-			rec.DisplayID(), strings.Join(inProgress, ", "))
+			"issue %s has a branch in progress (%s): merge it with `git zf issue close %s`, "+
+				"or abandon the branch with `git zf branch close <branch-name>`, then abandon the issue",
+			rec.DisplayID(), strings.Join(inProgress, ", "), rec.DisplayID())
 	}
 
 	op := &issuepkg.Op{Type: issuepkg.OpSetState, Value: issuepkg.StateClosed}
 	if err := issuepkg.Append(ctx, client, rec.ID, op); err != nil {
-		return fmt.Errorf("close issue: %w", err)
+		return fmt.Errorf("abandon issue: %w", err)
 	}
 
 	pushIssue(ctx, client, rec.ID)
 	issueflow.ReconcileIssues(ctx, client, m)
-	fmt.Fprintf(client.IO().Out, "Closed issue %s: %s\n", rec.DisplayID(), rec.Title)
+	fmt.Fprintf(client.IO().Out, "Abandoned issue %s: %s\n", rec.DisplayID(), rec.Title)
 
 	return nil
 }

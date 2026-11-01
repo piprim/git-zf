@@ -108,7 +108,7 @@ func TestGetRootCmd_help(t *testing.T) {
 			path []string
 			want string
 		}{
-			{[]string{"issue", "close"}, "git zf branch close"},
+			{[]string{"issue", "close"}, "git zf issue abandon"},
 			{[]string{"branch", "new"}, "files an issue in the repository"},
 			{[]string{"branch", "new"}, "never asks the tracker"},
 			{[]string{"commit"}, "pre-filled"},

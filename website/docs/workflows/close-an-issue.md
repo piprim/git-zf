@@ -4,15 +4,20 @@ title: Close an issue
 ---
 
 After this page you can merge an issue branch into its base, pick a merge
-strategy, and close an issue that will not be worked on.
+strategy, and abandon an issue that will not be worked on.
 
 ## Merge and close
 
 ```
 $ git zf issue close
+$ git zf issue close ABC-42
 ```
 
-Pick a branch (the current one is pre-selected), then:
+Pick a branch (the current one is pre-selected). With an ID, the branch of
+that issue is picked for you; when the issue has several branches in
+progress, the picker offers those alone. An issue with no branch in progress
+is told so, with a hint to `issue abandon`: closing always merges. An ID
+that is neither an issue nor a branch is an error. Then:
 
 1. **Reviewer commits** left on `<IssueID>@review` by an approved or rejected
    review are incorporated, fast-forward or merge. A conflicting merge
@@ -55,22 +60,23 @@ when the *base* branch is checked out in another linked worktree.
 A branch that has an open pull request on the forge is merged through the
 forge instead: see [pull requests](pull-requests.md).
 
-## Close without merging
+## Abandon an issue
 
 ```
-$ git zf issue close 1a2b3c4
+$ git zf issue abandon 1a2b3c4
 ```
 
-With an ID, close an issue stored in the repository without merging
-anything, for a duplicate or an issue that will not be worked on. The close
-is pushed. It is refused while a branch of the issue is in progress: merge
-it with `git zf issue close`, or abandon it with
+Close an issue stored in the repository without merging anything, for a
+duplicate or an issue that will not be worked on. Without an ID a picker
+lists the issues. The close is pushed and, with the issue mirror on, the
+tracker issue is closed too. It is refused while a branch of the issue is in
+progress: merge it with `git zf issue close <id>`, or abandon the branch with
 `git zf branch close <branch-name>` (which records the branch as abandoned
-and merges nothing, see [pruning and abandoning](pruning.md)), then close
-the issue. `--base`, `--push` and `--no-push` belong to the merge and are
-refused with an ID.
+and merges nothing, see [pruning and abandoning](pruning.md)), then abandon
+the issue.
 
-The `c` key of the issue table does the same for the row under the cursor.
+The `a` key of the issue table, pressed twice, does the same for the row
+under the cursor; `c` merges.
 
 ## A branch without an issue
 
@@ -90,6 +96,7 @@ by a stale worktree entry is refused with a `git worktree prune` hint.
 ## Commands used
 
 - [`git zf issue close`](../reference/commands/git_zf_issue_close.md)
+- [`git zf issue abandon`](../reference/commands/git_zf_issue_abandon.md)
 - [`git zf review sync`](../reference/commands/git_zf_review_sync.md)
 - [`git zf branch close`](../reference/commands/git_zf_branch_close.md)
 - [`git zf branch merge`](../reference/commands/git_zf_branch_merge.md)

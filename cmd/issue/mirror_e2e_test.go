@@ -349,7 +349,7 @@ func TestMirror_ListWithTheMirrorOffListsTheTrackerWithoutImporting(t *testing.T
 	})
 }
 
-func TestMirror_CloseByIDClosesTheTrackerIssue(t *testing.T) {
+func TestMirror_AbandonClosesTheTrackerIssue(t *testing.T) {
 	t.Parallel()
 
 	rig, ft, m := newMirrorRig(t)
@@ -358,11 +358,11 @@ func TestMirror_CloseByIDClosesTheTrackerIssue(t *testing.T) {
 		t.Fatalf("runNew: %v", err)
 	}
 
-	err := runCloseByID(ctx, rig.client, rig.onlyRecord(t).ID, m)
+	err := runAbandon(ctx, rig.client, &scriptedRecordPrompter{}, []string{rig.onlyRecord(t).ID}, m)
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
-			t.Fatalf("runCloseByID: %v", err)
+			t.Fatalf("runAbandon: %v", err)
 		}
 	})
 	t.Run("the tracker issue is closed at once", func(t *testing.T) {
