@@ -14,9 +14,9 @@ const config: Config = {
     v4: true,
   },
 
-  // The site is served from the root of its domain. Replace the host.
-  url: 'https://example.org',
-  baseUrl: '/',
+  // GitHub Pages project site: https://piprim.github.io/git-zf/
+  url: 'https://piprim.github.io',
+  baseUrl: '/git-zf/',
 
   onBrokenLinks: 'throw',
   onBrokenAnchors: 'throw',
