@@ -4,7 +4,7 @@
   <img src="./assets/git-zf-logo.webp" alt="Logo git-zf" width="272" />
 </p>
 
-> A TUI powered CLI that wraps a git-flow workflow (issue → branch → commit → review → close) with optional issue-tracker integration.
+> A TUI powered CLI that wraps a git workflow (issue → branch → commit → review → close) with optional issue-tracker integration and bi-directional synchronization.
 
 git-zf is a git subcommand. `git zf` opens a menu; `git zf issue start` names
 a branch after an issue, `git zf commit` composes a commitizen-style message
