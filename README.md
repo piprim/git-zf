@@ -50,7 +50,7 @@ from the main checkout to install the hooks.
 ## Documentation
 
 The user documentation, from the first commit to the review round, the
-tracker mirror and every command, is at **https://example.org**.
+tracker mirror and every command, is at **https://piprim.github.io/git-zf/**.
 
 ---
 
