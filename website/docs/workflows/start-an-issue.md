@@ -72,7 +72,7 @@ Flags of `issue list`: `--status open|closed|all`, `--stdout` (a plain table),
 
 ## What happens
 
-1. A branch named `{issue-id}@{type}@{slug}` is created and checked out
+1. A branch named `{id}@{type}@{slug}` is created and checked out
    (see [branch names](../concepts/issues-and-branches.md#branch-names)),
    **or a git worktree is created** so the main working tree stays untouched.
    A prompt asks which; pin the choice with `branch.use-worktree` in the
@@ -82,7 +82,7 @@ Flags of `issue list`: `--status open|closed|all`, `--stdout` (a plain table),
 2. With a tracker configured, you can move the issue to "In Progress" in the
    same step.
 3. The branch is recorded in the repository under
-   `refs/zf/branches/<issue-id>` and that record is pushed: every clone sees
+   `refs/zf/branches/<id>` and that record is pushed: every clone sees
    that the issue is in progress.
 
 When more than one candidate base branch exists, a picker asks. Picking
@@ -110,9 +110,9 @@ $ git zf branch new
 ```
 
 The same flow with manual input: it opens the form at once, whatever the
-repository holds. A typed ID is used as is, an issue living where git-zf
-does not look; an empty one files an issue in the repository. It never
-asks the tracker. `--variant` works here too. See
+repository holds. The branch's ID is the one you type, used as is and looked
+up nowhere; an empty one is minted by filing an issue in the repository. It
+never asks the tracker. `--variant` works here too. See
 [issues and branches](../concepts/issues-and-branches.md) for when to use
 which.
 

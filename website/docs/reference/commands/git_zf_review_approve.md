@@ -11,7 +11,7 @@ Approve a review — signals the branch is ready to close
 
 Pick a review you started and approve it. Its status becomes "approved"
 and the developer can run git zf issue close, which incorporates any commit
-you left on &lt;IssueID&gt;@review before merging.
+you left on &lt;ID&gt;@review before merging.
 
 With require-signed = true under [review] in the config, the approval is a
 signed commit, and git zf issue close refuses to merge without an approval

@@ -12,9 +12,9 @@ import (
 func (r Review) getStartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "start",
-		Short: "Begin reviewing an issue (creates <IssueID>@review branch from the locked snapshot)",
+		Short: "Begin reviewing an issue (creates <ID>@review branch from the locked snapshot)",
 		Long: `Run git fetch first, then pick an issue awaiting review. A branch named
-<IssueID>@review is created and checked out at the commit captured when the
+<ID>@review is created and checked out at the commit captured when the
 developer requested the review, and your identity is recorded on the review
 ref as the reviewer.
 

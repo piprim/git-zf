@@ -38,7 +38,7 @@ On an issue branch the form is pre-filled from the branch name: the type,
 the issue ID as the scope, and the footer from ref-format. Every field stays
 editable.
 
-On a feature branch whose review left reviewer commits on <IssueID>@review
+On a feature branch whose review left reviewer commits on <ID>@review
 that are not yet in the branch, the command offers to merge them in before
 opening the form; declining aborts with a hint to run git zf review sync.
 --no-verify skips the guard, as it does the pre-commit hook.

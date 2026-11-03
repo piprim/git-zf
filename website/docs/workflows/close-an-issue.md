@@ -19,7 +19,7 @@ progress, the picker offers those alone. An issue with no branch in progress
 is told so, with a hint to `issue abandon`: closing always merges. An ID
 that is neither an issue nor a branch is an error. Then:
 
-1. **Reviewer commits** left on `<IssueID>@review` by an approved or rejected
+1. **Reviewer commits** left on `<ID>@review` by an approved or rejected
    review are incorporated, fast-forward or merge. A conflicting merge
    refuses with a hint to run `git zf review sync`. A parent issue with open
    [sub-tasks](sub-tasks.md) is refused.

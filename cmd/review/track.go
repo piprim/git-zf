@@ -51,7 +51,7 @@ func runTrack(ctx context.Context, deps reviewDeps) error {
 
 	return fmt.Errorf(
 		"current branch %q does not match a git-zf naming convention\n"+
-			"(expected <IssueID>@<type>@<slug> or <IssueID>@review)",
+			"(expected <ID>@<type>@<slug> or <ID>@review)",
 		currentBranch)
 }
 

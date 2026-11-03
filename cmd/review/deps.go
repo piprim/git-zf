@@ -135,7 +135,7 @@ func reviewBranches(
 			continue
 		}
 		// Build a synthetic BranchRow from the review. The reviewer's branch
-		// follows the <IssueID>@review convention.
+		// follows the <ID>@review convention.
 		result = append(result, branch.Row{
 			IssueSlug:  st.Slug,
 			BranchName: branch.ReviewBranchName(st.Slug),

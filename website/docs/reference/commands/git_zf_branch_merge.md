@@ -10,8 +10,9 @@ Merge a branch into the current branch
 ### Synopsis
 
 Pick a local or remote branch and merge it into the current branch
-(rebase, squash, or classic), then optionally delete it and push. Issue branches
-are refused — use `git zf issue close` for those.
+(rebase, squash, or classic), then optionally delete it and push. Any branch
+can be the source: one git zf created, or a plain git branch that follows no
+naming convention. Issue branches are refused — use `git zf issue close` for those.
 
 ```
 git zf branch merge [flags]

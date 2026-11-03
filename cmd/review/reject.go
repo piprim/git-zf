@@ -21,9 +21,9 @@ func (r Review) getRejectCmd() *cobra.Command {
 for a file). Its status becomes "changes_requested" and the branch is
 unlocked for the developer.
 
-An empty <IssueID>@review branch is deleted, locally and on the remote. One
+An empty <ID>@review branch is deleted, locally and on the remote. One
 carrying your commits is kept for the developer to inspect (git log
-<feature>..<IssueID>@review); until git zf review sync merges them in, new
+<feature>..<ID>@review); until git zf review sync merges them in, new
 commits on the feature branch are blocked by the pre-commit hook (bypass:
 --no-verify).
 

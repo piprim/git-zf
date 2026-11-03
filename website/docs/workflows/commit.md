@@ -44,7 +44,7 @@ from the branch name. The pre-fill is a hint; every field stays editable.
 ## The review guard
 
 On a feature branch whose review decision left reviewer commits on
-`<IssueID>@review` that are not yet in your branch, `git zf commit` offers
+`<ID>@review` that are not yet in your branch, `git zf commit` offers
 to merge them in before opening the form. Declining aborts with a hint to
 run `git zf review sync`. `--no-verify` skips the guard, as it does the
 pre-commit hook. See [review a branch](review.md).

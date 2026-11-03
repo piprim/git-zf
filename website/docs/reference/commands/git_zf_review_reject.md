@@ -13,9 +13,9 @@ Pick a review you started and request changes, with a reason (-m, or -F
 for a file). Its status becomes "changes_requested" and the branch is
 unlocked for the developer.
 
-An empty &lt;IssueID&gt;@review branch is deleted, locally and on the remote. One
+An empty &lt;ID&gt;@review branch is deleted, locally and on the remote. One
 carrying your commits is kept for the developer to inspect (git log
-&lt;feature&gt;..&lt;IssueID&gt;@review); until git zf review sync merges them in, new
+&lt;feature&gt;..&lt;ID&gt;@review); until git zf review sync merges them in, new
 commits on the feature branch are blocked by the pre-commit hook (bypass:
 --no-verify).
 

@@ -15,7 +15,7 @@ func (r Review) getApproveCmd() *cobra.Command {
 		Short: "Approve a review — signals the branch is ready to close",
 		Long: `Pick a review you started and approve it. Its status becomes "approved"
 and the developer can run git zf issue close, which incorporates any commit
-you left on <IssueID>@review before merging.
+you left on <ID>@review before merging.
 
 With require-signed = true under [review] in the config, the approval is a
 signed commit, and git zf issue close refuses to merge without an approval

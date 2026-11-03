@@ -99,7 +99,7 @@ Remote auto-detection, when `remote` is not set:
 | Several remotes, one named `origin` | `origin` |
 | Several remotes, none named `origin` | **Error**: set `branch.remote` |
 
-Branches are named `{issue-id}@{type}@{slugified-title}`, with an optional
+Branches are named `{id}@{type}@{slugified-title}`, with an optional
 `@{variant}`; see [branch names](../concepts/issues-and-branches.md#branch-names).
 
 ## `[issue-tracker]`

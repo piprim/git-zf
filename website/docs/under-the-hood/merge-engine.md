@@ -152,7 +152,7 @@ checkout.
 ## Reviewer commits
 
 When the issue has a decided review (`approved` or `changes_requested`) and
-`<IssueID>@review` carries commits not yet in the feature branch, `issue close`
+`<ID>@review` carries commits not yet in the feature branch, `issue close`
 incorporates them before the strategy runs: a fast-forward when the feature
 branch has not moved, otherwise an automatic merge. If that merge conflicts the
 close refuses with a hint to run `git zf review sync`, resolve, and retry —

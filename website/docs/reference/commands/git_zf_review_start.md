@@ -5,12 +5,12 @@ sidebar_label: "review start"
 
 ## git zf review start
 
-Begin reviewing an issue (creates &lt;IssueID&gt;@review branch from the locked snapshot)
+Begin reviewing an issue (creates &lt;ID&gt;@review branch from the locked snapshot)
 
 ### Synopsis
 
 Run git fetch first, then pick an issue awaiting review. A branch named
-&lt;IssueID&gt;@review is created and checked out at the commit captured when the
+&lt;ID&gt;@review is created and checked out at the commit captured when the
 developer requested the review, and your identity is recorded on the review
 ref as the reviewer.
 

@@ -12,7 +12,7 @@ Bring a branch up to date: merge pending reviewer commits, then parent drift
 Pick an in-progress branch (the current one is pre-selected) and bring it up
 to date in two steps.
 
-First, reviewer commits pending on &lt;IssueID&gt;@review are merged in. On a
+First, reviewer commits pending on &lt;ID&gt;@review are merged in. On a
 conflict the merge is left in progress for you to resolve, then git zf
 commit concludes it. A dirty working tree is refused for this step: git
 stash first.

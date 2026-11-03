@@ -511,7 +511,7 @@ func baseBranchResolves(c *git.Client, name string) (bool, error) {
 // reviewer commits if the close subsequently aborts and rolls back the
 // feature branch.
 //
-// The review chain (refs/zf/reviews/<IssueID>) is the only record of a
+// The review chain (refs/zf/reviews/<ID>) is the only record of a
 // review. reviewPreflight always syncs and reads it first so the developer
 // never has to run a manual git fetch before closing.
 func reviewPreflight(

@@ -7,7 +7,7 @@ After this page you can run a review round from either side, know what a
 lock does, and know how reviewer commits get back into the branch.
 
 Reviews are peer-to-peer, with no server-side component. The state of a
-review lives in the repository under `refs/zf/reviews/<IssueID>`, one
+review lives in the repository under `refs/zf/reviews/<ID>`, one
 commit per action, pushed to and fetched from the remote. The refs are the
 only record, and actions taken on two machines at once are merged, never
 overwritten.
@@ -19,7 +19,7 @@ git zf review request
                                        git fetch
                                        git zf review start
                                        (review; commit fixes on
-                                        <IssueID>@review; push them)
+                                        <ID>@review; push them)
                                        git zf review approve
                                          or git zf review reject
 git zf review sync        (if the reviewer left commits)
@@ -35,7 +35,7 @@ git zf issue close        (approved)
    rejects pushes to it until the reviewer decides. Bypass with
    `git push --no-verify`.
 2. **Reviewer: `git fetch && git zf review start`.** Pick an issue awaiting
-   review. A branch `<IssueID>@review` is created at the commit captured at
+   review. A branch `<ID>@review` is created at the commit captured at
    lock time, and your identity is recorded on the ref. Review the code
    there. You may commit fixes on the `@review` branch and push them.
 3. **Reviewer decides.**
@@ -46,7 +46,7 @@ git zf issue close        (approved)
      branch is unlocked. The reason is asked (`-m`, or `-F` for a file).
      An empty `@review` branch is deleted, locally and on the remote; one
      carrying reviewer commits is kept for the developer to inspect
-     (`git log <feature>..<IssueID>@review`). While such commits await
+     (`git log <feature>..<ID>@review`). While such commits await
      incorporation, **new commits on the feature branch are blocked** by
      the commit guard and the pre-commit hook until `git zf review sync`
      merges them in. Bypass with `--no-verify`.
@@ -65,7 +65,7 @@ $ git zf review sync
 ```
 
 Brings an in-progress branch up to date (the current one is pre-selected).
-First it merges pending reviewer commits from `<IssueID>@review`; on
+First it merges pending reviewer commits from `<ID>@review`; on
 conflict the merge is left in progress for you to resolve, then
 `git zf commit` concludes it. Then, for [sub-task](sub-tasks.md) branches
 only, it merges the parent branch (`<remote>/<parent>`) into the sub-task; a

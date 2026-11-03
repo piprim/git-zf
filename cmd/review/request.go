@@ -22,7 +22,7 @@ pre-push hook installed by git zf init rejects pushes to it until the
 reviewer decides (bypass: git push --no-verify).
 
 On a branch that was already reviewed, this starts the next round: the round
-counter goes up and the stale <IssueID>@review branch is removed. If that
+counter goes up and the stale <ID>@review branch is removed. If that
 branch still carries reviewer commits not yet in yours, the request refuses to
 delete them and offers to merge them in first.
 
