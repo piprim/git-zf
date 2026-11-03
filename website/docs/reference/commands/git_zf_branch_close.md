@@ -16,7 +16,7 @@ to merge an issue branch, use 'git zf issue close'.
 The branch does not have to exist in this clone, and it does not matter who
 started it. Only a branch in progress can be closed.
 
-To undo, check the branch out and run 'git zf issue track'.
+To undo, check the branch out and run 'git zf branch track'.
 
 ```
 git zf branch close <branch-name> [flags]

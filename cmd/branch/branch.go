@@ -13,6 +13,7 @@ import (
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
+	"github.com/piprim/git-zf/cmd/review"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/issue"
@@ -37,15 +38,19 @@ type listFlags struct {
 
 func (b Branch) GetRootCmd() *cobra.Command {
 	// The registration order is also the menu order.
-	subs := []*cobra.Command{b.listCmd(), b.newCmd(), b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd(), b.prCmd()}
+	subs := []*cobra.Command{
+		b.listCmd(), b.newCmd(), review.TrackCmd(b.appConfig),
+		b.pruneCmd(), b.pruneTrackerCmd(), b.mergeCmd(), b.prCmd(),
+	}
 
 	cmd := &cobra.Command{
 		Use:   "branch",
 		Short: "Manage local branches",
 		Long: `A branch is where the work happens in git. It does not need an issue
 behind it: git zf branch new creates one with a typed ID that is looked up
-nowhere, and git zf branch merge merges a branch with no tracker step. If
-there is a ticket, go through git zf issue instead.
+nowhere, git zf branch track records one checked out with plain git, and git
+zf branch merge merges a branch with no tracker step. If there is a ticket,
+go through git zf issue instead.
 
 list shows the tracked branches, yours and the ones other clones started.
 prune records what happened to in-progress branches outside git-zf, and
@@ -254,7 +259,7 @@ exists on the remote, or that someone else started, is left alone.
 A branch someone else started and that exists nowhere may be work they have
 not pushed yet. When you know it is abandoned (its author left, or you changed
 your git name or email and it is yours), --others closes those too.
-'git zf issue track' on a closed branch reopens it.
+'git zf branch track' on a closed branch reopens it.
 
 Use --dry-run to preview, --yes to skip the confirm prompt.`,
 	}

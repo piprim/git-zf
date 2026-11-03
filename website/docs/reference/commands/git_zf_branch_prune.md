@@ -17,7 +17,7 @@ exists on the remote, or that someone else started, is left alone.
 A branch someone else started and that exists nowhere may be work they have
 not pushed yet. When you know it is abandoned (its author left, or you changed
 your git name or email and it is yours), --others closes those too.
-'git zf issue track' on a closed branch reopens it.
+'git zf branch track' on a closed branch reopens it.
 
 Use --dry-run to preview, --yes to skip the confirm prompt.
 

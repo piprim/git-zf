@@ -11,8 +11,9 @@ Manage local branches
 
 A branch is where the work happens in git. It does not need an issue
 behind it: git zf branch new creates one with a typed ID that is looked up
-nowhere, and git zf branch merge merges a branch with no tracker step. If
-there is a ticket, go through git zf issue instead.
+nowhere, git zf branch track records one checked out with plain git, and git
+zf branch merge merges a branch with no tracker step. If there is a ticket,
+go through git zf issue instead.
 
 list shows the tracked branches, yours and the ones other clones started.
 prune records what happened to in-progress branches outside git-zf, and
@@ -51,4 +52,5 @@ git zf branch [flags]
 * [git zf branch pr](git_zf_branch_pr.md)	 - Open a pull request for a branch on the forge
 * [git zf branch prune](git_zf_branch_prune.md)	 - Record branches merged or deleted outside git zf
 * [git zf branch prune-tracker](git_zf_branch_prune-tracker.md)	 - Reap branches whose tracker issue is closed
+* [git zf branch track](git_zf_branch_track.md)	 - Track the current branch with git zf (for branches created with plain git checkout)
 

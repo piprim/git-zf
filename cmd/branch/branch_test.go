@@ -204,3 +204,14 @@ func TestPrCmd(t *testing.T) {
 		}
 	})
 }
+
+func TestTrackCmd(t *testing.T) {
+	root := New(&config.AppConfig{}).GetRootCmd()
+
+	t.Run("branch track is registered", func(t *testing.T) {
+		sub, _, err := root.Find([]string{"track"})
+		if err != nil || sub.Name() != "track" {
+			t.Fatalf("find track: %v", err)
+		}
+	})
+}

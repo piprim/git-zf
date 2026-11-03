@@ -21,7 +21,7 @@ to merge an issue branch, use 'git zf issue close'.
 The branch does not have to exist in this clone, and it does not matter who
 started it. Only a branch in progress can be closed.
 
-To undo, check the branch out and run 'git zf issue track'.`,
+To undo, check the branch out and run 'git zf branch track'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
