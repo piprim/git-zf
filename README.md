@@ -1,7 +1,7 @@
 # Git-ZF - Git Zen workFlow
 
 <p align="center">
-  <img src="./assets/git-zf-logo.webp" alt="Logo git-zf" width="272" />
+  <img src="./assets/logo-gitzf-464x481.webp" alt="Logo git-zf" width="464" height="481"/>
 </p>
 
 > A TUI powered CLI that wraps a git workflow (issue → branch → commit → review → close) with optional issue-tracker integration and bi-directional synchronization.

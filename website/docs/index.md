@@ -5,6 +5,12 @@ title: git-zf, a Git Zen workFlow CLI
 sidebar_label: About
 ---
 
+<div align="center">
+
+![Git-ZF Logo](../static/img/logo-gitzf-663x687.webp)
+
+</div>
+
 git-zf is a git subcommand that carries a piece of work from the issue that
 asks for it to the merge that closes it: `git zf issue start`, `git zf
 commit`, `git zf review request`, `git zf issue close`. Every step is a
