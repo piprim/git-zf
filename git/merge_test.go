@@ -1329,3 +1329,23 @@ func TestFetchRef(t *testing.T) {
 		}
 	})
 }
+
+func TestWithoutPassword(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, in, want string }{
+		{"a password is dropped, its user kept", "https://alice:s3cret@forge.test/o/r.git", "https://alice@forge.test/o/r.git"},
+		{"a user without a password is kept", "ssh://git@forge.test/o/r.git", "ssh://git@forge.test/o/r.git"},
+		{"no userinfo is untouched", "https://forge.test/o/r.git", "https://forge.test/o/r.git"},
+		{"an scp-like remote is untouched", "git@forge.test:o/r.git", "git@forge.test:o/r.git"},
+		{"a path is untouched", "/srv/git/r.git", "/srv/git/r.git"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := WithoutPassword(tc.in); got != tc.want {
+				t.Errorf("WithoutPassword(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

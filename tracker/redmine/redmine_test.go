@@ -532,3 +532,46 @@ func withProjects(ids ...string) []config.TrackerProject {
 
 	return out
 }
+
+func TestAssignToMe(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the API key's user becomes the issue's assignee", func(t *testing.T) {
+		t.Parallel()
+
+		var sent struct {
+			Issue struct {
+				AssignedToID int `json:"assigned_to_id"`
+			} `json:"issue"`
+		}
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/users/current.json":
+				fmt.Fprint(w, `{"user":{"id":7,"login":"me"}}`)
+			case r.Method == http.MethodPut && r.URL.Path == "/issues/42.json":
+				_ = json.NewDecoder(r.Body).Decode(&sent)
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+			}
+		})
+
+		if err := a.AssignToMe(t.Context(), "42"); err != nil {
+			t.Fatalf("AssignToMe: %v", err)
+		}
+		if sent.Issue.AssignedToID != 7 {
+			t.Errorf("assigned_to_id sent = %d, want 7", sent.Issue.AssignedToID)
+		}
+	})
+
+	t.Run("a server error is reported", func(t *testing.T) {
+		t.Parallel()
+
+		a := newTestAdapterWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "down", http.StatusInternalServerError)
+		})
+		if err := a.AssignToMe(t.Context(), "42"); err == nil || !strings.Contains(err.Error(), "500") {
+			t.Errorf("err = %v", err)
+		}
+	})
+}

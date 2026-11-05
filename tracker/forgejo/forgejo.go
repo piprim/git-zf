@@ -267,6 +267,45 @@ func (a *forgejoAdapter) ListIssues(ctx context.Context) ([]tracker.Issue, error
 	return out, nil
 }
 
+// me returns the authenticated user's login, looked up once.
+func (a *forgejoAdapter) me(ctx context.Context) (string, error) {
+	if a.meLogin == "" {
+		var me struct {
+			Login string `json:"login"`
+		}
+		if err := a.doJSON(ctx, http.MethodGet, "/user", nil, &me); err != nil {
+			return "", fmt.Errorf("forgejo: current user: %w", err)
+		}
+		a.meLogin = me.Login
+	}
+
+	return a.meLogin, nil
+}
+
+// AssignToMe makes the authenticated user the issue's one assignee via
+// PATCH /repos/{owner}/{repo}/issues/{number}.
+func (a *forgejoAdapter) AssignToMe(ctx context.Context, issueID string) error {
+	path, err := a.issuePath(issueID)
+	if err != nil {
+		return err
+	}
+
+	login, err := a.me(ctx)
+	if err != nil {
+		return err
+	}
+
+	body := struct {
+		Assignees []string `json:"assignees"`
+	}{Assignees: []string{login}}
+
+	if err := a.doJSON(ctx, http.MethodPatch, path, body, nil); err != nil {
+		return fmt.Errorf("forgejo: assign issue %s: %w", issueID, err)
+	}
+
+	return nil
+}
+
 // toIssues converts a listing. Every issue is reported under project; when
 // project is empty, the name comes from the issue's repository. The
 // authenticated user is looked up once, and only when an issue has an
@@ -276,14 +315,10 @@ func (a *forgejoAdapter) toIssues(ctx context.Context, issues []issue, project s
 	for i := range issues {
 		assigned = assigned || len(issues[i].Assignees) > 0
 	}
-	if assigned && a.meLogin == "" {
-		var me struct {
-			Login string `json:"login"`
+	if assigned {
+		if _, err := a.me(ctx); err != nil {
+			return nil, err
 		}
-		if err := a.doJSON(ctx, http.MethodGet, "/user", nil, &me); err != nil {
-			return nil, fmt.Errorf("forgejo: current user: %w", err)
-		}
-		a.meLogin = me.Login
 	}
 
 	out := make([]tracker.Issue, len(issues))

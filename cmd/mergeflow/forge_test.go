@@ -120,6 +120,62 @@ func TestRun_Forge(t *testing.T) {
 		})
 	})
 
+	t.Run("from a fork: a local master with its own commits is not fast-forwarded", func(t *testing.T) {
+		rig, stderr := newForgeRig(t)
+		upstream := t.TempDir()
+		if out, err := exec.CommandContext(t.Context(), "git", "init", "-q", "--bare", "-b", "master", upstream).CombinedOutput(); err != nil {
+			t.Fatalf("git init --bare: %v\n%s", err, out)
+		}
+		gitRun(t, rig.dir, "push", "-q", upstream, "feature:master")
+		writeFile(t, rig.dir, "local.txt", "local\n")
+		gitRun(t, rig.dir, "add", "local.txt")
+		gitRun(t, rig.dir, "commit", "-m", "chore: local only")
+		gitRun(t, rig.dir, "switch", "-q", "feature") // closing from the branch being closed
+		ft := &fake.Tracker{PullRequests: []tracker.PullRequest{{Number: "7", Head: "fork:feature", Base: "master"}}}
+		p := &scriptedMergePrompter{Strategy: commit.MergeStrategyClassic, Confirm: true}
+
+		res, err := Run(t.Context(), rig.client, Params{
+			Source: "feature", Target: "master", PullRequest: &ForgeMerge{Forge: ft, Number: "7", Upstream: upstream},
+		}, p, plainPrefill)
+		if err != nil || !res.ViaForge {
+			t.Fatalf("err %v, res %+v", err, res)
+		}
+		gitRun(t, rig.dir, "fetch", "-q", "origin")
+
+		t.Run("the warning names the fast-forward", func(t *testing.T) {
+			if !strings.Contains(stderr.String(), "warning") || !strings.Contains(stderr.String(), "fast-forward") {
+				t.Errorf("stderr %q lacks the fast-forward warning", stderr.String())
+			}
+		})
+		t.Run("git is not asked for a merge it would refuse", func(t *testing.T) {
+			if strings.Contains(stderr.String(), "fatal") {
+				t.Errorf("stderr %q holds git's refusal", stderr.String())
+			}
+		})
+		t.Run("a hint names the commands to run", func(t *testing.T) {
+			for _, want := range []string{"hint: ", "git log FETCH_HEAD..master", "git pull --rebase " + upstream + " master"} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr %q lacks %q", stderr.String(), want)
+				}
+			}
+		})
+		t.Run("master is checked out: the caller deletes the source next", func(t *testing.T) {
+			if cur, err := rig.client.CurrentBranch(); err != nil || cur != "master" {
+				t.Errorf("current branch = %q (%v), want master", cur, err)
+			}
+		})
+		t.Run("the local commit is kept", func(t *testing.T) {
+			if got := rig.headSubject(t, "master"); got != "chore: local only" {
+				t.Errorf("master head = %q, want the local commit kept", got)
+			}
+		})
+		t.Run("the fork's master is not pushed", func(t *testing.T) {
+			if got := rig.headSubject(t, "origin/master"); got != "chore: init" {
+				t.Errorf("origin/master head = %q, want untouched", got)
+			}
+		})
+	})
+
 	t.Run("the forge's refusal is the error and nothing changes locally", func(t *testing.T) {
 		rig, _ := newForgeRig(t)
 		ft := &fake.Tracker{
@@ -212,6 +268,7 @@ func TestRun_Forge(t *testing.T) {
 		writeFile(t, rig.dir, "local.txt", "local\n")
 		gitRun(t, rig.dir, "add", "local.txt")
 		gitRun(t, rig.dir, "commit", "-m", "chore: local only")
+		gitRun(t, rig.dir, "switch", "-q", "feature") // closing from the branch being closed
 		ft := &fake.Tracker{PullRequests: []tracker.PullRequest{{Number: "7", Head: "feature", Base: "master"}}}
 		p := &scriptedMergePrompter{Strategy: commit.MergeStrategyClassic, Confirm: true}
 
@@ -221,12 +278,33 @@ func TestRun_Forge(t *testing.T) {
 		if err != nil || !res.ViaForge {
 			t.Fatalf("err %v, res %+v", err, res)
 		}
-		if !strings.Contains(stderr.String(), "warning") || !strings.Contains(stderr.String(), "fast-forward") {
-			t.Errorf("stderr %q lacks the fast-forward warning", stderr.String())
-		}
-		if got := rig.headSubject(t, "master"); got != "chore: local only" {
-			t.Errorf("master head = %q, want the local commit kept", got)
-		}
+		t.Run("the warning names the fast-forward", func(t *testing.T) {
+			if !strings.Contains(stderr.String(), "warning") || !strings.Contains(stderr.String(), "fast-forward") {
+				t.Errorf("stderr %q lacks the fast-forward warning", stderr.String())
+			}
+		})
+		t.Run("git is not asked for a merge it would refuse", func(t *testing.T) {
+			if strings.Contains(stderr.String(), "fatal") {
+				t.Errorf("stderr %q holds git's refusal", stderr.String())
+			}
+		})
+		t.Run("a hint names the commands to run", func(t *testing.T) {
+			for _, want := range []string{"hint: ", "git log origin/master..master", "git rebase origin/master"} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr %q lacks %q", stderr.String(), want)
+				}
+			}
+		})
+		t.Run("master is checked out: the caller deletes the source next", func(t *testing.T) {
+			if cur, err := rig.client.CurrentBranch(); err != nil || cur != "master" {
+				t.Errorf("current branch = %q (%v), want master", cur, err)
+			}
+		})
+		t.Run("the local commit is kept", func(t *testing.T) {
+			if got := rig.headSubject(t, "master"); got != "chore: local only" {
+				t.Errorf("master head = %q, want the local commit kept", got)
+			}
+		})
 	})
 }
 

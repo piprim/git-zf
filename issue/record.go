@@ -28,6 +28,7 @@ const (
 	OpTrackerState   = "tracker_state"
 	OpTrackerSeen    = "tracker_seen"
 	OpLinkComment    = "link_comment"
+	OpAssign         = "assign"
 )
 
 // Issue states.
@@ -50,7 +51,7 @@ type Op struct {
 	Title       string `json:"title,omitempty"`       // create
 	Description string `json:"description,omitempty"` // create
 	BranchType  string `json:"branch_type,omitempty"` // create
-	Value       string `json:"value,omitempty"`       // set_title, set_description, set_state, add_label, remove_label
+	Value       string `json:"value,omitempty"`       // set_title/description/state, add_label, remove_label, assign
 	Body        string `json:"body,omitempty"`        // add_comment
 
 	TrackerType string `json:"tracker_type,omitempty"` // create (imported issue), link_tracker
@@ -139,6 +140,9 @@ type Record struct {
 	Labels      []string  `json:"labels"`
 	Comments    []Comment `json:"comments"`
 	CreatedAt   time.Time `json:"created_at"`
+	// Assignee is the git identity ("name <email>") of who works on the
+	// issue; "" when nobody was assigned.
+	Assignee string `json:"assignee"`
 
 	// Tracker is nil for an issue that is not mirrored.
 	Tracker *TrackerLink `json:"tracker"`
@@ -204,6 +208,8 @@ func Fold(id string, ops []Op) Record {
 			if op.Value == StateOpen || op.Value == StateClosed {
 				rec.State = op.Value
 			}
+		case OpAssign:
+			rec.Assignee = op.Value
 		case OpAddLabel:
 			labels[op.Value] = true
 		case OpRemoveLabel:

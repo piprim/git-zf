@@ -19,9 +19,11 @@ import (
 
 // scriptedRecordPrompter returns canned answers for the repo-issue forms.
 type scriptedRecordPrompter struct {
-	New     issuepkg.NewIssue // copied into the form input by NewIssue
-	PickID  string            // returned by PickRecord; "" picks the first record offered
-	Comment string
+	New issuepkg.NewIssue // copied into the form input by NewIssue
+	// NewOffered is the input the `issue new` form opened with.
+	NewOffered issuepkg.NewIssue
+	PickID     string // returned by PickRecord; "" picks the first record offered
+	Comment    string
 	// LabelSet is what LabelChanges returns; LabelOffered records what it, or
 	// NewIssue, was offered.
 	LabelSet     []string
@@ -51,6 +53,7 @@ func (s *scriptedRecordPrompter) formErr() error {
 
 func (s *scriptedRecordPrompter) NewIssue(_ context.Context, _, choices []string, single bool, in *issuepkg.NewIssue) error {
 	s.LabelOffered.Choices, s.LabelOffered.Single = choices, single
+	s.NewOffered = *in
 	if s.Err != nil {
 		return s.Err
 	}
@@ -422,6 +425,94 @@ func TestRunNew_AmbiguousRemoteWarns(t *testing.T) {
 	t.Run("the warning names the remote problem", func(t *testing.T) {
 		if !strings.Contains(rig.stderr.String(), "multiple remotes") {
 			t.Errorf("stderr = %q", rig.stderr.String())
+		}
+	})
+}
+
+func TestRunNew_Assign(t *testing.T) {
+	t.Parallel()
+
+	const me = "alice <alice@test.com>"
+	ctx := t.Context()
+
+	t.Run("with Assign the issue is assigned to its creator and show says so", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		if err := runNew(ctx, rig.client, rig.cfg, issuepkg.NewIssue{Title: "Mine", Assign: true}, nil, nil); err != nil {
+			t.Fatalf("runNew: %v", err)
+		}
+		rec := rig.onlyRecord(t)
+		if rec.Assignee != me {
+			t.Errorf("Assignee = %q, want %q", rec.Assignee, me)
+		}
+
+		rig.stdout.Reset()
+		if err := runShow(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, false); err != nil {
+			t.Fatalf("runShow: %v", err)
+		}
+		if want := "Assigned to: " + me + "\n"; !strings.Contains(rig.stdout.String(), want) {
+			t.Errorf("output misses %q:\n%s", want, rig.stdout.String())
+		}
+	})
+
+	t.Run("without it the issue is unassigned and show has no assignee line", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		if err := runNew(ctx, rig.client, rig.cfg, issuepkg.NewIssue{Title: "Nobody's"}, nil, nil); err != nil {
+			t.Fatalf("runNew: %v", err)
+		}
+		rec := rig.onlyRecord(t)
+		if rec.Assignee != "" {
+			t.Errorf("Assignee = %q, want empty", rec.Assignee)
+		}
+
+		rig.stdout.Reset()
+		if err := runShow(ctx, rig.client, &scriptedRecordPrompter{}, []string{rec.ID}, false); err != nil {
+			t.Fatalf("runShow: %v", err)
+		}
+		if strings.Contains(rig.stdout.String(), "Assigned to") {
+			t.Errorf("output has an assignee line:\n%s", rig.stdout.String())
+		}
+	})
+
+	t.Run("the form opens proposing to assign, and its answer decides", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "Declined"}}
+		if err := runNew(ctx, rig.client, rig.cfg, issuepkg.NewIssue{}, p, nil); err != nil {
+			t.Fatalf("runNew: %v", err)
+		}
+		if !p.NewOffered.Assign {
+			t.Error("the form opened with Assign off")
+		}
+		if rec := rig.onlyRecord(t); rec.Assignee != "" {
+			t.Errorf("Assignee = %q, want empty: the form said no", rec.Assignee)
+		}
+	})
+}
+
+// Not parallel: the command opens the repository of the current directory.
+func TestNewCmd_Assign(t *testing.T) {
+	rig := newRecordRig(t, "alice", "")
+	t.Chdir(rig.dir)
+
+	root := New(rig.cfg).GetRootCmd()
+	root.SetArgs([]string{"new", "--title", "Mine", "--assign"})
+	root.SetOut(rig.stdout)
+	root.SetErr(rig.stderr)
+	execErr := root.ExecuteContext(t.Context())
+
+	t.Run("the command succeeds", func(t *testing.T) {
+		if execErr != nil {
+			t.Fatalf("Execute: %v", execErr)
+		}
+	})
+	t.Run("--assign assigns the issue to its creator", func(t *testing.T) {
+		if rec := rig.onlyRecord(t); rec.Assignee != "alice <alice@test.com>" {
+			t.Errorf("Assignee = %q", rec.Assignee)
 		}
 	})
 }

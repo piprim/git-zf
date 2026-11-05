@@ -144,6 +144,44 @@ func (a *githubAdapter) listRepo(ctx context.Context, owner, repo string) ([]tra
 	return out, nil
 }
 
+// me returns the authenticated user's login, looked up once.
+func (a *githubAdapter) me(ctx context.Context) (string, error) {
+	if a.meLogin == "" {
+		me, _, err := a.client.Users.Get(ctx, "")
+		if err != nil {
+			return "", fmt.Errorf("github: current user: %w", err)
+		}
+		a.meLogin = me.GetLogin()
+	}
+
+	return a.meLogin, nil
+}
+
+// AssignToMe adds the authenticated user to the issue's assignees via
+// POST /repos/{owner}/{repo}/issues/{number}/assignees.
+func (a *githubAdapter) AssignToMe(ctx context.Context, issueID string) error {
+	owner, repo, err := a.ownerRepo()
+	if err != nil {
+		return err
+	}
+
+	n, err := strconv.Atoi(issueID)
+	if err != nil {
+		return fmt.Errorf("github: invalid issue id %q: %w", issueID, err)
+	}
+
+	login, err := a.me(ctx)
+	if err != nil {
+		return err
+	}
+
+	if _, _, err := a.client.Issues.AddAssignees(ctx, owner, repo, n, []string{login}); err != nil {
+		return fmt.Errorf("github: assign issue %d: %w", n, err)
+	}
+
+	return nil
+}
+
 // flagAssigned sets AssignedToMe on the issues of out converted from page.
 // The authenticated user is looked up once, and only when an issue of the
 // page has an assignee.
@@ -155,12 +193,8 @@ func (a *githubAdapter) flagAssigned(ctx context.Context, page []*gogithub.Issue
 	if !assigned {
 		return nil
 	}
-	if a.meLogin == "" {
-		me, _, err := a.client.Users.Get(ctx, "")
-		if err != nil {
-			return fmt.Errorf("github: current user: %w", err)
-		}
-		a.meLogin = me.GetLogin()
+	if _, err := a.me(ctx); err != nil {
+		return err
 	}
 
 	byNumber := make(map[string]*gogithub.Issue, len(page))

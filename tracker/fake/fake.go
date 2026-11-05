@@ -50,6 +50,10 @@ type Tracker struct {
 	ListCalls       int
 	RecordedCreates []Create
 	RecordedOpens   []Open
+	// RecordedAssigns are the issue IDs AssignToMe was called with; AssignErr,
+	// when non-nil, is returned by it.
+	RecordedAssigns []string
+	AssignErr       error
 	// ClosingStatuses are the status names that close an issue when
 	// UpdateIssueStatus applies them. Any other name becomes the issue's
 	// listed status.
@@ -240,6 +244,20 @@ func (t *Tracker) CreateIssue(_ context.Context, title, description string) (tra
 	t.ProjectIssues = append(t.ProjectIssues, iss)
 
 	return t.view(iss, false), nil
+}
+
+// AssignToMe records the call and lists the issue as assigned to the user.
+func (t *Tracker) AssignToMe(_ context.Context, issueID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.AssignErr != nil {
+		return t.AssignErr
+	}
+	t.RecordedAssigns = append(t.RecordedAssigns, issueID)
+	t.mutate(issueID, func(iss *tracker.Issue) { iss.AssignedToMe = true })
+
+	return nil
 }
 
 // numbersTaken is the set of numeric IDs of the listed and shelved issues.

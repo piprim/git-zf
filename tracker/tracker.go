@@ -109,6 +109,8 @@ type Tracker interface {
 	// SetIssueOpen reopens (open) or closes issueID, with whatever status the
 	// tracker uses for that.
 	SetIssueOpen(ctx context.Context, issueID string, open bool) error
+	// AssignToMe makes the authenticated user the assignee of issueID.
+	AssignToMe(ctx context.Context, issueID string) error
 }
 
 // ErrLabelRule is returned by SetLabels when the set breaks a rule of the

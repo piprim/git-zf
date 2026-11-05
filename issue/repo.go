@@ -40,13 +40,16 @@ type NewIssue struct {
 	Description string
 	BranchType  string
 	Labels      []string
+	// Assign assigns the issue to the git identity that creates it.
+	Assign bool
 }
 
 // Prepare writes the create op of a new issue and returns the issue's ID
 // without making the issue exist: no ref points at it until Publish. It lets a
 // caller know the ID (to name a branch) before committing to the issue. A
-// prepared issue that is never published leaves nothing behind. in.Labels is
-// not used: labels are ops on a published issue.
+// prepared issue that is never published leaves nothing behind. in.Labels and
+// in.Assign are not used: labels and the assignment are ops on a published
+// issue.
 func Prepare(ctx context.Context, c *git.Client, in NewIssue) (string, error) {
 	payload, err := marshalOp(ctx, c, &Op{
 		Type: OpCreate, Title: in.Title, Description: in.Description, BranchType: in.BranchType,
@@ -72,8 +75,9 @@ func Publish(ctx context.Context, c *git.Client, id string) error {
 	return nil
 }
 
-// Create writes a new issue (a create op, then one add_label op per label)
-// and returns its record. Nothing is pushed.
+// Create writes a new issue (a create op, then one add_label op per label and
+// an assign op when in.Assign and git's config holds an identity) and returns
+// its record. Nothing is pushed.
 func Create(ctx context.Context, c *git.Client, in NewIssue) (Record, error) {
 	id, err := Prepare(ctx, c, in)
 	if err != nil {
@@ -86,6 +90,12 @@ func Create(ctx context.Context, c *git.Client, in NewIssue) (Record, error) {
 
 	for _, label := range in.Labels {
 		if err := Append(ctx, c, id, &Op{Type: OpAddLabel, Value: label}); err != nil {
+			return Record{}, err
+		}
+	}
+
+	if me, _ := c.ConfigUser(ctx); in.Assign && me != "" {
+		if err := Append(ctx, c, id, &Op{Type: OpAssign, Value: me}); err != nil {
 			return Record{}, err
 		}
 	}

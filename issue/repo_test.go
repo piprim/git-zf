@@ -684,3 +684,69 @@ func TestTrackerNumber(t *testing.T) {
 		}
 	})
 }
+
+func TestCreate_Assign(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+
+	mine, err := Create(ctx, c, NewIssue{Title: "Mine", BranchType: "fix", Assign: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	plain, err := Create(ctx, c, NewIssue{Title: "Nobody's", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	t.Run("an assigned issue names the git identity of its creator", func(t *testing.T) {
+		if mine.Assignee != "alice <alice@test.com>" {
+			t.Errorf("Assignee = %q", mine.Assignee)
+		}
+	})
+	t.Run("an issue is unassigned unless asked", func(t *testing.T) {
+		if plain.Assignee != "" {
+			t.Errorf("Assignee = %q, want empty", plain.Assignee)
+		}
+	})
+}
+
+// TestCreate_AssignWithoutIdentity is not parallel: the identity of the
+// commits comes from the environment, git's config holds none.
+func TestCreate_AssignWithoutIdentity(t *testing.T) {
+	for k, v := range map[string]string{
+		"GIT_CONFIG_GLOBAL": os.DevNull, "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME": "env", "GIT_AUTHOR_EMAIL": "env@test.com",
+		"GIT_COMMITTER_NAME": "env", "GIT_COMMITTER_EMAIL": "env@test.com",
+	} {
+		t.Setenv(k, v)
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	runGit(t, dir, "commit", "-q", "--allow-empty", "-m", "chore: init")
+	c, err := git.NewClientAt(nil, dir)
+	if err != nil {
+		t.Fatalf("NewClientAt: %v", err)
+	}
+
+	mine, err := Create(t.Context(), c, NewIssue{Title: "Mine", BranchType: "fix", Assign: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	plain, err := Create(t.Context(), c, NewIssue{Title: "Nobody's", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	t.Run("no assign op is written for an identity git's config does not hold", func(t *testing.T) {
+		if got, want := opCount(t, c, mine.ID), opCount(t, c, plain.ID); got != want {
+			t.Errorf("ops = %d, want %d as for an unassigned issue", got, want)
+		}
+	})
+	t.Run("the issue is unassigned", func(t *testing.T) {
+		if mine.Assignee != "" {
+			t.Errorf("Assignee = %q, want empty", mine.Assignee)
+		}
+	})
+}

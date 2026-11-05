@@ -74,6 +74,9 @@ func renderRecord(w io.Writer, rec *issuepkg.Record) {
 	if len(rec.Labels) > 0 {
 		fmt.Fprintf(w, "Labels: %s\n", strings.Join(rec.Labels, ", "))
 	}
+	if rec.Assignee != "" {
+		fmt.Fprintf(w, "Assigned to: %s\n", rec.Assignee)
+	}
 	fmt.Fprintf(w, "ID: %s\n", rec.ID)
 	if t := rec.Tracker; t != nil {
 		fmt.Fprintf(w, "Tracker: %s %s #%s\n", t.Type, t.Project, t.ID)

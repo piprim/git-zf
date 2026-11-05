@@ -2,9 +2,11 @@ package mergeflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/piprim/git-zf/commit"
+	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/tracker"
 )
 
@@ -71,12 +73,45 @@ func (r *run) forge(ctx context.Context, f *ForgeMerge, s commit.MergeStrategy) 
 
 		return nil
 	}
-	if err := r.client.FastForwardOnly(ctx, remote+"/"+r.target, r.target); err != nil {
+	if err := r.fastForwardTarget(ctx, remote+"/"+r.target); err != nil {
 		fmt.Fprintf(r.client.IO().Err,
 			"warning: %q was not fast-forwarded to %s/%s (merge it yourself): %v\n", r.target, remote, r.target, err)
+		r.hintOwnCommits(err, remote+"/"+r.target, "git rebase "+remote+"/"+r.target)
 	}
 
 	return nil
+}
+
+// hintOwnCommits says what to run when the fast-forward was refused for
+// errOwnCommits: merged is the ref holding the forge's merge, rebase the
+// command that replays the target's own commits on it.
+func (r *run) hintOwnCommits(err error, merged, rebase string) {
+	if !errors.Is(err, errOwnCommits) {
+		return
+	}
+	fmt.Fprintf(r.client.IO().Err,
+		"hint: `git log %s..%s` lists them; on %q, `%s` drops\n"+
+			"hint: those the forge merged and replays the others.\n", merged, r.target, r.target, rebase)
+}
+
+// errOwnCommits is why a target is left alone after a forge merge.
+var errOwnCommits = errors.New("it holds commits of its own")
+
+// fastForwardTarget checks the local target out and fast-forwards it onto to.
+// A target holding commits that to lacks is checked out and left where it is:
+// git's own refusal is a "fatal:" in the middle of a merge that succeeded.
+// The checkout stays: the callers delete Source next, which git refuses for
+// the branch HEAD is on.
+func (r *run) fastForwardTarget(ctx context.Context, to string) error {
+	if ok, err := r.client.IsAncestor(ctx, r.target, to); err == nil && !ok {
+		if err := r.client.Checkout(ctx, r.target); err != nil {
+			return fmt.Errorf("checkout %s: %w", r.target, err)
+		}
+
+		return errOwnCommits
+	}
+
+	return r.client.FastForwardOnly(ctx, to, r.target) //nolint:wrapcheck // names the git command
 }
 
 // catchUpFork fetches the target from upstream, where the forge merged,
@@ -89,8 +124,10 @@ func (r *run) catchUpFork(ctx context.Context, upstream, remote string) error {
 
 		return nil
 	}
-	if err := r.client.FastForwardOnly(ctx, "FETCH_HEAD", r.target); err != nil {
+	if err := r.fastForwardTarget(ctx, "FETCH_HEAD"); err != nil {
 		fmt.Fprintf(errW, "warning: %q was not fast-forwarded to the upstream's (merge it yourself): %v\n", r.target, err)
+		// A pull names the upstream: FETCH_HEAD is gone at the next fetch.
+		r.hintOwnCommits(err, "FETCH_HEAD", "git pull --rebase "+git.WithoutPassword(upstream)+" "+r.target)
 
 		return nil
 	}

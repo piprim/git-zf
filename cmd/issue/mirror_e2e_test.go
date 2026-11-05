@@ -630,3 +630,29 @@ func TestMirror_LabelPicker(t *testing.T) {
 		}
 	})
 }
+
+func TestMirror_NewAssignsTheTrackerIssue(t *testing.T) {
+	t.Parallel()
+
+	rig, ft, m := newMirrorRig(t)
+	ctx := t.Context()
+
+	err := runNew(ctx, rig.client, rig.cfg, issuepkg.NewIssue{Title: "Mine", Assign: true}, nil, m)
+	rec := rig.onlyRecord(t)
+
+	t.Run("no error and no warning", func(t *testing.T) {
+		if err != nil || rig.stderr.Len() != 0 {
+			t.Fatalf("runNew: %v, stderr = %q", err, rig.stderr.String())
+		}
+	})
+	t.Run("the tracker issue is assigned to the tracker's user at once", func(t *testing.T) {
+		if rec.Tracker == nil || !slices.Equal(ft.RecordedAssigns, []string{rec.Tracker.ID}) {
+			t.Errorf("assigns = %v, tracker = %+v", ft.RecordedAssigns, rec.Tracker)
+		}
+	})
+	t.Run("the record keeps its assignee", func(t *testing.T) {
+		if rec.Assignee != "alice <alice@test.com>" {
+			t.Errorf("Assignee = %q", rec.Assignee)
+		}
+	})
+}

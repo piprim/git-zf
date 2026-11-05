@@ -31,6 +31,10 @@ open pull request on the forge through the forge: the strategy picker and
 the confirmation are the same as a local close, then the forge merges and
 the local base is fast-forwarded. The branch must be at the remote's tip.
 
+A local base that holds commits the remote lacks is left as it is: the merge
+is done on the forge, a warning says the base was not fast-forwarded and a
+hint names the commands that list those commits and rebase them.
+
 ## From a fork
 
 Configure the upstream repository as the tracker's project and push to your

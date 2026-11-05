@@ -31,8 +31,14 @@ func branchTypeOptions(allowed []string) []huh.Option[string] {
 	return opts
 }
 
-// IssueNewForm is the form of `issue new`. labels are the fields of
-// IssueLabelFields, shown last.
+// IssueAssignField is the last question of `issue new`: assign the issue to
+// its creator, yes or no.
+func IssueAssignField(assign *bool) huh.Field {
+	return huh.NewConfirm().Title("Assign to me?").Value(assign)
+}
+
+// IssueNewForm is the form of `issue new`. labels are the fields shown last:
+// those of IssueLabelFields, then IssueAssignField.
 func IssueNewForm(title, branchType, description *string, allowedBranchTypes []string, labels ...huh.Field) *huh.Group {
 	fields := []huh.Field{
 		huh.NewInput().

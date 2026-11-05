@@ -20,6 +20,7 @@ git zf issue new [flags]
 ### Options
 
 ```
+      --assign               assign the issue to you
       --description string   issue description
   -h, --help                 help for new
       --label stringArray    label to add (repeatable)

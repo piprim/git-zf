@@ -18,7 +18,7 @@ The Makefile builds for the host platform (`go build` defaults). Version info is
 mise exec -- go test ./...                    # run all tests
 mise exec -- go test ./commit/... -run TestX  # run a single test
 mise exec -- go build -o ./bin/git-zf .      # manual build
-./bin/git-zf -d               # run with debug logging → debug.log
+./bin/git-zf -d               # run with debug logging, printed to stdout
 ```
 
 #### Testing the close flow
@@ -150,6 +150,16 @@ The fake tracker is stateful for these calls: `CreateIssue` lists the issue,
 `SetIssueOpen` / `CloseIssue` / `ReopenIssue` move it in and out of the open
 listing. Use `CloseIssue` for "someone closed it in the tracker's UI": it is
 not recorded in `RecordedOpens`.
+
+`issue new` proposes to assign the issue to its creator (`--assign` without
+the form): an `assign` op holding the git identity, shown by `issue show`.
+The mirror's export then calls `AssignToMe` for a record assigned to the
+clone's own identity (the fake: `RecordedAssigns`, `AssignErr`), and nowhere
+else.
+
+    mise exec -- go test ./issue/... -run "TestFold_Assign|TestCreate_Assign|TestReconcile_ExportAssign" -v
+    mise exec -- go test ./tracker/... -run "AssignToMe" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestRunNew_Assign|^TestNewCmd_Assign|^TestMirror_NewAssigns" -v
 
 The fake's `Edit` and `WebComment` play the tracker's web UI (not recorded, the
 issue's `UpdatedAt` moves); `StatusIsLabel` makes it behave like Redmine. A

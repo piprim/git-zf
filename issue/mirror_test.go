@@ -1434,3 +1434,85 @@ func TestLabels_AsksTheTrackerOnce(t *testing.T) {
 		}
 	})
 }
+
+func TestReconcile_ExportAssigns(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+	ft := &fake.Tracker{}
+	m := newTestMirror(ft)
+
+	mine, err := Create(ctx, c, NewIssue{Title: "Mine", BranchType: "fix", Assign: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	theirs, err := Create(ctx, c, NewIssue{Title: "Theirs", BranchType: "fix"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := Append(ctx, c, theirs.ID, &Op{Type: OpAssign, Value: "bob <bob@test.com>"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := Create(ctx, c, NewIssue{Title: "Nobody's", BranchType: "fix"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res := mustReconcile(t, m, c)
+	rec, _ := Load(ctx, c, mine.ID)
+
+	t.Run("the three records are exported without a warning", func(t *testing.T) {
+		if res.Exported != 3 || len(res.Warnings) != 0 {
+			t.Errorf("res = %+v", res)
+		}
+	})
+	t.Run("only the record assigned to this clone's user is assigned on the tracker", func(t *testing.T) {
+		if rec.Tracker == nil || !slices.Equal(ft.RecordedAssigns, []string{rec.Tracker.ID}) {
+			t.Errorf("assigns = %v, tracker = %+v", ft.RecordedAssigns, rec.Tracker)
+		}
+	})
+	t.Run("the tracker lists that issue alone as assigned to me", func(t *testing.T) {
+		listed, _ := ft.ListIssues(ctx)
+		for _, iss := range listed {
+			if iss.AssignedToMe != (iss.Subject == "Mine") {
+				t.Errorf("issue %q: AssignedToMe = %v", iss.Subject, iss.AssignedToMe)
+			}
+		}
+	})
+
+	before := opCount(t, c, mine.ID)
+	again := mustReconcile(t, m, c)
+
+	t.Run("a second run changes nothing", func(t *testing.T) {
+		if again.Exported != 0 || len(ft.RecordedAssigns) != 1 || opCount(t, c, mine.ID) != before {
+			t.Errorf("again = %+v, assigns = %v, ops %d → %d", again, ft.RecordedAssigns, before, opCount(t, c, mine.ID))
+		}
+	})
+}
+
+func TestReconcile_ExportAssignFails(t *testing.T) {
+	t.Parallel()
+
+	c := newRepo(t, "alice", "")
+	ctx := t.Context()
+	ft := &fake.Tracker{AssignErr: errors.New("forbidden")}
+
+	mine, err := Create(ctx, c, NewIssue{Title: "Mine", BranchType: "fix", Assign: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res := mustReconcile(t, newTestMirror(ft), c)
+	rec, _ := Load(ctx, c, mine.ID)
+
+	t.Run("the record is still exported and linked", func(t *testing.T) {
+		if res.Exported != 1 || rec.Tracker == nil || rec.Tracker.ID != "1" {
+			t.Errorf("res = %+v, tracker = %+v", res, rec.Tracker)
+		}
+	})
+	t.Run("the failed assignment is a warning", func(t *testing.T) {
+		if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "assign") || !strings.Contains(res.Warnings[0], "forbidden") {
+			t.Errorf("warnings = %q", res.Warnings)
+		}
+	})
+}

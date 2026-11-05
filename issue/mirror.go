@@ -197,7 +197,7 @@ func (m *Mirror) syncRecords(
 
 		switch {
 		case rec.Tracker == nil && rec.State == StateOpen:
-			created, err := m.export(ctx, c, rec)
+			created, err := m.export(ctx, c, rec, res.warnf)
 			if err != nil {
 				res.warnf("export issue %s: %v", rec.DisplayID(), err)
 
@@ -330,11 +330,22 @@ func (m *Mirror) healImport(
 
 // export creates the tracker issue of a record that has none, links them and
 // returns the created issue, so that the caller syncs the record against it
-// at once.
-func (m *Mirror) export(ctx context.Context, c *git.Client, rec *Record) (tracker.Issue, error) {
+// at once. A record assigned to this clone's git identity is assigned to the
+// tracker's user; a failure there is a warning, the issue being created.
+func (m *Mirror) export(ctx context.Context, c *git.Client, rec *Record, warn func(string, ...any)) (tracker.Issue, error) {
 	created, err := m.Tracker.CreateIssue(ctx, rec.Title, rec.Description)
 	if err != nil {
 		return tracker.Issue{}, fmt.Errorf("create tracker issue: %w", err)
+	}
+
+	// ponytail: the tracker's user is taken to be the git identity, and only
+	// the export assigns: a record another clone exported first stays
+	// unassigned on the tracker. Assign in syncRecord, with a tracker login
+	// per identity, if that shows up.
+	if rec.Assignee != "" {
+		if me, _ := c.ConfigUser(ctx); me == rec.Assignee {
+			m.assign(ctx, &created, warn)
+		}
 	}
 
 	// The record takes the labels the tracker gave the new issue (Redmine's
@@ -356,6 +367,20 @@ func (m *Mirror) export(ctx context.Context, c *git.Client, rec *Record) (tracke
 	rec.TrackerState, rec.TrackerStatus, rec.TrackerSeen = StateOpen, created.Status, &snap
 
 	return created, nil
+}
+
+// assign makes the tracker's user the assignee of the issue just created and
+// re-reads it into created: the assignment moved its updated time, which the
+// snapshot must hold for the record to be settled.
+func (m *Mirror) assign(ctx context.Context, created *tracker.Issue, warn func(string, ...any)) {
+	if err := m.Tracker.AssignToMe(ctx, created.ID); err != nil {
+		warn("assign tracker issue %s: %v", created.ID, err)
+
+		return
+	}
+	if fresh, err := m.Tracker.GetIssue(ctx, created.ID); err == nil {
+		*created = fresh
+	}
 }
 
 // SyncOne runs the four steps on one record and pushes it: what `edit`,

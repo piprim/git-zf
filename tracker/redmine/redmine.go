@@ -149,17 +149,42 @@ func (a *redmineAdapter) meFor(ctx context.Context, issues []issue) (int, error)
 	for i := range issues {
 		assigned = assigned || issues[i].AssignedTo != nil
 	}
-	if !assigned || a.meID != 0 {
-		return a.meID, nil
+	if !assigned {
+		return 0, nil
 	}
 
-	var payload currentUserResponse
-	if _, err := a.getJSON(ctx, "/users/current.json", &payload); err != nil {
-		return 0, fmt.Errorf("redmine: current user: %w", err)
+	return a.me(ctx)
+}
+
+// me returns the authenticated user's ID, looked up once.
+func (a *redmineAdapter) me(ctx context.Context) (int, error) {
+	if a.meID == 0 {
+		var payload currentUserResponse
+		if _, err := a.getJSON(ctx, "/users/current.json", &payload); err != nil {
+			return 0, fmt.Errorf("redmine: current user: %w", err)
+		}
+		a.meID = payload.User.ID
 	}
-	a.meID = payload.User.ID
 
 	return a.meID, nil
+}
+
+// AssignToMe makes the authenticated user the issue's assignee.
+func (a *redmineAdapter) AssignToMe(ctx context.Context, issueID string) error {
+	me, err := a.me(ctx)
+	if err != nil {
+		return err
+	}
+
+	type fields struct {
+		//nolint:tagliatelle // Redmine wire format
+		AssignedToID int `json:"assigned_to_id"`
+	}
+	type body struct {
+		Issue fields `json:"issue"`
+	}
+
+	return a.putIssue(ctx, issueID, "assignee", body{Issue: fields{AssignedToID: me}})
 }
 
 // toIssues converts Redmine issues. Every issue is reported under project;

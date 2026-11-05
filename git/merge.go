@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -214,10 +215,26 @@ func (c *Client) Fetch(ctx context.Context) error {
 // that remote.
 func (c *Client) FetchRef(ctx context.Context, from, ref string) error {
 	if err := c.runInteractive(ctx, c.root, "fetch", from, ref); err != nil {
-		return fmt.Errorf("fetch %s from %s: %w", ref, from, err)
+		return fmt.Errorf("fetch %s from %s: %w", ref, WithoutPassword(from), err)
 	}
 
 	return nil
+}
+
+// WithoutPassword is remote as it may be printed: a URL holding a password
+// (https://user:password@host/…) loses it and keeps its user. A message
+// lands on the screen, and a command copied from it in the shell's history.
+func WithoutPassword(remote string) string {
+	u, err := url.Parse(remote)
+	if err != nil || u.User == nil {
+		return remote
+	}
+	if _, has := u.User.Password(); !has {
+		return remote
+	}
+	u.User = url.User(u.User.Username())
+
+	return u.String()
 }
 
 // IsAncestor reports whether child is an ancestor of ancestor (or equal).

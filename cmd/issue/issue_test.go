@@ -37,6 +37,7 @@ func (f *fakeIssueTracker) AddComment(_ context.Context, _, _ string) (tracker.C
 func (f *fakeIssueTracker) GetIssue(_ context.Context, _ string) (tracker.Issue, error) {
 	return tracker.Issue{}, nil
 }
+func (f *fakeIssueTracker) AssignToMe(_ context.Context, _ string) error            { return nil }
 func (f *fakeIssueTracker) UpdateIssue(_ context.Context, _, _, _ string) error     { return nil }
 func (f *fakeIssueTracker) SetLabels(_ context.Context, _ string, _ []string) error { return nil }
 func (f *fakeIssueTracker) ListLabels(_ context.Context) ([]string, error)          { return nil, nil }

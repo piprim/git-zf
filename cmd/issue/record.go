@@ -46,6 +46,7 @@ func (huhRecordPrompter) NewIssue(
 	ctx context.Context, allowedTypes, choices []string, single bool, in *issuepkg.NewIssue,
 ) error {
 	fields, labels := tui.IssueLabelFields(choices, nil, single)
+	fields = append(fields, tui.IssueAssignField(&in.Assign))
 	if err := tui.Form(
 		tui.IssueNewForm(&in.Title, &in.BranchType, &in.Description, allowedTypes, fields...),
 	).RunWithContext(ctx); err != nil {

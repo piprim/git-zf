@@ -553,3 +553,35 @@ func TestDecodeOp_ContentFields(t *testing.T) {
 		}
 	})
 }
+
+func TestFold_Assign(t *testing.T) {
+	t.Parallel()
+
+	create := op("c0", OpCreate, "2026-10-01T10:00:00Z")
+	alice := op("c1", OpAssign, "2026-10-01T11:00:00Z", "c0")
+	alice.Value = "alice <alice@test.com>"
+	bob := op("c2", OpAssign, "2026-10-01T12:00:00Z", "c1")
+	bob.Value = "bob <bob@test.com>"
+
+	t.Run("an issue starts unassigned", func(t *testing.T) {
+		t.Parallel()
+
+		if got := Fold("c0", []Op{create}).Assignee; got != "" {
+			t.Errorf("Assignee = %q, want empty", got)
+		}
+	})
+	t.Run("assign sets the assignee", func(t *testing.T) {
+		t.Parallel()
+
+		if got := Fold("c0", []Op{create, alice}).Assignee; got != "alice <alice@test.com>" {
+			t.Errorf("Assignee = %q", got)
+		}
+	})
+	t.Run("the last assign wins", func(t *testing.T) {
+		t.Parallel()
+
+		if got := Fold("c0", []Op{create, alice, bob}).Assignee; got != "bob <bob@test.com>" {
+			t.Errorf("Assignee = %q", got)
+		}
+	})
+}

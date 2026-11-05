@@ -76,11 +76,11 @@ func TestGenerate(t *testing.T) {
 
 	t.Run("angle-bracket placeholders survive in prose", func(t *testing.T) {
 		got := read(t, "git_zf_review_approve.md")
-		if !strings.Contains(got, "&lt;IssueID&gt;@review") {
-			t.Errorf("git_zf_review_approve.md: <IssueID> is not escaped in prose; it renders as an empty element")
+		if !strings.Contains(got, "&lt;ID&gt;@review") {
+			t.Errorf("git_zf_review_approve.md: <ID> is not escaped in prose; it renders as an empty element")
 		}
-		if strings.Contains(got, "<IssueID>") {
-			t.Errorf("git_zf_review_approve.md: a bare <IssueID> remains")
+		if strings.Contains(got, "<ID>") {
+			t.Errorf("git_zf_review_approve.md: a bare <ID> remains")
 		}
 	})
 

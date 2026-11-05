@@ -108,6 +108,34 @@ func TestFake_Mirror(t *testing.T) {
 	})
 }
 
+func TestFake_AssignToMe(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	t.Run("the call is recorded and the issue is listed as assigned to me", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1"}, {ID: "2"}}}
+		if err := ft.AssignToMe(ctx, "2"); err != nil {
+			t.Fatalf("AssignToMe: %v", err)
+		}
+		listed, _ := ft.ListIssues(ctx)
+		if !slices.Equal(ft.RecordedAssigns, []string{"2"}) || listed[0].AssignedToMe || !listed[1].AssignedToMe {
+			t.Errorf("assigns = %v, listed = %+v", ft.RecordedAssigns, listed)
+		}
+	})
+
+	t.Run("AssignErr is returned and nothing is recorded", func(t *testing.T) {
+		t.Parallel()
+
+		ft := &Tracker{ProjectIssues: []tracker.Issue{{ID: "1"}}, AssignErr: errors.New("forbidden")}
+		if err := ft.AssignToMe(ctx, "1"); err == nil || len(ft.RecordedAssigns) != 0 {
+			t.Errorf("err = %v, assigns = %v", err, ft.RecordedAssigns)
+		}
+	})
+}
+
 func TestFake_Content(t *testing.T) {
 	t.Parallel()
 

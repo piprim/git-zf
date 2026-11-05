@@ -52,6 +52,9 @@ once. Open and closed travel both ways too.
   repository wins and one warning names the tracker's value.
 - A label the tracker lacks is created there. `issue label` and `issue new`
   offer the tracker's labels.
+- An issue you assign to yourself in `issue new` is assigned to your
+  tracker account when the mirror creates it there. Assignments made later,
+  or in the tracker's web UI, do not travel.
 - On Redmine, which has no labels, the status is the one label:
   `issue label +Resolved -New` is a status change, and the form is a single
   pick.

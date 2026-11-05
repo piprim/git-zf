@@ -28,6 +28,7 @@ func (s *stubTracker) ListComments(_ context.Context, _ string) ([]tracker.Comme
 	return nil, nil
 }
 func (s *stubTracker) IsIssueClosed(_ context.Context, _ string) (bool, error) { return false, nil }
+func (s *stubTracker) AssignToMe(_ context.Context, _ string) error            { return nil }
 
 func TestIssueClean(t *testing.T) {
 	got := tracker.Issue{

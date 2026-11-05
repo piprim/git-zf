@@ -32,11 +32,12 @@ Passing any flag skips the form.`,
 	f.StringVar(&in.BranchType, "type", "", "branch type, one of the configured commit types (default: the first)")
 	f.StringVar(&in.Description, "description", "", "issue description")
 	f.StringArrayVar(&in.Labels, "label", nil, "label to add (repeatable)")
+	f.BoolVar(&in.Assign, "assign", false, "assign the issue to you")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		// Only this command's flags count: NFlag also counts the inherited
 		// --debug.
-		passed := slices.ContainsFunc([]string{"title", "type", "description", "label"}, cmd.Flags().Changed)
+		passed := slices.ContainsFunc([]string{"title", "type", "description", "label", "assign"}, cmd.Flags().Changed)
 
 		return i.newRunE(cmd, in, !passed)
 	}
@@ -72,6 +73,8 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 		// The tracker is asked for its labels for the form alone: a flag-driven
 		// run never reaches it.
 		choices, single := labelChoices(ctx, client, m, nil)
+		// The form proposes to assign the issue to its creator.
+		in.Assign = true
 		if err := p.NewIssue(ctx, types, choices, single, &in); err != nil {
 			return fmt.Errorf("issue form: %w", err)
 		}

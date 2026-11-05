@@ -1316,3 +1316,42 @@ func TestListIssues_ProjectContent(t *testing.T) {
 		}
 	})
 }
+
+func TestAssignToMe(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the token's user becomes the issue's assignee", func(t *testing.T) {
+		t.Parallel()
+
+		var sent struct{ Assignees []string }
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v1/user":
+				fmt.Fprint(w, `{"login": "alice"}`)
+			case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/repos/a/b/issues/57":
+				_ = json.NewDecoder(r.Body).Decode(&sent)
+				fmt.Fprint(w, `{"number": 57}`)
+			default:
+				http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
+			}
+		})
+
+		if err := a.AssignToMe(t.Context(), "57"); err != nil {
+			t.Fatalf("AssignToMe: %v", err)
+		}
+		if !slices.Equal(sent.Assignees, []string{"alice"}) {
+			t.Errorf("assignees sent = %v, want [alice]", sent.Assignees)
+		}
+	})
+
+	t.Run("a server error is reported", func(t *testing.T) {
+		t.Parallel()
+
+		a := newMirrorAdapter(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "down", http.StatusInternalServerError)
+		})
+		if err := a.AssignToMe(t.Context(), "57"); err == nil || !strings.Contains(err.Error(), "500") {
+			t.Errorf("err = %v", err)
+		}
+	})
+}
