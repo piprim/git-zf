@@ -289,3 +289,89 @@ func TestRunBranchTable_NoTTY(t *testing.T) {
 		}
 	})
 }
+
+func TestRunKey(t *testing.T) {
+	plain := branch.Row{BranchName: "spike", Plain: true}
+	inProgress := branch.Row{BranchName: "42@feat@assign", IssueSlug: "42", Status: branch.StatusInProgress}
+	merged := branch.Row{BranchName: "51@fix@prune", IssueSlug: "51", Status: branch.StatusMerged}
+
+	t.Run("C checks out and does not reopen", func(t *testing.T) {
+		rig := newTableRig(t)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "C", plain)
+		cur, _ := rig.client.CurrentBranch()
+		if err != nil || reopen || cur != "spike" {
+			t.Errorf("err = %v, reopen = %v, current = %q", err, reopen, cur)
+		}
+	})
+	t.Run("c calls closeIssue with the row's slug and branch and does not reopen", func(t *testing.T) {
+		rig := newTableRig(t)
+		d := rig.deps()
+		var gotSlug, gotName string
+		d.closeIssue = func(_ context.Context, slug, name string) error { gotSlug, gotName = slug, name; return nil }
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "c", inProgress)
+		if err != nil || reopen || gotSlug != "42" || gotName != "42@feat@assign" {
+			t.Errorf("err = %v, reopen = %v, slug = %q, name = %q", err, reopen, gotSlug, gotName)
+		}
+	})
+	t.Run("m merges the plain row and reopens", func(t *testing.T) {
+		rig := newTableRig(t)
+		d := rig.deps()
+		var got SourceBranch
+		d.merge = func(_ context.Context, src SourceBranch) error { got = src; return nil }
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "m", plain)
+		if err != nil || !reopen || got != (SourceBranch{Name: "spike"}) {
+			t.Errorf("err = %v, reopen = %v, got = %+v", err, reopen, got)
+		}
+	})
+	t.Run("u calls pr and reopens", func(t *testing.T) {
+		rig := newTableRig(t)
+		d := rig.deps()
+		var got string
+		d.pr = func(_ context.Context, name string) error { got = name; return nil }
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "u", plain)
+		if err != nil || !reopen || got != "spike" {
+			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
+		}
+	})
+	t.Run("a records the branch closed and reopens", func(t *testing.T) {
+		rig := newTableRig(t)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "a", inProgress)
+		if err != nil || !reopen || rig.statusOf(t, "42@feat@assign") != branch.StatusClosed {
+			t.Errorf("err = %v, reopen = %v, status = %q", err, reopen, rig.statusOf(t, "42@feat@assign"))
+		}
+	})
+	t.Run("t calls track and reopens", func(t *testing.T) {
+		rig := newTableRig(t)
+		d := rig.deps()
+		var got string
+		d.track = func(_ context.Context, name string) error { got = name; return nil }
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "t", plain)
+		if err != nil || !reopen || got != "spike" {
+			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
+		}
+	})
+	t.Run("l calls log and reopens", func(t *testing.T) {
+		rig := newTableRig(t)
+		d := rig.deps()
+		var got string
+		d.log = func(_ context.Context, ref string) error { got = ref; return nil }
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "l", plain)
+		if err != nil || !reopen || got != "refs/heads/spike" {
+			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
+		}
+	})
+	t.Run("D deletes the branch and reopens", func(t *testing.T) {
+		rig := newTableRig(t)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "D", merged)
+		if err != nil || !reopen || rig.hasBranch(t, "51@fix@prune") {
+			t.Errorf("err = %v, reopen = %v, exists = %v", err, reopen, rig.hasBranch(t, "51@fix@prune"))
+		}
+	})
+	t.Run("a key the row does not offer runs nothing", func(t *testing.T) {
+		rig := newTableRig(t)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "m", inProgress)
+		if !reopen || err == nil || !strings.Contains(err.Error(), "m") {
+			t.Errorf("reopen = %v, err = %v", reopen, err)
+		}
+	})
+}

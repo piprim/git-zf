@@ -46,6 +46,8 @@ type issueListInfra struct {
 	// `issue close` is (a squash checks the base out there); listAction
 	// fills issueID. A nil pushConfirm (the tests) disables the push step.
 	close closeDeps
+	// table holds the table's filters and cursor across reopens.
+	table *tui.IssueTableOptions
 }
 
 func (ir Issue) getIssueListCmd() *cobra.Command {
@@ -62,13 +64,15 @@ Columns: Issue ID, [Project], Title, Branch, Local Status, Issue Status,
 Created. Labels follow the title in brackets. "∅" means no branch started
 yet; "N.A." means the row has neither a tracker nor a repository issue.
 
-Keys: enter shows the issue, e edits it, s starts it, n files a new one,
-c closes the one under the cursor by merging its branch (as git zf issue
-close <id>; a row without a branch is told so), a twice abandons it (as
-git zf issue abandon <id>: the first press asks for the second, there is
-no undo), l edits its labels, r syncs, / filters the rows, tab cycles
-open/closed/all, p picks the project, m keeps the issues assigned to you,
-q quits.
+Keys: Enter opens the actions of the issue under the cursor: show, start,
+close, edit, label, comment, abandon, as its state allows. Shortcut keys: e
+edits it, s starts it, n files a new one, c closes the one under the cursor
+by merging its branch (as git zf issue close <id>; a row without a branch is
+told so), a twice abandons it (as git zf issue abandon <id>: the first press
+asks for the second, there is no undo), l edits its labels, r syncs, /
+filters the rows, tab cycles open/closed/all, p picks the project, m keeps
+the issues assigned to you, q quits. After an action the table reopens as it
+was left.
 
 --stdout prints the table without the TUI, --json prints the rows.`,
 	}
@@ -120,6 +124,7 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 			client: mainClient, cfg: ir.appConfig, tracker: t, invokedFrom: invokedFrom,
 			invokedBranch: invokedBranchFor(ctx, mainClient, invokedFrom), pushConfirm: pushflow.NewHuhConfirm(),
 		},
+		table: &tui.IssueTableOptions{Status: flags.status},
 	}
 
 	for {
@@ -165,6 +170,8 @@ func (ir Issue) listAction(
 		err = runAbandon(ctx, infra.client, p, []string{row.IssueSlug}, infra.mirror)
 	case tui.IssuePickLabel:
 		err = runLabel(ctx, infra.client, p, []string{row.IssueSlug}, infra.mirror)
+	case tui.IssuePickComment:
+		err = runComment(ctx, infra.client, p, []string{row.IssueSlug}, "", infra.mirror)
 	case tui.IssuePickSync:
 		err = runSync(ctx, infra.client, infra.mirror)
 	case tui.IssuePickNone:
@@ -229,13 +236,20 @@ func runList(
 		},
 		Start: true, // s starts the issue under the cursor
 	}
-	m, err := tui.IssueTableModel(rows, flags.status, actions)
+	opts := tui.IssueTableOptions{Status: flags.status}
+	if infra.table != nil {
+		opts = *infra.table
+	}
+	m, err := tui.IssueTableModelWith(rows, opts, actions)
 	if err != nil {
 		return tui.IssuePickNone, nil, fmt.Errorf("failed to construct issue table: %w", err)
 	}
 	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	if err != nil {
 		return tui.IssuePickNone, nil, fmt.Errorf("run table: %w", err)
+	}
+	if infra.table != nil {
+		*infra.table = tui.IssueTableState(final)
 	}
 	pick, slug := tui.PickedIssue(final)
 	if slug == "" {

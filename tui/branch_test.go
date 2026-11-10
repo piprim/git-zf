@@ -110,10 +110,13 @@ func TestBranchTable_Rows(t *testing.T) {
 	})
 	t.Run("the footer lists the keys", func(t *testing.T) {
 		v := BranchTableModel(rows, opts).View()
-		for _, want := range []string{"S status", "T type", "R remotes", "P prune-tracker", "q quit"} {
+		for _, want := range []string{"[S]tatus", "[T]ype", "[R]emotes", "[P]rune-tracker"} {
 			if !strings.Contains(v, want) {
 				t.Errorf("footer lacks %q:\n%s", want, v)
 			}
+		}
+		if strings.Contains(v, "quit") {
+			t.Errorf("footer shows quit:\n%s", v)
 		}
 	})
 }
@@ -171,7 +174,7 @@ func TestBranchTable_Filters(t *testing.T) {
 	t.Run("no status checked shows No branch matches and the footer", func(t *testing.T) {
 		m := BranchTableModel(rows, opts)
 		m.(*branchTableModel).setStatuses([]string{})
-		shows(t, m.View(), []string{"No branch matches.", "S status"}, []string{"spike", "master"})
+		shows(t, m.View(), []string{"No branch matches.", "[S]tatus"}, []string{"spike", "master"})
 	})
 	t.Run("active filters are named above the footer", func(t *testing.T) {
 		o := opts
@@ -259,6 +262,149 @@ func TestBranchTable_Review(t *testing.T) {
 		_, want := PickedBranch(func() tea.Model { r, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); return r }())
 		if row == nil || want == nil || row.BranchName != want.BranchName {
 			t.Errorf("cursor row = %+v, want %+v", row, want)
+		}
+	})
+}
+
+func TestBranchTable_ActionKeys(t *testing.T) {
+	rows := branchTestRows(time.Now())
+	opts := BranchTableOptions{Types: []string{"feat", "fix"}, Remote: "origin"}
+
+	for _, key := range []rune{'C', 'c', 'm', 'u', 't', 'l'} {
+		t.Run(string(key)+" quits with the key and the row", func(t *testing.T) {
+			m, cmd := BranchTableModel(rows, opts).Update(runeKey(key))
+			pick, row := PickedBranch(m)
+			gotKey := PickedBranchKey(m)
+			if !quitsCmd(cmd) || pick != BranchPickKey || row == nil || row.BranchName != rows[0].BranchName || gotKey != string(key) {
+				t.Errorf("quits = %v, pick = %v, row = %+v, key = %q", quitsCmd(cmd), pick, row, gotKey)
+			}
+		})
+	}
+
+	t.Run("a once arms and shows the notice", func(t *testing.T) {
+		m, cmd := BranchTableModel(rows, opts).Update(runeKey('a'))
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "a again abandons master (no undo)") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("a twice quits with a", func(t *testing.T) {
+		m, _ := BranchTableModel(rows, opts).Update(runeKey('a'))
+		m, cmd := m.Update(runeKey('a'))
+		pick, row := PickedBranch(m)
+		if !quitsCmd(cmd) || pick != BranchPickKey || row == nil || row.BranchName != "master" || PickedBranchKey(m) != "a" {
+			t.Errorf("quits = %v, pick = %v, row = %+v, key = %q", quitsCmd(cmd), pick, row, PickedBranchKey(m))
+		}
+	})
+
+	t.Run("D once arms and shows the notice", func(t *testing.T) {
+		m, cmd := BranchTableModel(rows, opts).Update(runeKey('D'))
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "D again deletes master") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("D twice quits with D", func(t *testing.T) {
+		m, _ := BranchTableModel(rows, opts).Update(runeKey('D'))
+		m, cmd := m.Update(runeKey('D'))
+		pick, row := PickedBranch(m)
+		if !quitsCmd(cmd) || pick != BranchPickKey || row == nil || row.BranchName != "master" || PickedBranchKey(m) != "D" {
+			t.Errorf("quits = %v, pick = %v, row = %+v, key = %q", quitsCmd(cmd), pick, row, PickedBranchKey(m))
+		}
+	})
+
+	t.Run("another key disarms", func(t *testing.T) {
+		m, _ := BranchTableModel(rows, opts).Update(runeKey('a'))
+		m, _ = m.Update(runeKey('j'))
+		m, _ = m.Update(runeKey('k'))
+		m, cmd := m.Update(runeKey('a'))
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "a again abandons master (no undo)") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("arming does not follow the cursor", func(t *testing.T) {
+		m, _ := BranchTableModel(rows, opts).Update(runeKey('a'))
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m, cmd := m.Update(runeKey('a'))
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "a again abandons 42@feat@assign (no undo)") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("a key the row does not offer shows the notice and stays", func(t *testing.T) {
+		o := opts
+		o.Offers = func(_ branch.Row, key string) bool { return key != "m" }
+		m, cmd := BranchTableModel(rows, o).Update(runeKey('m'))
+		pick, _ := PickedBranch(m)
+		if quitsCmd(cmd) || pick != BranchPickNone || !strings.Contains(m.View(), "no merge for this branch") {
+			t.Errorf("quits = %v, pick = %v, view = %q", quitsCmd(cmd), pick, m.View())
+		}
+	})
+
+	t.Run("a and D not offered are refused on the first press", func(t *testing.T) {
+		o := opts
+		o.Offers = func(_ branch.Row, key string) bool { return key != "a" }
+		m, cmd := BranchTableModel(rows, o).Update(runeKey('a'))
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "no abandon for this branch") {
+			t.Fatalf("first a: quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+		m, cmd = m.Update(runeKey('a'))
+		if quitsCmd(cmd) {
+			t.Error("second a must not quit")
+		}
+	})
+
+	t.Run("the notice goes with the next key", func(t *testing.T) {
+		o := opts
+		o.Offers = func(_ branch.Row, key string) bool { return key != "m" }
+		m, _ := BranchTableModel(rows, o).Update(runeKey('m'))
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		if strings.Contains(m.View(), "no merge") {
+			t.Errorf("view still holds notice:\n%s", m.View())
+		}
+	})
+
+	t.Run("an action key on an empty table does nothing", func(t *testing.T) {
+		m := BranchTableModel(rows, opts)
+		m.(*branchTableModel).setStatuses([]string{})
+		m, cmd := m.Update(runeKey('c'))
+		if pick, _ := PickedBranch(m); quitsCmd(cmd) || pick != BranchPickNone {
+			t.Errorf("quits = %v, pick = %v", quitsCmd(cmd), pick)
+		}
+	})
+
+	t.Run("D typed in the filter is text", func(t *testing.T) {
+		m, _ := BranchTableModel(rows, opts).Update(runeKey('/'))
+		m, _ = m.Update(runeKey('D'))
+		m, cmd := m.Update(runeKey('D'))
+		if quitsCmd(cmd) || m.(*branchTableModel).filter.Value() != "DD" {
+			t.Errorf("quits = %v, filter = %q", quitsCmd(cmd), m.(*branchTableModel).filter.Value())
+		}
+	})
+
+	t.Run("d still scrolls", func(t *testing.T) {
+		m, cmd := BranchTableModel(rows, opts).Update(runeKey('d'))
+		if quitsCmd(cmd) || m.(*branchTableModel).notice != "" {
+			t.Errorf("quits = %v, notice = %q", quitsCmd(cmd), m.(*branchTableModel).notice)
+		}
+	})
+
+	t.Run("the view has the two key lines", func(t *testing.T) {
+		v := BranchTableModel(rows, opts).View()
+		line1 := "[S]tatus  [T]ype  [R]emotes  [/]-Filter"
+		line2 := "[enter]-Actions  [C]heckout  [c]lose  [m]erge  [u]-Pull request  [a]bandon  [t]rack  [l]og  [D]elete  [n]ew  [p]rune  [P]rune-tracker"
+		if !strings.Contains(v, line1+"\n"+line2) {
+			t.Errorf("view misses key lines:\n%s", v)
+		}
+	})
+
+	t.Run("the state keeps Offers", func(t *testing.T) {
+		o := opts
+		o.Offers = func(branch.Row, string) bool { return true }
+		m := BranchTableModel(rows, o)
+		if BranchTableState(m).Offers == nil {
+			t.Error("BranchTableState lost Offers")
 		}
 	})
 }

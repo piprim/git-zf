@@ -11,6 +11,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
+	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	issuepkg "github.com/piprim/git-zf/issue"
@@ -351,3 +352,13 @@ func (f *fakeIssueTracker) CreateIssue(_ context.Context, _, _ string) (tracker.
 }
 
 func (f *fakeIssueTracker) SetIssueOpen(_ context.Context, _ string, _ bool) error { return nil }
+
+func TestIssueListCmd_Long(t *testing.T) {
+	long := New(&config.AppConfig{}).getIssueListCmd().Long
+
+	t.Run("describes the menu and the comment action", func(t *testing.T) {
+		if !strings.Contains(long, "Enter opens the actions") || !strings.Contains(long, "comment") {
+			t.Errorf("Long:\n%s", long)
+		}
+	})
+}

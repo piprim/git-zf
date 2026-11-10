@@ -65,8 +65,12 @@ branch under the cursor: checkout; issue close (merge) for an in-progress
 branch, the flow of git zf issue close; merge into current for a plain
 branch; pull request; abandon (record closed, no merge); track, which records
 a plain branch after the branch new form and renames it <id>@<type>@<slug>;
-log, the commits of that branch alone; delete. n creates a branch, p prunes,
-P prunes with the tracker, q quits. Without a terminal the rows are printed.
+log, the commits of that branch alone; delete. Each action also has a key on
+the row: C checks out, c closes the issue by merging, m merges into the
+current branch, u opens a pull request, a twice abandons, t tracks, l shows
+the log, D twice deletes; a key that does not apply to the row says so. n
+creates a branch, p prunes, P prunes with the tracker, q quits. Without a
+terminal the rows are printed.
 
 list shows the tracked branches, yours and the ones other clones started.
 prune records what happened to in-progress branches outside git-zf, and

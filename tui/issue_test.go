@@ -309,6 +309,14 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 
 		return m
 	}
+	openShow := func(m tea.Model) (tea.Model, tea.Cmd) {
+		m, _ = m.Update(key(tea.KeyEnter))
+		model := m.(*issueTableModel)
+		model.menuPicked = string(issueEntryShow)
+		model.form.State = huh.StateCompleted
+
+		return m.Update(key(tea.KeyTab))
+	}
 	var shown []string
 	show := func(slug string) (string, error) {
 		shown = append(shown, slug)
@@ -316,13 +324,13 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 		return "ISSUE " + slug + " BODY", nil
 	}
 
-	t.Run("enter shows the row under the cursor in the dialog", func(t *testing.T) {
+	t.Run("show from the menu opens the row under the cursor in the dialog", func(t *testing.T) {
 		shown = nil
 		m := newTable(t, show)
 		m, _ = m.Update(key(tea.KeyDown))
-		m, cmd := m.Update(key(tea.KeyEnter))
-		if cmd != nil {
-			t.Error("enter must not quit")
+		m, cmd := openShow(m)
+		if quitsCmd(cmd) {
+			t.Error("show must not quit")
 		}
 		if v := m.View(); !strings.Contains(v, "ISSUE B BODY") || !strings.Contains(v, "esc: back") {
 			t.Errorf("view = %q", v)
@@ -336,12 +344,12 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 		shown = nil
 		m := newTable(t, show)
 		m, _ = m.Update(key(tea.KeyDown))
-		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = openShow(m)
 		m, _ = m.Update(key(tea.KeyEsc))
-		if v := m.View(); !strings.Contains(v, "enter: show") || strings.Contains(v, "ISSUE B BODY") {
+		if v := m.View(); !strings.Contains(v, "[enter]-Actions") || strings.Contains(v, "ISSUE B BODY") {
 			t.Errorf("view = %q", v)
 		}
-		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = openShow(m)
 		if !slices.Equal(shown, []string{"B", "B"}) {
 			t.Errorf("shown = %v", shown)
 		}
@@ -349,20 +357,20 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 
 	t.Run("q closes the dialog, it does not quit", func(t *testing.T) {
 		m := newTable(t, show)
-		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = openShow(m)
 		m, cmd := m.Update(runeKey('q'))
 		if cmd != nil || strings.Contains(m.View(), "ISSUE A BODY") {
 			t.Errorf("cmd = %v, view = %q", cmd, m.View())
 		}
 	})
 
-	t.Run("enter within the filtered rows shows the matching issue", func(t *testing.T) {
+	t.Run("show within the filtered rows shows the matching issue", func(t *testing.T) {
 		shown = nil
 		m := newTable(t, show)
 		m, _ = m.Update(runeKey('/'))
 		m, _ = m.Update(runeKey('B'))
 		m, _ = m.Update(key(tea.KeyEnter)) // leave filtering
-		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = openShow(m)
 		if !slices.Equal(shown, []string{"B"}) {
 			t.Errorf("shown = %v", shown)
 		}
@@ -370,17 +378,9 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 
 	t.Run("a show error is displayed in the dialog", func(t *testing.T) {
 		m := newTable(t, func(string) (string, error) { return "", errors.New("no such issue") })
-		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = openShow(m)
 		if v := m.View(); !strings.Contains(v, "Error: no such issue") {
 			t.Errorf("view = %q", v)
-		}
-	})
-
-	t.Run("without a shower enter does nothing", func(t *testing.T) {
-		m := newTable(t, nil)
-		m, cmd := m.Update(key(tea.KeyEnter))
-		if cmd != nil || !strings.Contains(m.View(), "enter: show") {
-			t.Errorf("cmd = %v, view = %q", cmd, m.View())
 		}
 	})
 
@@ -396,7 +396,7 @@ func TestIssueTable_EnterOpensDialog(t *testing.T) {
 			return "Description: a line far longer than the thirty columns of this terminal", nil
 		})
 		m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 20})
-		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = openShow(m)
 		if v := m.View(); !strings.Contains(v, "Description:") {
 			t.Fatalf("view = %q", v)
 		}
@@ -482,7 +482,7 @@ func TestIssueTable_EditDialog(t *testing.T) {
 		m := newTable(t, actions)
 		m, _ = m.Update(runeKey('e'))
 		m, _ = m.Update(key(tea.KeyEsc))
-		if v := m.View(); !strings.Contains(v, "enter: show") || strings.Contains(v, "Title:") {
+		if v := m.View(); !strings.Contains(v, "[enter]-Actions") || strings.Contains(v, "Title:") {
 			t.Errorf("view = %q", v)
 		}
 		if len(edits) != 0 {
@@ -499,7 +499,7 @@ func TestIssueTable_EditDialog(t *testing.T) {
 			t.Errorf("edits = %v", edits)
 		}
 		v := m.View()
-		for _, want := range []string{"New B", "Edited B", "enter: show"} {
+		for _, want := range []string{"New B", "Edited B", "[enter]-Actions"} {
 			if !strings.Contains(v, want) {
 				t.Errorf("view misses %q:\n%s", want, v)
 			}
@@ -514,12 +514,16 @@ func TestIssueTable_EditDialog(t *testing.T) {
 		m := newTable(t, actions)
 		m, _ = m.Update(key(tea.KeyDown))
 		m, _ = m.Update(key(tea.KeyEnter))
+		model := m.(*issueTableModel)
+		model.menuPicked = string(issueEntryShow)
+		model.form.State = huh.StateCompleted
+		m, _ = m.Update(key(tea.KeyTab))
 		m, _ = m.Update(runeKey('e'))
 		if v := m.View(); !strings.Contains(v, "Title B") || strings.Contains(v, "ISSUE B BODY") {
 			t.Errorf("view = %q", v)
 		}
 		m = complete(m, "New B")
-		if !slices.Equal(edits, []edit{{"B", "New B", "Desc B"}}) || !strings.Contains(m.View(), "enter: show") {
+		if !slices.Equal(edits, []edit{{"B", "New B", "Desc B"}}) || !strings.Contains(m.View(), "[enter]-Actions") {
 			t.Errorf("edits = %v, view = %q", edits, m.View())
 		}
 	})
@@ -529,7 +533,7 @@ func TestIssueTable_EditDialog(t *testing.T) {
 		a.Load = func(string) (string, string, error) { return "", "", errors.New("no such issue") }
 		m := newTable(t, a)
 		m, _ = m.Update(runeKey('e'))
-		if v := m.View(); !strings.Contains(v, "Error: no such issue") || !strings.Contains(v, "enter: show") {
+		if v := m.View(); !strings.Contains(v, "Error: no such issue") || !strings.Contains(v, "[enter]-Actions") {
 			t.Errorf("view = %q", v)
 		}
 	})
@@ -590,10 +594,10 @@ func TestIssueTable_Pick(t *testing.T) {
 		}
 	})
 
-	t.Run("enter in list mode still shows the issue", func(t *testing.T) {
+	t.Run("enter in list mode opens the menu", func(t *testing.T) {
 		m := newTable(t, IssueActions{Show: show})
 		m, cmd := m.Update(key(tea.KeyEnter))
-		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "ISSUE A BODY") {
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "Issue A: A") {
 			t.Errorf("quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
 		}
 	})
@@ -639,10 +643,10 @@ func TestIssueTable_Pick(t *testing.T) {
 	t.Run("the hint names the keys of the mode", func(t *testing.T) {
 		list := newTable(t, IssueActions{Show: show}).View()
 		pick := newTable(t, IssueActions{Pick: true}).View()
-		if !strings.Contains(list, "enter: show · e: edit · s: start") {
+		if !strings.Contains(list, "[enter]-Actions  [e]dit  [s]tart") {
 			t.Errorf("list hint missing in %q", list)
 		}
-		if !strings.Contains(pick, "enter: pick · q: quit") || strings.Contains(pick, "n: new") {
+		if !strings.Contains(pick, "[enter]-Pick  [q]uit") || strings.Contains(pick, "[n]ew") {
 			t.Errorf("pick hint wrong in %q", pick)
 		}
 	})
@@ -650,7 +654,7 @@ func TestIssueTable_Pick(t *testing.T) {
 	t.Run("the filters and the keys are two lines under 90 columns", func(t *testing.T) {
 		lines := strings.Split(newTable(t, IssueActions{Show: show}).View(), "\n")
 		filters, keys := lines[len(lines)-2], lines[len(lines)-1]
-		if !strings.Contains(filters, "Open") || !strings.Contains(filters, "tab: status · m: mine · /: filter") {
+		if !strings.Contains(filters, "Open") || !strings.Contains(filters, "[tab]-Status  [m]ine  [/]-Filter") {
 			t.Errorf("filters line = %q", filters)
 		}
 		for _, l := range []string{filters, keys} {
@@ -793,8 +797,362 @@ func TestIssueTable_ActionKeys(t *testing.T) {
 	}
 
 	t.Run("the list hint names the action keys", func(t *testing.T) {
-		if v := newTable(t, IssueActions{Start: true}).View(); !strings.Contains(v, "n: new · c: close · a: abandon · l: label · r: sync") {
+		if v := newTable(t, IssueActions{Start: true}).View(); !strings.Contains(v, "[n]ew  [c]lose  [a]bandon  [l]abel  [r]-Sync") {
 			t.Errorf("hint missing in %q", v)
+		}
+	})
+}
+
+func TestIssueTableState(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "Alpha", Project: "p1", AssignedToMe: true},
+		{IssueSlug: "B", Title: "Beta", Project: "p2", AssignedToMe: true},
+		{IssueSlug: "C", Title: "Charlie", Project: "p1", AssignedToMe: true},
+		{IssueSlug: "D", Title: "Delta", Project: "p1", State: issue.StateClosed, AssignedToMe: true},
+		{IssueSlug: "E", Title: "Echo", Project: "p2", State: issue.StateClosed, AssignedToMe: true},
+	}
+	key := func(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
+	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+
+	t.Run("a table rebuilt from its state is as it was left", func(t *testing.T) {
+		m, err := IssueTableModel(rows, "open", IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, _ = m.Update(key(tea.KeyTab)) // closed
+		m, _ = m.Update(runeKey('m'))    // mine
+		m, _ = m.Update(runeKey('/'))
+		m, _ = m.Update(runeKey('e'))
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = m.Update(key(tea.KeyDown))
+		st := IssueTableState(m)
+		again, err := IssueTableModelWith(rows, st, IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again.View() != m.View() {
+			t.Errorf("views differ:\n%s\n---\n%s", again.View(), m.View())
+		}
+		if got := IssueTableState(again); got != st {
+			t.Errorf("state = %+v, want %+v", got, st)
+		}
+	})
+
+	t.Run("the project is kept", func(t *testing.T) {
+		m, err := IssueTableModel(rows, "open", IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, _ = m.Update(runeKey('p'))
+		m, _ = m.Update(key(tea.KeyDown))  // p1
+		m, _ = m.Update(key(tea.KeyEnter)) // confirm
+		st := IssueTableState(m)
+		again, err := IssueTableModelWith(rows, st, IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := IssueTableState(again).Project; got != "p1" {
+			t.Errorf("Project = %q, want p1", got)
+		}
+	})
+
+	t.Run("a cursor past the rows is clamped", func(t *testing.T) {
+		m, err := IssueTableModelWith(rows, IssueTableOptions{Status: "open", Cursor: 99}, IssueActions{Start: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := IssueTableState(m).Cursor; got != 2 {
+			t.Errorf("Cursor = %d, want 2", got)
+		}
+		m, _ = m.Update(runeKey('s'))
+		if _, slug := PickedIssue(m); slug != "C" {
+			t.Errorf("slug = %q, want C", slug)
+		}
+	})
+
+	t.Run("a project that is gone falls back to all", func(t *testing.T) {
+		m, err := IssueTableModelWith(rows, IssueTableOptions{Status: "open", Project: "nope"}, IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := m.View()
+		if !strings.Contains(v, "Alpha") || !strings.Contains(v, "Beta") {
+			t.Errorf("view misses rows:\n%s", v)
+		}
+	})
+
+	t.Run("an empty status is open", func(t *testing.T) {
+		m1, err := IssueTableModelWith(rows, IssueTableOptions{}, IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m2, err := IssueTableModel(rows, "", IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m1.View() != m2.View() {
+			t.Errorf("views differ:\n%s\n---\n%s", m1.View(), m2.View())
+		}
+	})
+
+	t.Run("a model that is not the table gives the zero state", func(t *testing.T) {
+		if got := IssueTableState(nil); got != (IssueTableOptions{}) {
+			t.Errorf("state = %+v", got)
+		}
+	})
+}
+
+func TestIssueMenuEntries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  issue.Row
+		want []issueMenuEntry
+	}{
+		{
+			"repository issue, open, no branch",
+			issue.Row{State: issue.StateOpen},
+			[]issueMenuEntry{issueEntryShow, issueEntryStart, issueEntryEdit, issueEntryLabel, issueEntryComment, issueEntryAbandon},
+		},
+		{
+			"repository issue, open, branch in progress",
+			issue.Row{State: issue.StateOpen, Branch: &branch.Row{Status: branch.StatusInProgress}},
+			[]issueMenuEntry{issueEntryShow, issueEntryStart, issueEntryClose, issueEntryEdit, issueEntryLabel, issueEntryComment},
+		},
+		{
+			"repository issue, open, merged branch is no branch",
+			issue.Row{State: issue.StateOpen, Branch: &branch.Row{Status: branch.StatusMerged}},
+			[]issueMenuEntry{issueEntryShow, issueEntryStart, issueEntryEdit, issueEntryLabel, issueEntryComment, issueEntryAbandon},
+		},
+		{
+			"repository issue, closed",
+			issue.Row{State: issue.StateClosed},
+			[]issueMenuEntry{issueEntryShow, issueEntryEdit, issueEntryLabel, issueEntryComment},
+		},
+		{
+			"not a repository issue, open, no branch",
+			issue.Row{},
+			[]issueMenuEntry{issueEntryShow, issueEntryStart},
+		},
+		{
+			"not a repository issue, branch in progress",
+			issue.Row{Branch: &branch.Row{Status: branch.StatusInProgress}},
+			[]issueMenuEntry{issueEntryShow, issueEntryStart, issueEntryClose},
+		},
+		{
+			"not a repository issue, merged branch",
+			issue.Row{Branch: &branch.Row{Status: branch.StatusMerged}},
+			[]issueMenuEntry{issueEntryShow},
+		},
+		{
+			"not a repository issue, closed branch",
+			issue.Row{Branch: &branch.Row{Status: branch.StatusClosed}},
+			[]issueMenuEntry{issueEntryShow},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := issueMenuEntries(&tc.row); !slices.Equal(got, tc.want) {
+				t.Errorf("issueMenuEntries = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIssueTable_Menu(t *testing.T) {
+	rows := []issue.Row{
+		{IssueSlug: "42", Title: "Backlog", State: issue.StateOpen},
+		{IssueSlug: "51", Title: "Started", State: issue.StateOpen, Branch: &branch.Row{Status: branch.StatusInProgress}},
+		{IssueSlug: "7", Title: "Done", State: issue.StateClosed},
+	}
+	key := func(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
+	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+	actions := IssueActions{
+		Show:  func(slug string) (string, error) { return "ISSUE " + slug + " BODY", nil },
+		Load:  func(slug string) (string, string, error) { return "Title " + slug, "Desc " + slug, nil },
+		Edit:  func(slug, title, description string) (string, error) { return "Edited " + slug, nil },
+		Start: true,
+	}
+	newTable := func(t *testing.T, a IssueActions) tea.Model {
+		t.Helper()
+		m, err := IssueTableModel(rows, "all", a)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return m
+	}
+	pickMenu := func(m tea.Model, entry issueMenuEntry) (tea.Model, tea.Cmd) {
+		model := m.(*issueTableModel)
+		model.menuPicked = string(entry)
+		model.form.State = huh.StateCompleted
+
+		return m.Update(key(tea.KeyTab))
+	}
+
+	t.Run("enter opens the menu under the table", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, cmd := m.Update(key(tea.KeyEnter))
+		if quitsCmd(cmd) {
+			t.Error("enter must not quit")
+		}
+		v := m.View()
+		for _, want := range []string{"Backlog", "Started", "Issue 42: Backlog", "show"} {
+			if !strings.Contains(v, want) {
+				t.Errorf("view misses %q:\n%s", want, v)
+			}
+		}
+	})
+
+	t.Run("esc closes the menu and the table is as it was", func(t *testing.T) {
+		m := newTable(t, actions)
+		before := m.View()
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = m.Update(key(tea.KeyEsc))
+		if m.View() != before {
+			t.Errorf("view after esc:\n%s\nwant:\n%s", m.View(), before)
+		}
+	})
+
+	for _, tc := range []struct {
+		entry issueMenuEntry
+		row   int
+		slug  string
+		want  IssuePick
+	}{
+		{issueEntryStart, 0, "42", IssuePickRow},
+		{issueEntryClose, 1, "51", IssuePickClose},
+		{issueEntryLabel, 0, "42", IssuePickLabel},
+		{issueEntryComment, 0, "42", IssuePickComment},
+	} {
+		t.Run(string(tc.entry)+" quits with its pick and the row's slug", func(t *testing.T) {
+			m := newTable(t, actions)
+			for range tc.row {
+				m, _ = m.Update(key(tea.KeyDown))
+			}
+			m, _ = m.Update(key(tea.KeyEnter))
+			m, cmd := pickMenu(m, tc.entry)
+			pick, slug := PickedIssue(m)
+			if !quitsCmd(cmd) || pick != tc.want || slug != tc.slug {
+				t.Errorf("quits = %v, pick = %v, slug = %q", quitsCmd(cmd), pick, slug)
+			}
+		})
+	}
+
+	t.Run("show opens the show dialog", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, cmd := pickMenu(m, issueEntryShow)
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "ISSUE 42 BODY") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("edit opens the edit form", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, cmd := pickMenu(m, issueEntryEdit)
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "Title 42") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("abandon asks, no leaves the table", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, cmd := pickMenu(m, issueEntryAbandon)
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "Abandon 42? There is no undo.") {
+			t.Fatalf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+		model := m.(*issueTableModel)
+		model.abandonOK = false
+		model.form.State = huh.StateCompleted
+		m, cmd = m.Update(key(tea.KeyTab))
+		if pick, _ := PickedIssue(m); quitsCmd(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "[enter]-Actions") {
+			t.Errorf("quits = %v, pick = %v, view = %q", quitsCmd(cmd), pick, m.View())
+		}
+	})
+
+	t.Run("abandon, yes quits with IssuePickAbandon", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, _ = pickMenu(m, issueEntryAbandon)
+		model := m.(*issueTableModel)
+		model.abandonOK = true
+		model.form.State = huh.StateCompleted
+		m, cmd := m.Update(key(tea.KeyTab))
+		if pick, slug := PickedIssue(m); !quitsCmd(cmd) || pick != IssuePickAbandon || slug != "42" {
+			t.Errorf("quits = %v, pick = %v, slug = %q", quitsCmd(cmd), pick, slug)
+		}
+	})
+
+	t.Run("enter in pick mode picks the row and opens no menu", func(t *testing.T) {
+		m := newTable(t, IssueActions{Pick: true})
+		m, cmd := m.Update(key(tea.KeyEnter))
+		if pick, slug := PickedIssue(m); !quitsCmd(cmd) || pick != IssuePickRow || slug != "42" {
+			t.Errorf("quits = %v, pick = %v, slug = %q", quitsCmd(cmd), pick, slug)
+		}
+	})
+
+	t.Run("the hint names the menu", func(t *testing.T) {
+		v := newTable(t, actions).View()
+		if !strings.Contains(v, "[enter]-Actions") || strings.Contains(v, "[enter]-Show") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("without a shower the menu has no show", func(t *testing.T) {
+		a := actions
+		a.Show = nil
+		m := newTable(t, a)
+		m, _ = m.Update(key(tea.KeyEnter))
+		if v := m.View(); strings.Contains(v, "show") || !strings.Contains(v, "start") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("without Load and Edit the menu has no edit", func(t *testing.T) {
+		a := actions
+		a.Load = nil
+		m := newTable(t, a)
+		m, _ = m.Update(key(tea.KeyEnter))
+		if v := m.View(); strings.Contains(v, "edit") || !strings.Contains(v, "show") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("enter on an empty table opens nothing", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(runeKey('/'))
+		for _, r := range "zzz" {
+			m, _ = m.Update(runeKey(r))
+		}
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, cmd := m.Update(key(tea.KeyEnter))
+		if quitsCmd(cmd) || m.(*issueTableModel).form != nil {
+			t.Errorf("quits = %v, form = %v", quitsCmd(cmd), m.(*issueTableModel).form)
+		}
+	})
+
+	t.Run("a row with no entry opens nothing", func(t *testing.T) {
+		m, err := IssueTableModel([]issue.Row{{IssueSlug: "1", Branch: &branch.Row{Status: branch.StatusMerged}}}, "all", IssueActions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, cmd := m.Update(key(tea.KeyEnter))
+		if quitsCmd(cmd) || m.(*issueTableModel).form != nil {
+			t.Errorf("quits = %v, form = %v", quitsCmd(cmd), m.(*issueTableModel).form)
+		}
+	})
+
+	t.Run("q and a go to the menu, not the table", func(t *testing.T) {
+		m := newTable(t, actions)
+		m, _ = m.Update(key(tea.KeyEnter))
+		m, cmd := m.Update(runeKey('q'))
+		if quitsCmd(cmd) || m.(*issueTableModel).form == nil {
+			t.Errorf("q in menu: quits = %v, form = %v", quitsCmd(cmd), m.(*issueTableModel).form)
+		}
+		m, cmd = m.Update(runeKey('a'))
+		if quitsCmd(cmd) || strings.Contains(m.View(), "a again abandons") {
+			t.Errorf("a in menu: quits = %v, view = %q", quitsCmd(cmd), m.View())
 		}
 	})
 }

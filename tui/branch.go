@@ -50,7 +50,21 @@ const (
 	BranchPickNew                            // n
 	BranchPickPrune                          // p
 	BranchPickPruneTracker                   // P
+	BranchPickKey                            // an action key (C, c, m, u, a, t, l, D): see PickedBranchKey
 )
+
+var branchActionKeys = []struct {
+	key, label string
+}{
+	{"C", "checkout"},
+	{"c", "close"},
+	{"m", "merge"},
+	{"u", "pull request"},
+	{"a", "abandon"},
+	{"t", "track"},
+	{"l", "log"},
+	{"D", "delete"},
+}
 
 // BranchStatusPlain is the S option for rows with no record.
 const BranchStatusPlain = "plain"
@@ -69,6 +83,8 @@ type BranchTableOptions struct {
 	Remotes      bool     // R on at start
 	Filter       string   // the / text at start
 	Cursor       int      // the row under the cursor at start
+	// Offers reports whether row offers the action of key; nil offers every key.
+	Offers func(row branch.Row, key string) bool
 }
 
 // BranchTableState is the options that rebuild m as the user left it: its
@@ -85,8 +101,9 @@ func BranchTableState(m tea.Model) BranchTableOptions {
 	return o
 }
 
-// PickedBranch reports how the table was quit and, for BranchPickRow, a copy
-// of the picked row. m is the model tea.Program.Run returned.
+// PickedBranch reports how the table was quit and, for BranchPickRow or
+// BranchPickKey, a copy of the picked row. m is the model tea.Program.Run
+// returned.
 func PickedBranch(m tea.Model) (BranchPick, *branch.Row) {
 	t, ok := m.(*branchTableModel)
 	if !ok {
@@ -96,10 +113,20 @@ func PickedBranch(m tea.Model) (BranchPick, *branch.Row) {
 	return t.pick, t.picked
 }
 
+// PickedBranchKey reports the action key of a BranchPickKey quit, "" otherwise.
+func PickedBranchKey(m tea.Model) string {
+	t, ok := m.(*branchTableModel)
+	if !ok || t.pick != BranchPickKey {
+		return ""
+	}
+
+	return t.pickedKey
+}
+
 // BranchTableModel is the table of every local branch: S and T open
 // multi-select filters under the table, R shows the remote-only rows, / filters
-// by text, enter picks the row under the cursor, n, p and P quit with their
-// pick (see PickedBranch).
+// by text, enter picks the row under the cursor, the action keys (C, c, m, u,
+// a, t, l, D) and n, p and P quit with their pick (see PickedBranch).
 func BranchTableModel(rows []branch.Row, opts BranchTableOptions) tea.Model {
 	cols := []btable.Column{
 		{Title: "Branch", Width: branchTableColWidthBranch},
@@ -171,12 +198,16 @@ type branchTableModel struct {
 	remotes   bool
 	// form is the S or T multi-select while it is open under the table;
 	// pending is its value, applied on completion.
-	form     *huh.Form
-	formKind string
-	pending  []string
-	pick     BranchPick
-	picked   *branch.Row
-	opts     BranchTableOptions
+	form      *huh.Form
+	formKind  string
+	pending   []string
+	notice    string
+	armKey    string
+	armBranch string
+	pick      BranchPick
+	picked    *branch.Row
+	pickedKey string
+	opts      BranchTableOptions
 	allTypes []string // the T options
 	width    int
 	now      time.Time
@@ -250,6 +281,10 @@ func (m *branchTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if m.filtering {
 			return m.updateFiltering(msg, key)
+		}
+		m.notice = ""
+		if key.String() != m.armKey {
+			m.armKey, m.armBranch = "", ""
 		}
 		if model, cmd, handled := m.updateNormal(key); handled {
 			return model, cmd
@@ -375,7 +410,46 @@ func (m *branchTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, boo
 		return m, m.filter.Focus(), true
 	}
 
+	for _, ak := range branchActionKeys {
+		if key.String() == ak.key {
+			return m.pickActionKey(ak.key, ak.label)
+		}
+	}
+
 	return m, nil, false
+}
+
+func (m *branchTableModel) pickActionKey(key, label string) (tea.Model, tea.Cmd, bool) {
+	c := m.table.Cursor()
+	if c < 0 || c >= len(m.visible) {
+		return m, nil, true
+	}
+	row := m.visible[c]
+	if m.opts.Offers != nil && !m.opts.Offers(row, key) {
+		m.notice = "no " + label + " for this branch"
+
+		return m, nil, true
+	}
+	switch key {
+	case "a":
+		if m.armKey != "a" || m.armBranch != row.BranchName {
+			m.armKey, m.armBranch = "a", row.BranchName
+			m.notice = "a again abandons " + row.BranchName + " (no undo)"
+
+			return m, nil, true
+		}
+	case "D":
+		if m.armKey != "D" || m.armBranch != row.BranchName {
+			m.armKey, m.armBranch = "D", row.BranchName
+			m.notice = "D again deletes " + row.BranchName
+
+			return m, nil, true
+		}
+	}
+	m.picked = &row
+	m.pickedKey = key
+
+	return m.quitWith(BranchPickKey)
 }
 
 // checked lists the values of all that set holds, in all's order.
@@ -416,12 +490,24 @@ func (m *branchTableModel) View() string {
 	if m.filtering {
 		return view + "/" + m.filter.View() + "  (esc: clear  enter: confirm)"
 	}
-	keys := "S status  T type  "
+	filters := []string{"S", "status", "T", "type"}
 	if m.opts.Remote != "" {
-		keys += "R remotes  "
+		filters = append(filters, "R", "remotes")
+	}
+	filters = append(filters, "/", "filter")
+
+	actions := []string{"enter", "actions"}
+	for _, ak := range branchActionKeys {
+		actions = append(actions, ak.key, ak.label)
+	}
+	actions = append(actions, "n", "new", "p", "prune", "P", "prune-tracker")
+
+	out := view + keyHints(filters...) + "\n" + keyHints(actions...)
+	if m.notice != "" {
+		return out + "\n" + m.notice
 	}
 
-	return view + keys + "/ filter  enter actions  n new  p prune  P prune-tracker  q quit"
+	return out
 }
 
 // relativeTime is how long before now t is: "2h ago", "1d ago", "3w ago",

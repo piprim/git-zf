@@ -291,12 +291,15 @@ To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`) or
 `git zf branch` has no menu either: it opens the branch table (see "Testing
 the branch table"). `git zf issue` has no
 menu: it runs `issue list` (`TestIssueRootCmd_ListsByDefault`), whose table
-prints to stdout when stdin is not a terminal. The table's keys `s`, `n`,
-`c` (the merge flow of `issue close <id>`), `a` (pressed twice: an abandon
-has no undo), `l` and `r` quit it with a
-`tui.IssuePick` (`TestIssueTable_ActionKeys`);
+prints to stdout when stdin is not a terminal. Enter opens a per-row menu
+(`issueMenuEntries`, `TestIssueMenuEntries`, `TestIssueTable_Menu`), and the
+keys `s`, `n`, `c` (the merge flow of `issue close <id>`), `a` (pressed
+twice: an abandon has no undo), `l` and `r` stay as shortcuts: the menu and
+the keys quit the table with a `tui.IssuePick` (`TestIssueTable_ActionKeys`),
+comment included (`tui.IssuePickComment`);
 `listAction` (`cmd/issue/list.go`, `TestListAction`) runs the command behind
-the key with the terminal free and the list loop reopens the table. To add a
+the pick with the terminal free and the list loop reopens the table from
+`tui.IssueTableState`. To add a
 key, add its `IssuePick`, its case in `updateNormal` and in `listAction`. The
 forms a key opens are built with `tui.Form`, never `huh.NewForm`: esc aborts
 them (huh's default is ctrl+c alone) and `listAction` reopens the table on
@@ -308,15 +311,17 @@ never `cmd.Flags().GetString`: the parent command does not define them.
 
 `git zf branch` opens a table of every local branch (`branch.TableRows`,
 `tui.BranchTableModel`): S/T/R filter, enter opens a per-row menu
-(`menuEntriesFor`, `cmd/branch/table.go`) and `runBranchAction` runs the
-entry with the terminal free, as `listAction` does for the issue table. The
-actions of other packages are injected through `tableDeps` funcs; a nil func
-removes its entry. `trackPlain` (`cmd/branch/track.go`) renames a free-named
-branch to `<id>@<type>@<slug>` after the `branch new` form.
+(`menuEntriesFor`, `cmd/branch/table.go`), the keys `C`, `c`, `m`, `u`, `a`
+(twice), `t`, `l`, `D` (twice) act on the row directly (`keyActions`,
+`offersKey`, `runKey`, `TestBranchTable_ActionKeys`), and `runBranchAction`
+runs the entry with the terminal free, as `listAction` does for the issue
+table. The actions of other packages are injected through `tableDeps` funcs; a
+nil func removes its entry. `trackPlain` (`cmd/branch/track.go`) renames a
+free-named branch to `<id>@<type>@<slug>` after the `branch new` form.
 
     mise exec -- go test ./branch/... -run "TestTableRows" -v
     mise exec -- go test ./tui/... -run "TestBranchTable_|TestRelativeTime" -v
-    mise exec -- go test ./cmd/branch/... -run "^TestMenuEntriesFor|^TestRunBranchAction|^TestRunBranchTable_|^TestTrackPlain" -v
+    mise exec -- go test ./cmd/branch/... -run "^TestMenuEntriesFor|^TestKeyActions|^TestOffersKey|^TestRunBranchAction|^TestRunKey|^TestRunBranchTable_|^TestTrackPlain" -v
     mise exec -- go test ./cmd/issue/... -run "^TestClose_ByBranchName" -v
     mise exec -- go test ./cmd/log/... -run "TestRunLog_Branch|TestWithoutAllRefs" -v
 

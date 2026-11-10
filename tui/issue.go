@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	btable "github.com/charmbracelet/bubbles/table"
@@ -137,8 +138,9 @@ func IssueStatusPicker(issueID, trackerType string, statuses []string, selected 
 	)
 }
 
-// IssueActions are the repository operations behind the dialogs of the issue
-// table, keyed by the row's slug. A nil action disables its key.
+// IssueActions are the repository operations behind the dialogs and menu of
+// the issue table, keyed by the row's slug. A nil action disables its key and
+// menu entry.
 type IssueActions struct {
 	// Show renders the issue as `issue show` does; its error is shown in
 	// place of the issue.
@@ -161,13 +163,49 @@ type IssuePick int
 
 const (
 	IssuePickNone    IssuePick = iota // q or ctrl+c: nothing picked
-	IssuePickRow                      // s or enter: the slug is the row's issue
+	IssuePickRow                      // s or start from the menu (enter in pick mode): the slug is the row's issue
 	IssuePickNew                      // n: a new issue
-	IssuePickClose                    // c: close the row's issue by merging its branch (list mode)
-	IssuePickAbandon                  // a twice: abandon the row's issue (list mode)
-	IssuePickLabel                    // l: label the row's issue (list mode)
+	IssuePickClose                    // c or close from the menu: close the row's issue by merging its branch
+	IssuePickAbandon                  // a twice or abandon from the menu: abandon the row's issue
+	IssuePickLabel                    // l or label from the menu: label the row's issue
 	IssuePickSync                     // r: sync the issues (list mode)
+	IssuePickComment                  // comment from the menu: comment on the row's issue
 )
+
+type issueMenuEntry string
+
+const (
+	issueEntryShow    issueMenuEntry = "show"
+	issueEntryStart   issueMenuEntry = "start"
+	issueEntryClose   issueMenuEntry = "close (merge)"
+	issueEntryEdit    issueMenuEntry = "edit"
+	issueEntryLabel   issueMenuEntry = "label"
+	issueEntryComment issueMenuEntry = "comment"
+	issueEntryAbandon issueMenuEntry = "abandon (no undo)"
+)
+
+// issueMenuEntries returns the actions of row, in menu order.
+func issueMenuEntries(row *issue.Row) []issueMenuEntry {
+	open := row.MatchesStatus(statusOpen)
+	repo := row.State != ""
+	inProgress := row.Branch != nil && row.Branch.Status == branch.StatusInProgress
+
+	entries := []issueMenuEntry{issueEntryShow}
+	if open {
+		entries = append(entries, issueEntryStart)
+	}
+	if open && inProgress {
+		entries = append(entries, issueEntryClose)
+	}
+	if repo {
+		entries = append(entries, issueEntryEdit, issueEntryLabel, issueEntryComment)
+	}
+	if repo && open && !inProgress {
+		entries = append(entries, issueEntryAbandon)
+	}
+
+	return entries
+}
 
 // PickedIssue reports how the table was quit and, for IssuePickRow, the
 // slug of the picked row. m is the model tea.Program.Run returned.
@@ -180,29 +218,62 @@ func PickedIssue(m tea.Model) (IssuePick, string) {
 	return t.pick, t.pickedSlug
 }
 
+// IssueTableOptions configures IssueTableModelWith.
+type IssueTableOptions struct {
+	Status  string // statusOpen, statusClosed, statusAll; "" = statusOpen
+	Project string // projectAll or a project in the rows; "" = projectAll
+	Filter  string // the / text at start
+	Mine    bool   // m on at start
+	Cursor  int    // the row under the cursor at start
+}
+
+// IssueTableState is the options that rebuild m as the user left it: its
+// filters and cursor. The list loop passes it to the next IssueTableModelWith.
+func IssueTableState(m tea.Model) IssueTableOptions {
+	t, ok := m.(*issueTableModel)
+	if !ok {
+		return IssueTableOptions{}
+	}
+
+	return IssueTableOptions{
+		Status:  t.statusFilter,
+		Project: t.projectFilter,
+		Filter:  t.filter.Value(),
+		Mine:    t.mine,
+		Cursor:  t.table.Cursor(),
+	}
+}
+
 // IssueTableModel is the issue table. In list mode enter opens the row's
-// issue in a dialog that replaces the table, e opens its edit form (esc
-// closes either), and s, c, a, l, n and r quit with the action picked (start,
-// close by merging, abandon or label the row, a new issue, a sync: see
-// PickedIssue); in pick
+// action menu under the table, e opens its edit form (esc closes either), and
+// s, c, a, l, n and r quit with the action picked (start, close by merging,
+// abandon or label the row, a new issue, a sync: see PickedIssue); in pick
 // mode (actions.Pick) enter and s pick, n asks for a new issue.
 func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueActions) (tea.Model, error) {
+	return IssueTableModelWith(rows, IssueTableOptions{Status: initialStatus}, actions)
+}
+
+// IssueTableModelWith is IssueTableModel configured by opts.
+func IssueTableModelWith(rows []issue.Row, opts IssueTableOptions, actions IssueActions) (tea.Model, error) {
 	projects := issue.UniqueProjects(rows)
-	includeProj := len(projects) > 1
 	cols := buildIssueTableColumns(rows)
 	width := 0
 	for _, c := range cols {
 		width += c.Width + 2
 	}
 
-	status := initialStatus
+	status := opts.Status
 	if status == "" {
 		status = statusOpen
 	}
 
+	project := projectAll
+	if slices.Contains(projects, opts.Project) {
+		project = opts.Project
+	}
+
 	t := btable.New(
 		btable.WithColumns(cols),
-		btable.WithRows(applyFilters(rows, status, "", projectAll, includeProj, false)),
 		btable.WithFocused(true),
 		btable.WithHeight(issueTableHeight),
 	)
@@ -214,21 +285,32 @@ func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueAction
 	fi := textinput.New()
 	fi.Placeholder = "type to filter…"
 	fi.CharLimit = 64
+	fi.SetValue(opts.Filter)
 
 	dialog := viewport.New(width, issueTableHeight)
 	dialog.SetHorizontalStep(horizontalStep)
 
-	return &issueTableModel{
+	m := &issueTableModel{
 		table:         t,
 		allRows:       rows,
 		filter:        fi,
 		statusFilter:  status,
 		projects:      projects,
-		projectFilter: projectAll,
-		visible:       filterRows(rows, status, "", projectAll, includeProj, false),
+		projectFilter: project,
+		mine:          opts.Mine,
 		actions:       actions,
 		dialog:        dialog,
-	}, nil
+	}
+	m.refreshRows()
+	if opts.Cursor > 0 && len(m.visible) > 0 {
+		c := opts.Cursor
+		if c >= len(m.visible) {
+			c = len(m.visible) - 1
+		}
+		m.table.SetCursor(c)
+	}
+
+	return m, nil
 }
 
 // buildIssueTableColumns returns the bubbletea columns. The Project column
@@ -345,10 +427,13 @@ type issueTableModel struct {
 	// viewing is set while the show dialog replaces the table.
 	viewing bool
 	dialog  viewport.Model
-	// form is the edit dialog while it replaces the table; the fields are
-	// its values.
+	// form is the active nested form ("edit" replaces the table, "menu" and
+	// "abandon" sit under it); the fields hold its values.
 	form                                 *huh.Form
+	formKind                             string
 	editSlug, editTitle, editDescription string
+	menuSlug, menuPicked                 string
+	abandonOK                            bool
 	// notice is the line under the table until the next key.
 	notice string
 	// armAbandon is the slug a first a armed: a second a abandons it, any
@@ -365,6 +450,9 @@ func (m *issueTableModel) refreshRows() {
 	includeProj := len(m.projects) > 1
 	m.visible = filterRows(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj, m.mine)
 	m.table.SetRows(applyFilters(m.allRows, m.statusFilter, m.filter.Value(), m.projectFilter, includeProj, m.mine))
+	if c := m.table.Cursor(); len(m.visible) > 0 && (c < 0 || c >= len(m.visible)) {
+		m.table.SetCursor(0)
+	}
 }
 
 func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -372,7 +460,7 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dialog.Width = size.Width - 4 // the border and its padding
 	}
 	if m.form != nil {
-		return m.updateEditing(msg)
+		return m.updateForm(msg)
 	}
 	if m.viewing {
 		return m.updateViewing(msg)
@@ -417,7 +505,7 @@ func (m *issueTableModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *issueTableModel) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *issueTableModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "esc":
@@ -433,14 +521,91 @@ func (m *issueTableModel) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.form = f.(*huh.Form)
 	switch m.form.State {
 	case huh.StateCompleted:
+		kind := m.formKind
 		m.form = nil
-		m.saveEdit()
+		switch kind {
+		case "edit":
+			m.saveEdit()
+		case "menu":
+			return m.runMenuEntry(issueMenuEntry(m.menuPicked))
+		case "abandon":
+			if m.abandonOK {
+				model, qcmd, _ := m.pickRow(IssuePickAbandon)
+
+				return model, qcmd
+			}
+		}
 	case huh.StateAborted:
 		m.form = nil
 	case huh.StateNormal:
 	}
 
 	return m, cmd
+}
+
+// openMenu opens the contextual menu of the row under the cursor, dropping
+// entries whose action callback is nil.
+func (m *issueTableModel) openMenu() tea.Cmd {
+	c := m.table.Cursor()
+	if c < 0 || c >= len(m.visible) {
+		return nil
+	}
+	row := &m.visible[c]
+	var opts []MenuOption
+	for _, e := range issueMenuEntries(row) {
+		if e == issueEntryShow && m.actions.Show == nil {
+			continue
+		}
+		if e == issueEntryEdit && (m.actions.Load == nil || m.actions.Edit == nil) {
+			continue
+		}
+		opts = append(opts, MenuOption{Label: string(e), Value: string(e)})
+	}
+	if len(opts) == 0 {
+		return nil
+	}
+	m.menuSlug = row.IssueSlug
+	m.menuPicked = opts[0].Value
+	m.formKind = "menu"
+	title := "Issue " + row.IssueSlug + ": " + row.Title
+	m.form = Form(MenuSelect(title, opts, &m.menuPicked)).WithWidth(m.dialog.Width)
+
+	return m.form.Init()
+}
+
+func (m *issueTableModel) runMenuEntry(e issueMenuEntry) (tea.Model, tea.Cmd) {
+	switch e {
+	case issueEntryShow:
+		m.openDialog()
+
+		return m, nil
+	case issueEntryEdit:
+		return m, m.openEdit()
+	case issueEntryStart:
+		model, cmd, _ := m.pickRow(IssuePickRow)
+
+		return model, cmd
+	case issueEntryClose:
+		model, cmd, _ := m.pickRow(IssuePickClose)
+
+		return model, cmd
+	case issueEntryLabel:
+		model, cmd, _ := m.pickRow(IssuePickLabel)
+
+		return model, cmd
+	case issueEntryComment:
+		model, cmd, _ := m.pickRow(IssuePickComment)
+
+		return model, cmd
+	case issueEntryAbandon:
+		m.abandonOK = false
+		m.formKind = "abandon"
+		m.form = Form(IssueConfirm("Abandon "+m.menuSlug+"? There is no undo.", &m.abandonOK)).WithWidth(m.dialog.Width)
+
+		return m, m.form.Init()
+	}
+
+	return m, nil
 }
 
 // openEdit replaces the table with the edit form of the issue under the
@@ -459,6 +624,7 @@ func (m *issueTableModel) openEdit() tea.Cmd {
 		return nil
 	}
 	m.editSlug, m.editTitle, m.editDescription = slug, title, description
+	m.formKind = "edit"
 	m.form = NewForm(IssueEditForm(&m.editTitle, &m.editDescription)).WithWidth(m.dialog.Width)
 
 	return m.form.Init()
@@ -576,9 +742,8 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		if m.actions.Pick {
 			return m.pickRow(IssuePickRow)
 		}
-		m.openDialog()
 
-		return m, nil, true
+		return m, m.openMenu(), true
 	case "s":
 		return m.pickRow(IssuePickRow)
 	case "n":
@@ -700,7 +865,11 @@ var dialogStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0
 
 func (m *issueTableModel) View() string {
 	if m.form != nil {
-		return dialogStyle.Render(m.form.View()) + "\n\nenter: save · esc: cancel"
+		if m.formKind == "edit" {
+			return dialogStyle.Render(m.form.View()) + "\n\nenter: save · esc: cancel"
+		}
+
+		return m.table.View() + "\n\n" + m.form.View()
 	}
 	if m.viewing {
 		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓←→ scroll · e: edit · esc: back"
@@ -738,22 +907,22 @@ func (m *issueTableModel) View() string {
 
 // filterHint is the keys of the filters, on their line.
 func (m *issueTableModel) filterHint() string {
-	keys := "tab: status"
+	pairs := []string{"tab", "status"}
 	if len(m.projects) > 0 {
-		keys += " · p: project"
+		pairs = append(pairs, "p", "project")
 	}
 
-	return keys + " · m: mine · /: filter"
+	return keyHints(append(pairs, "m", "mine", "/", "filter")...)
 }
 
 // hint is the key line under the filters, for the mode. The list line names
 // every action and fits 90 columns without q, which every table quits with.
 func (m *issueTableModel) hint() string {
 	if m.actions.Pick {
-		return "enter: pick · q: quit"
+		return keyHints("enter", "pick", "q", "quit")
 	}
 
-	return "enter: show · e: edit · s: start · n: new · c: close · a: abandon · l: label · r: sync"
+	return keyHints("enter", "actions", "e", "edit", "s", "start", "n", "new", "c", "close", "a", "abandon", "l", "label", "r", "sync")
 }
 
 // BranchPicker presents a list of branches under title (close and the review

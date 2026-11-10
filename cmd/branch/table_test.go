@@ -2,6 +2,7 @@ package branch
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -66,4 +67,74 @@ func TestAfterAction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestKeyActions(t *testing.T) {
+	t.Run("every menu entry has one key", func(t *testing.T) {
+		all := []branchAction{
+			actionCheckout, actionIssueClose, actionMerge, actionPR,
+			actionAbandon, actionTrack, actionLog, actionDelete,
+		}
+		if len(keyActions) != len(all) {
+			t.Fatalf("len(keyActions) = %d, want %d", len(keyActions), len(all))
+		}
+		for _, a := range all {
+			found := false
+			for _, v := range keyActions {
+				if v == a {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("missing key for %q", a)
+			}
+		}
+	})
+}
+
+func TestOffersKey(t *testing.T) {
+	allWired := tableDeps{
+		merge:      func(context.Context, SourceBranch) error { return nil },
+		track:      func(context.Context, string) error { return nil },
+		closeIssue: func(context.Context, string, string) error { return nil },
+		log:        func(context.Context, string) error { return nil },
+		pr:         func(context.Context, string) error { return nil },
+	}
+	for _, tc := range []struct {
+		name string
+		row  branch.Row
+	}{
+		{"remote-only", branch.Row{BranchName: "x", Plain: true, RemoteOnly: true}},
+		{"plain", branch.Row{BranchName: "spike", Plain: true}},
+		{"plain parseable", branch.Row{BranchName: "42@feat@untracked", Plain: true}},
+		{"in progress", branch.Row{BranchName: "42@feat@x", Status: branch.StatusInProgress}},
+		{"merged", branch.Row{BranchName: "42@feat@x", Status: branch.StatusMerged}},
+		{"closed", branch.Row{BranchName: "42@feat@x", Status: branch.StatusClosed}},
+		{"current plain", branch.Row{BranchName: "spike", Plain: true, Current: true}},
+		{"current in progress", branch.Row{BranchName: "42@feat@x", Status: branch.StatusInProgress, Current: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			offered := offeredEntries(allWired, tc.row)
+			for k, a := range keyActions {
+				want := slices.Contains(offered, a)
+				if got := offersKey(allWired, tc.row, k); got != want {
+					t.Errorf("offersKey(%q) = %v, want %v", k, got, want)
+				}
+			}
+		})
+	}
+
+	t.Run("a nil func removes its key", func(t *testing.T) {
+		d := allWired
+		d.merge = nil
+		if offersKey(d, branch.Row{BranchName: "spike", Plain: true}, "m") {
+			t.Error("m offered with nil merge")
+		}
+	})
+
+	t.Run("an unknown key is not offered", func(t *testing.T) {
+		if offersKey(allWired, branch.Row{BranchName: "spike", Plain: true}, "?") {
+			t.Error("? offered")
+		}
+	})
 }

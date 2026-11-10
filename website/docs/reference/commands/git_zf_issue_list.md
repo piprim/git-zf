@@ -17,13 +17,15 @@ Columns: Issue ID, [Project], Title, Branch, Local Status, Issue Status,
 Created. Labels follow the title in brackets. "∅" means no branch started
 yet; "N.A." means the row has neither a tracker nor a repository issue.
 
-Keys: enter shows the issue, e edits it, s starts it, n files a new one,
-c closes the one under the cursor by merging its branch (as git zf issue
-close &lt;id&gt;; a row without a branch is told so), a twice abandons it (as
-git zf issue abandon &lt;id&gt;: the first press asks for the second, there is
-no undo), l edits its labels, r syncs, / filters the rows, tab cycles
-open/closed/all, p picks the project, m keeps the issues assigned to you,
-q quits.
+Keys: Enter opens the actions of the issue under the cursor: show, start,
+close, edit, label, comment, abandon, as its state allows. Shortcut keys: e
+edits it, s starts it, n files a new one, c closes the one under the cursor
+by merging its branch (as git zf issue close &lt;id&gt;; a row without a branch is
+told so), a twice abandons it (as git zf issue abandon &lt;id&gt;: the first press
+asks for the second, there is no undo), l edits its labels, r syncs, /
+filters the rows, tab cycles open/closed/all, p picks the project, m keeps
+the issues assigned to you, q quits. After an action the table reopens as it
+was left.
 
 --stdout prints the table without the TUI, --json prints the rows.
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -110,9 +111,38 @@ func offeredEntries(d tableDeps, row branch.Row) []branchAction {
 	return out
 }
 
+var keyActions = map[string]branchAction{
+	"C": actionCheckout,
+	"c": actionIssueClose,
+	"m": actionMerge,
+	"u": actionPR,
+	"a": actionAbandon,
+	"t": actionTrack,
+	"l": actionLog,
+	"D": actionDelete,
+}
+
+func offersKey(d tableDeps, row branch.Row, key string) bool {
+	a, ok := keyActions[key]
+	if !ok {
+		return false
+	}
+
+	return slices.Contains(offeredEntries(d, row), a)
+}
+
+func runKey(ctx context.Context, d tableDeps, p BranchMenuPrompter, key string, row branch.Row) (reopen bool, err error) {
+	if !offersKey(d, row, key) {
+		return true, fmt.Errorf("key %q is not offered for branch %q", key, row.BranchName)
+	}
+
+	return runBranchAction(ctx, d, p, keyActions[key], row)
+}
+
 // runBranchTable loops table → menu → action until the table quits or an
 // action that moves HEAD runs. stdout=true prints the rows (no TTY).
 func runBranchTable(ctx context.Context, d tableDeps, p BranchMenuPrompter, opts tui.BranchTableOptions, stdout bool) error {
+	opts.Offers = func(row branch.Row, key string) bool { return offersKey(d, row, key) }
 	for {
 		rows, err := branch.TableRows(ctx, d.client, opts.Remote)
 		if err != nil {
@@ -148,6 +178,8 @@ func runBranchTable(ctx context.Context, d tableDeps, p BranchMenuPrompter, opts
 				return err
 			}
 			reopen, err = runBranchAction(ctx, d, p, a, *row)
+		case tui.BranchPickKey:
+			reopen, err = runKey(ctx, d, p, tui.PickedBranchKey(m), *row)
 		default:
 			reopen, err = runPick(ctx, d, pick)
 		}

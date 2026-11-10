@@ -715,6 +715,22 @@ func TestListAction(t *testing.T) {
 			t.Errorf("reopen = %v, err = %v, state = %q (%v)", reopen, err, got.State, loadErr)
 		}
 	})
+	t.Run("the comment pick runs the comment form on the row's issue and reopens", func(t *testing.T) {
+		p := &scriptedRecordPrompter{Comment: "from the menu"}
+		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickComment, row)
+		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
+		if !reopen || err != nil || loadErr != nil || len(got.Comments) != 1 || got.Comments[0].Body != "from the menu" {
+			t.Errorf("reopen = %v, err = %v, comments = %+v (%v)", reopen, err, got.Comments, loadErr)
+		}
+	})
+	t.Run("esc on the comment form reopens quietly", func(t *testing.T) {
+		before, _ := issuepkg.Load(ctx, rig.client, rec.ID)
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, sp, &scriptedPrompter{}, tui.IssuePickComment, row)
+		after, _ := issuepkg.Load(ctx, rig.client, rec.ID)
+		if !reopen || err != nil || len(after.Comments) != len(before.Comments) {
+			t.Errorf("reopen = %v, err = %v, comments = %+v", reopen, err, after.Comments)
+		}
+	})
 	t.Run("n creates an issue from the form and reopens", func(t *testing.T) {
 		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From the table", BranchType: "fix"}}
 		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickNew, nil)

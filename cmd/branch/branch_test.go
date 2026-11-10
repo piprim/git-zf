@@ -219,9 +219,14 @@ func TestTrackCmd(t *testing.T) {
 func TestBranchRootCmd_Long(t *testing.T) {
 	long := New(&config.AppConfig{}).GetRootCmd().Long
 
-	t.Run("describes the table, not a menu", func(t *testing.T) {
+	t.Run("describes the table and its shortcut keys, not a menu", func(t *testing.T) {
 		if strings.Contains(long, "a menu offers") || !strings.Contains(long, "S ") || !strings.Contains(long, "every local branch") {
 			t.Errorf("Long:\n%s", long)
+		}
+		for _, want := range []string{"C checks out", "D twice deletes", "u opens a pull request"} {
+			if !strings.Contains(long, want) {
+				t.Errorf("Long misses %q:\n%s", want, long)
+			}
 		}
 	})
 }
