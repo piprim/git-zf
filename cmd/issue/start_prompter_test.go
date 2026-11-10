@@ -22,6 +22,7 @@ type scriptedStartPrompter struct {
 	IssueFromUser    *issuepkg.Issue
 	IssueFromTracker *issuepkg.Issue
 	OfferedID        string
+	OfferedSubject   string
 
 	// Toggle return value.
 	UseWorktree bool
@@ -59,8 +60,8 @@ type scriptedStartPrompter struct {
 	ConflictErr         error
 }
 
-func (s *scriptedStartPrompter) PickIssueFromUser(_ context.Context, id string, _ []string) (*issuepkg.Issue, error) {
-	s.OfferedID = id
+func (s *scriptedStartPrompter) PickIssueFromUser(_ context.Context, id, subject string, _ []string) (*issuepkg.Issue, error) {
+	s.OfferedID, s.OfferedSubject = id, subject
 	if s.IssueFromUserErr != nil {
 		return nil, s.IssueFromUserErr
 	}

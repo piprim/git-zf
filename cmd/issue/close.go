@@ -54,6 +54,24 @@ type closeDeps struct {
 	// issueID is the <id> argument ("" without one): the candidates are then
 	// the in-progress branches of that issue alone.
 	issueID string
+	// branchName, with issueID, is the one candidate (the branch table's issue
+	// close); "" keeps every branch of the issue.
+	branchName string
+}
+
+// CloseIssue is `issue close <issueSlug>` for a caller outside the package,
+// narrowed to branchName when given: the branch table runs it for the row
+// under the cursor. cmd may be another command (the flags are read tolerantly).
+func CloseIssue(ctx context.Context, cmd *cobra.Command, cfg *config.AppConfig, issueSlug, branchName string) error {
+	deps, err := buildCloseDeps(ctx, cmd, cfg)
+	if err != nil {
+		return err
+	}
+	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
+	deps.pushConfirm = pushflow.NewHuhConfirm()
+	deps.issueID, deps.branchName = issueSlug, branchName
+
+	return runClose(ctx, deps, newHuhPrompter(deps.client, cfg))
 }
 
 // buildCloseDeps constructs the production closeDeps from a cobra command.
@@ -193,7 +211,7 @@ func (i Issue) closeRunE(cmd *cobra.Command, args []string) error {
 //
 // Unexported because closeDeps is unexported (no cross-package caller).
 func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
-	picked, err := getPickedBranch(ctx, deps.client, deps.invokedBranch, deps.issueID, prompter)
+	picked, err := getPickedBranch(ctx, deps.client, deps.invokedBranch, deps.issueID, deps.branchName, prompter)
 	if err != nil {
 		return err
 	}
@@ -676,7 +694,7 @@ func reviewPreflight(
 // would name the wrong branch when the user is inside a linked worktree.
 func getPickedBranch(
 	ctx context.Context,
-	client *git.Client, invokedBranch, issueID string, prompter ClosePrompter) (*branch.Row, error) {
+	client *git.Client, invokedBranch, issueID, branchName string, prompter ClosePrompter) (*branch.Row, error) {
 	// A branch closed or started in a sibling clone is only on the remote's
 	// chains until they are fetched (best-effort).
 	if err := branch.Fetch(ctx, client); err != nil {
@@ -697,6 +715,12 @@ func getPickedBranch(
 			return nil, err
 		}
 		branches = slices.DeleteFunc(branches, func(r branch.Row) bool { return !slices.Contains(slugs, r.IssueSlug) })
+		if branchName != "" {
+			branches = slices.DeleteFunc(branches, func(r branch.Row) bool { return r.BranchName != branchName })
+			if len(branches) == 0 {
+				return nil, fmt.Errorf("branch %q of issue %s is not in progress", branchName, issueID)
+			}
+		}
 		switch len(branches) {
 		case 0:
 			if !known {

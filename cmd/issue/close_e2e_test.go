@@ -1489,7 +1489,7 @@ func TestGetPickedBranch_ExcludesBranchMergedInSiblingClone(t *testing.T) {
 	prompter := &scriptedPrompter{Branch: rig.pickedBranchRow()}
 
 	invoked := invokedBranchFor(t.Context(), rig.client, "")
-	if _, err := getPickedBranch(t.Context(), rig.client, invoked, "", prompter); err != nil {
+	if _, err := getPickedBranch(t.Context(), rig.client, invoked, "", "", prompter); err != nil {
 		t.Fatalf("getPickedBranch: %v", err)
 	}
 
@@ -3412,6 +3412,64 @@ func TestClose_ByID(t *testing.T) {
 		}
 		if !strings.Contains(rig.stdout.String(), "Aborted.") {
 			t.Errorf("stdout = %q, want the flow to reach the confirm with --base", rig.stdout.String())
+		}
+	})
+}
+
+func TestClose_ByBranchName(t *testing.T) {
+	t.Parallel()
+
+	// variantRig adds a second in-progress branch of ABC-1, one commit ahead.
+	variantRig := func(t *testing.T) *closeTestRig {
+		t.Helper()
+		rig := newCloseRig(t)
+		rig.addBranch(t, "ABC-1@feat@add-thing@spike")
+		branchtest.Seed(t, rig.client, branch.Op{Branch: "ABC-1@feat@add-thing@spike", Title: "Add thing"}, branch.StatusInProgress)
+		if err := os.WriteFile(filepath.Join(rig.dir, "spike.txt"), []byte("spike\n"), 0o644); err != nil {
+			t.Fatalf("write spike.txt: %v", err)
+		}
+		for _, args := range [][]string{
+			{"checkout", "-q", "ABC-1@feat@add-thing@spike"},
+			{"add", "spike.txt"},
+			{"commit", "-q", "-m", "feat(thing): spike commit"},
+			{"checkout", "-q", "main"},
+		} {
+			cmd := exec.CommandContext(t.Context(), "git", args...)
+			cmd.Dir = rig.dir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+
+		return rig
+	}
+
+	t.Run("merges the named branch without the picker", func(t *testing.T) {
+		t.Parallel()
+		rig := variantRig(t)
+		deps := rig.deps()
+		deps.issueID, deps.branchName = "ABC-1", "ABC-1@feat@add-thing@spike"
+		prompter := &scriptedPrompter{
+			BranchErr: errors.New("PickBranch must not be called for a named branch"),
+			Strategy:  commitpkg.MergeStrategyRebase, Confirm: true, Message: []byte("feat(thing): spike\n"),
+		}
+		if err := runClose(t.Context(), deps, prompter); err != nil {
+			t.Fatalf("runClose: %v", err)
+		}
+		assertHeadSubject(t, rig.dir, "main", "feat(thing): spike")
+		rows, _ := branch.ListRows(t.Context(), rig.client, branch.StatusInProgress)
+		if len(rows) != 1 || rows[0].BranchName != "ABC-1@feat@add-thing" {
+			t.Errorf("in-progress rows = %+v, want the first branch alone", rows)
+		}
+	})
+	t.Run("a name that is not in progress is an error", func(t *testing.T) {
+		t.Parallel()
+		rig := variantRig(t)
+		deps := rig.deps()
+		deps.issueID, deps.branchName = "ABC-1", "ABC-1@feat@nope"
+		err := runClose(t.Context(), deps, &scriptedPrompter{BranchErr: errors.New("PickBranch must not be called")})
+		if err == nil || !strings.Contains(err.Error(), "not in progress") {
+			t.Errorf("err = %v", err)
 		}
 	})
 }

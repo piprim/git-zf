@@ -2,10 +2,12 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/git"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
@@ -41,18 +43,38 @@ func runTrack(ctx context.Context, deps reviewDeps) error {
 		return fmt.Errorf("get current branch: %w", err)
 	}
 
-	if branch.IsReviewBranch(currentBranch) {
-		return runTrackReviewer(ctx, deps, currentBranch)
+	if err := trackBranch(ctx, deps, currentBranch); errors.Is(err, ErrNotTrackable) {
+		return fmt.Errorf(
+			"current branch %q does not match a git-zf naming convention\n"+
+				"(expected <ID>@<type>@<slug> or <ID>@review)",
+			currentBranch)
+	} else if err != nil {
+		return err
 	}
 
-	if b, parseErr := branch.Parse(currentBranch); parseErr == nil {
-		return runTrackDeveloper(ctx, deps, currentBranch, b)
+	return nil
+}
+
+// ErrNotTrackable is TrackBranch's answer for a name that is neither
+// <id>@<type>@<slug> nor <slug>@review.
+var ErrNotTrackable = errors.New("branch name is not <id>@<type>@<slug> or <slug>@review")
+
+// TrackBranch records name as review track does for the current branch: a
+// review branch records the reviewer, a feature branch is recorded in
+// progress (a closed one reopened), any other name is ErrNotTrackable.
+func TrackBranch(ctx context.Context, cfg *config.AppConfig, client *git.Client, name string) error {
+	return trackBranch(ctx, newReviewDeps(client, cfg), name)
+}
+
+func trackBranch(ctx context.Context, deps reviewDeps, name string) error {
+	if branch.IsReviewBranch(name) {
+		return runTrackReviewer(ctx, deps, name)
+	}
+	if b, err := branch.Parse(name); err == nil {
+		return runTrackDeveloper(ctx, deps, name, b)
 	}
 
-	return fmt.Errorf(
-		"current branch %q does not match a git-zf naming convention\n"+
-			"(expected <ID>@<type>@<slug> or <ID>@review)",
-		currentBranch)
+	return ErrNotTrackable
 }
 
 // runTrackDeveloper records a feature branch that was checked out with plain

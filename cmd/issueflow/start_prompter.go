@@ -21,8 +21,8 @@ type StartPrompter interface {
 	PickIssueFromTracker(ctx context.Context, issues []tracker.Issue, allowedTypes []string) (*issuepkg.Issue, error)
 
 	// PickIssueFromUser opens the manual issue-input form (issue ID, subject,
-	// type); id fills the ID field in, "" leaves it empty.
-	PickIssueFromUser(ctx context.Context, id string, allowedTypes []string) (*issuepkg.Issue, error)
+	// type); id and subject fill their fields in, "" leaves one empty.
+	PickIssueFromUser(ctx context.Context, id, subject string, allowedTypes []string) (*issuepkg.Issue, error)
 
 	// PickUseWorktree drives the "worktree vs plain branch?" toggle. Called
 	// only when cfg.Branch.UseWorktree == nil.
@@ -98,9 +98,9 @@ func NewHuhStartPrompter() *HuhStartPrompter {
 	return &HuhStartPrompter{}
 }
 
-func (p *HuhStartPrompter) PickIssueFromUser(ctx context.Context, id string, allowedTypes []string) (*issuepkg.Issue, error) {
+func (p *HuhStartPrompter) PickIssueFromUser(ctx context.Context, id, subject string, allowedTypes []string) (*issuepkg.Issue, error) {
 	var got issuepkg.Issue
-	got.ID = id
+	got.ID, got.Subject = id, subject
 	if err := tui.Form(
 		tui.IssueInput(&got.ID, &got.Subject, &got.Type, allowedTypes),
 	).RunWithContext(ctx); err != nil {

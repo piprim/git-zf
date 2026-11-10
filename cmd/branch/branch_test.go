@@ -215,3 +215,13 @@ func TestTrackCmd(t *testing.T) {
 		}
 	})
 }
+
+func TestBranchRootCmd_Long(t *testing.T) {
+	long := New(&config.AppConfig{}).GetRootCmd().Long
+
+	t.Run("describes the table, not a menu", func(t *testing.T) {
+		if strings.Contains(long, "a menu offers") || !strings.Contains(long, "S ") || !strings.Contains(long, "every local branch") {
+			t.Errorf("Long:\n%s", long)
+		}
+	})
+}

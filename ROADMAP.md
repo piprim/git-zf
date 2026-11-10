@@ -2,6 +2,7 @@
 
 ## Enhancement
 
+0. Creating a worktree, when there are submodules, run `git submodule update --init --recursive`.
 1. Issue mirror, repo <-> tracker (first version shipped). Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
   c. `issue start` should assign to me if it's not already assigned to me.
       m in issue list keeps filtering on the tracker's assignment only, so a repo-assigned issue will not show under "mine" yet.

@@ -3,23 +3,27 @@ package branch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"slices"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/cmdutil"
+	issuecmd "github.com/piprim/git-zf/cmd/issue"
 	"github.com/piprim/git-zf/cmd/issueflow"
+	logcmd "github.com/piprim/git-zf/cmd/log"
 	"github.com/piprim/git-zf/cmd/review"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/issue"
+	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tty"
 	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 type Branch struct {
@@ -52,6 +56,18 @@ nowhere, git zf branch track records one checked out with plain git, and git
 zf branch merge merges a branch with no tracker step. If there is a ticket,
 go through git zf issue instead.
 
+Without a subcommand, a table shows every local branch: a tracked one with
+its issue, type, status, title and creation date, a plain one with those
+columns empty; the current branch is starred. S checks the statuses shown
+(plain, in_progress, merged, closed), T the types, R adds the branches that
+exist only on the remote, / filters by text. Enter opens the actions of the
+branch under the cursor: checkout; issue close (merge) for an in-progress
+branch, the flow of git zf issue close; merge into current for a plain
+branch; pull request; abandon (record closed, no merge); track, which records
+a plain branch after the branch new form and renames it <id>@<type>@<slug>;
+log, the commits of that branch alone; delete. n creates a branch, p prunes,
+P prunes with the tracker, q quits. Without a terminal the rows are printed.
+
 list shows the tracked branches, yours and the ones other clones started.
 prune records what happened to in-progress branches outside git-zf, and
 prune-tracker reaps local branches whose tracker issue is closed. pr opens
@@ -59,11 +75,9 @@ a pull request on the forge.
 
 branch close <name> does not merge: it records a branch as abandoned. The
 action that merges an issue branch and updates the tracker is git zf issue
-close.
-
-Without a subcommand a menu offers these actions.`,
+close.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmdutil.RunMenu(cmd, "Branch action:", subs, cmdutil.NewHuhMenuPrompter())
+			return b.runTable(cmd, nil)
 		},
 	}
 	cmd.AddCommand(subs...)
@@ -81,10 +95,10 @@ func (b Branch) listCmd() *cobra.Command {
 		Short: "List branches",
 		Long: `List the tracked branches with their status: yours and the ones other
 clones started. It does not contact the remote: it shows what the last git
-fetch brought.
+fetch brought. In a terminal it opens the branch table of git zf branch.
 
---status filters on in_progress, merged, closed or all; --stdout prints the
-table without the TUI, --json prints the rows.`,
+--status preselects the status filter (in_progress, merged, closed or all);
+--stdout and --json print the tracked branches only, as a table or as rows.`,
 	}
 
 	f := cmd.Flags()
@@ -100,6 +114,14 @@ table without the TUI, --json prints the rows.`,
 }
 
 func (b Branch) listRunE(cmd *cobra.Command, flags listFlags) error {
+	if !flags.jsonOut && !flags.stdout && term.IsTerminal(int(os.Stdin.Fd())) {
+		var statuses []string
+		if st := toBranchStatus(flags.status); st != branch.StatusAll {
+			statuses = []string{st}
+		}
+
+		return b.runTable(cmd, statuses)
+	}
 	c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
 	if err != nil {
 		return err //nolint:wrapcheck // already names the cause
@@ -108,8 +130,73 @@ func (b Branch) listRunE(cmd *cobra.Command, flags listFlags) error {
 	return runList(cmd.Context(), os.Stdout, c, flags)
 }
 
-// runList executes the branch list logic. w receives stdout/non-TUI output.
-// When neither --json nor --stdout is set, runList runs the interactive TUI.
+// runTable opens the branch table (the rows are printed when stdin is not a
+// terminal). statuses preselects the S filter; nil checks every status.
+func (b Branch) runTable(cmd *cobra.Command, statuses []string) error {
+	c, err := cmdutil.NewClientForCmd(cmd, b.appConfig)
+	if err != nil {
+		return err //nolint:wrapcheck // already names the cause
+	}
+	remote, err := c.Remote()
+	if err != nil {
+		return fmt.Errorf("resolve remote: %w", err)
+	}
+	opts := tui.BranchTableOptions{Statuses: statuses, Remote: remote}
+	for _, ct := range b.appConfig.CommitTypes {
+		opts.Types = append(opts.Types, ct.Name)
+	}
+	var d tableDeps
+	d = tableDeps{
+		client: c, cfg: b.appConfig, remote: remote, stdout: os.Stdout, stderr: os.Stderr,
+		pr: func(ctx context.Context, name string) error {
+			pd, err := b.prDepsFor(cmd, c)
+			if err != nil {
+				return err
+			}
+
+			return runPr(ctx, pd, name)
+		},
+		newBranch: func(context.Context) error { return b.newRunE(cmd, "") },
+		log: func(ctx context.Context, ref string) error {
+			return logcmd.RunLog(ctx, c, b.appConfig.Log, ref, term.IsTerminal(int(os.Stdout.Fd())))
+		},
+		closeIssue: func(ctx context.Context, slug, name string) error {
+			return issuecmd.CloseIssue(ctx, cmd, b.appConfig, slug, name)
+		},
+		track: func(ctx context.Context, name string) error {
+			return trackBranch(ctx, d, issueflow.NewHuhStartPrompter(), name)
+		},
+		merge: func(ctx context.Context, source SourceBranch) error {
+			target, err := c.CurrentBranch()
+			if err != nil {
+				return fmt.Errorf("resolve current branch: %w", err)
+			}
+			if target == "" || target == "HEAD" {
+				return errors.New("checkout a branch before merging into it (HEAD is detached)")
+			}
+
+			return runMergeSource(ctx, b.mergeDepsFor(cmd, c), newHuhMergePrompter(c, b.appConfig), target, source)
+		},
+		prune: func(ctx context.Context) error {
+			return runPrune(ctx, os.Stdout, c, &huhPrunePrompter{}, pruneFlags{})
+		},
+		pruneTracker: func(ctx context.Context) error {
+			if b.appConfig.IssueTracker.Type == "" {
+				return errors.New("no issue tracker is configured")
+			}
+			tr, err := tracker.New(b.appConfig.IssueTracker)
+			if err != nil {
+				return fmt.Errorf("build tracker: %w", err)
+			}
+
+			return runPruneTracker(ctx, os.Stdout, c, c, tr, &huhTrackerPrunePrompter{}, pruneTrackerFlags{})
+		},
+	}
+
+	return runBranchTable(cmd.Context(), d, huhBranchMenuPrompter{}, opts, !term.IsTerminal(int(os.Stdin.Fd())))
+}
+
+// runList prints the tracked branches: --json the rows, otherwise the table.
 func runList(ctx context.Context, w io.Writer, c *git.Client, flags listFlags) error {
 	queryStatus := toBranchStatus(flags.status)
 
@@ -125,48 +212,17 @@ func runList(ctx context.Context, w io.Writer, c *git.Client, flags listFlags) e
 		return nil
 	}
 
-	if flags.stdout {
-		rows, err := branch.ListRows(ctx, c, queryStatus)
-		if err != nil {
-			return fmt.Errorf("list branches: %w", err)
-		}
-		if len(rows) == 0 {
-			fmt.Fprintln(w, "No branches found.")
-
-			return nil
-		}
-
-		tty.RenderBranchTable(w, rows)
-
-		return nil
-	}
-
-	// TUI path: status filter then interactive table.
-	statusStr := flags.status
-	if err := tui.NewForm(tui.BranchStatusFilter(&statusStr, statusStr)).RunWithContext(ctx); err != nil {
-		return fmt.Errorf("status filter: %w", err)
-	}
-
-	queryStatus = toBranchStatus(statusStr)
-
 	rows, err := branch.ListRows(ctx, c, queryStatus)
 	if err != nil {
 		return fmt.Errorf("list branches: %w", err)
 	}
-
 	if len(rows) == 0 {
 		fmt.Fprintln(w, "No branches found.")
 
 		return nil
 	}
 
-	m, err := tui.BranchTableModel(rows)
-	if err != nil {
-		return fmt.Errorf("failed to construct branch table: %w", err)
-	}
-	if _, err := tea.NewProgram(m).Run(); err != nil {
-		return fmt.Errorf("failed to run table: %w", err)
-	}
+	tty.RenderBranchTable(w, rows)
 
 	return nil
 }

@@ -318,3 +318,16 @@ func TestRows(t *testing.T) {
 		}
 	})
 }
+
+func TestTitleFromName_PlainName(t *testing.T) {
+	t.Run("dashes and underscores become spaces", func(t *testing.T) {
+		if got := TitleFromName("spike_log-colors"); got != "spike log colors" {
+			t.Errorf("TitleFromName = %q", got)
+		}
+	})
+	t.Run("a parseable name still gives its slug", func(t *testing.T) {
+		if got := TitleFromName("42@feat@add-login"); got != "add login" {
+			t.Errorf("TitleFromName = %q", got)
+		}
+	})
+}

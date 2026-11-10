@@ -40,13 +40,19 @@ func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppCon
 		return reviewDeps{}, err
 	}
 
-	deps := reviewDeps{client: client, cfg: cfg}
+	deps := newReviewDeps(client, cfg)
 	deps.push, deps.noPush = pushflow.ReadFlags(cmd)
 	deps.pushConfirm = pushflow.NewHuhConfirm()
 
-	// Build the tracker so the review-lifecycle commands can offer to update the
-	// originating issue status (mirrors buildCloseDeps). Non-fatal: warn and
-	// continue with a nil tracker, which disables the prompt.
+	return deps, nil
+}
+
+// newReviewDeps is reviewDeps without the push wiring (zero: no push step).
+// The tracker lets the review-lifecycle commands offer to update the
+// originating issue status (mirrors buildCloseDeps). Non-fatal: warn and
+// continue with a nil tracker, which disables the prompt.
+func newReviewDeps(client *git.Client, cfg *config.AppConfig) reviewDeps {
+	deps := reviewDeps{client: client, cfg: cfg}
 	if cfg.IssueTracker.Type != "" {
 		t, err := tracker.New(cfg.IssueTracker)
 		if err != nil {
@@ -56,7 +62,7 @@ func buildReviewDeps(ctx context.Context, cmd *cobra.Command, cfg *config.AppCon
 		}
 	}
 
-	return deps, nil
+	return deps
 }
 
 // withDeps returns the RunE of a review subcommand: it builds the shared

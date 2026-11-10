@@ -1696,3 +1696,74 @@ func TestCreateLocalBranch(t *testing.T) {
 		}
 	})
 }
+
+func TestCommitterDates(t *testing.T) {
+	t.Parallel()
+
+	c, dir := newTestClient(t)
+	runGitInDir(t, dir, "checkout", "-q", "-b", "feat-x")
+	writeFile(t, dir, "x.txt", "x\n")
+	runGitInDir(t, dir, "add", "x.txt")
+	runGitInDir(t, dir, "commit", "-q", "-m", "feat: x")
+
+	dates, err := c.CommitterDates(t.Context(), "refs/heads/")
+
+	t.Run("returns no error", func(t *testing.T) {
+		if err != nil {
+			t.Fatalf("CommitterDates: %v", err)
+		}
+	})
+	t.Run("has one entry per local branch", func(t *testing.T) {
+		if len(dates) != 2 {
+			t.Errorf("len = %d, want 2: %v", len(dates), dates)
+		}
+	})
+	t.Run("keys are full refnames", func(t *testing.T) {
+		if _, ok := dates["refs/heads/feat-x"]; !ok {
+			t.Errorf("no refs/heads/feat-x in %v", dates)
+		}
+	})
+	t.Run("feat-x is not before master", func(t *testing.T) {
+		if dates["refs/heads/feat-x"].Before(dates["refs/heads/master"]) {
+			t.Errorf("feat-x %v before master %v", dates["refs/heads/feat-x"], dates["refs/heads/master"])
+		}
+	})
+	t.Run("an unknown prefix gives an empty map and no error", func(t *testing.T) {
+		got, err := c.CommitterDates(t.Context(), "refs/nowhere/")
+		if err != nil || len(got) != 0 {
+			t.Errorf("got %v, %v; want empty, nil", got, err)
+		}
+	})
+}
+
+func TestRenameBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("renames a branch", func(t *testing.T) {
+		c, dir := newTestClient(t)
+		runGitInDir(t, dir, "branch", "old")
+		if err := c.RenameBranch(t.Context(), "old", "new"); err != nil {
+			t.Fatalf("RenameBranch: %v", err)
+		}
+		names, _ := c.LocalBranchNames()
+		if !slices.Equal(names, []string{"master", "new"}) {
+			t.Errorf("branches = %v", names)
+		}
+	})
+	t.Run("HEAD follows a renamed checked-out branch", func(t *testing.T) {
+		c, _ := newTestClient(t)
+		if err := c.RenameBranch(t.Context(), "master", "trunk"); err != nil {
+			t.Fatalf("RenameBranch: %v", err)
+		}
+		if cur, _ := c.CurrentBranch(); cur != "trunk" {
+			t.Errorf("current = %q", cur)
+		}
+	})
+	t.Run("renaming onto an existing name errors", func(t *testing.T) {
+		c, dir := newTestClient(t)
+		runGitInDir(t, dir, "branch", "other")
+		if err := c.RenameBranch(t.Context(), "other", "master"); err == nil {
+			t.Error("no error")
+		}
+	})
+}

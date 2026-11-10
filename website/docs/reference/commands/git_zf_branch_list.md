@@ -11,10 +11,10 @@ List branches
 
 List the tracked branches with their status: yours and the ones other
 clones started. It does not contact the remote: it shows what the last git
-fetch brought.
+fetch brought. In a terminal it opens the branch table of git zf branch.
 
---status filters on in_progress, merged, closed or all; --stdout prints the
-table without the TUI, --json prints the rows.
+--status preselects the status filter (in_progress, merged, closed or all);
+--stdout and --json print the tracked branches only, as a table or as rows.
 
 ```
 git zf branch list [flags]

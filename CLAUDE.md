@@ -275,8 +275,7 @@ words the questions.
 
 ### Testing the menus
 
-`git zf` (no subcommand), `git zf review` and `git zf branch` open an action
-menu built on
+`git zf` (no subcommand) and `git zf review` open an action menu built on
 `cmdutil.RunMenu` (`cmd/cmdutil/menu.go`): it takes the parent command, a
 title, the ordered subcommands to offer, and a `MenuPrompter`. The picked
 subcommand's `RunE` runs with the *parent* command (cobra v1.1.3 has no
@@ -287,9 +286,10 @@ stdin → the group's help is printed; Esc → quiet exit.
     mise exec -- go test ./cmd/ -run "^TestGetRootCmd_menu" -v
     mise exec -- go test ./cmd/review/... -run "^TestReviewRootCmd" -v
 
-To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`),
-`Review.menuSubs` (`cmd/review/review.go`) or the slice in `GetRootCmd` of
-`cmd/branch/branch.go`, and extend the matching test. `git zf issue` has no
+To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`) or
+`Review.menuSubs` (`cmd/review/review.go`), and extend the matching test.
+`git zf branch` has no menu either: it opens the branch table (see "Testing
+the branch table"). `git zf issue` has no
 menu: it runs `issue list` (`TestIssueRootCmd_ListsByDefault`), whose table
 prints to stdout when stdin is not a terminal. The table's keys `s`, `n`,
 `c` (the merge flow of `issue close <id>`), `a` (pressed twice: an abandon
@@ -303,6 +303,22 @@ them (huh's default is ctrl+c alone) and `listAction` reopens the table on
 `huh.ErrUserAborted`, `s` included. A
 subcommand offered by a menu reads its string flags with `cmdutil.StringFlag`,
 never `cmd.Flags().GetString`: the parent command does not define them.
+
+### Testing the branch table
+
+`git zf branch` opens a table of every local branch (`branch.TableRows`,
+`tui.BranchTableModel`): S/T/R filter, enter opens a per-row menu
+(`menuEntriesFor`, `cmd/branch/table.go`) and `runBranchAction` runs the
+entry with the terminal free, as `listAction` does for the issue table. The
+actions of other packages are injected through `tableDeps` funcs; a nil func
+removes its entry. `trackPlain` (`cmd/branch/track.go`) renames a free-named
+branch to `<id>@<type>@<slug>` after the `branch new` form.
+
+    mise exec -- go test ./branch/... -run "TestTableRows" -v
+    mise exec -- go test ./tui/... -run "TestBranchTable_|TestRelativeTime" -v
+    mise exec -- go test ./cmd/branch/... -run "^TestMenuEntriesFor|^TestRunBranchAction|^TestRunBranchTable_|^TestTrackPlain" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestClose_ByBranchName" -v
+    mise exec -- go test ./cmd/log/... -run "TestRunLog_Branch|TestWithoutAllRefs" -v
 
 ### Testing the merge flow
 

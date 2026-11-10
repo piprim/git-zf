@@ -162,20 +162,9 @@ the base, and "Closes #N" when the issue is mirrored with the tracker.`,
 			if err != nil {
 				return err //nolint:wrapcheck // already names the cause
 			}
-
-			d := prDeps{
-				client: c, cfg: b.appConfig, trackerType: b.appConfig.IssueTracker.Type,
-				pushConfirm: pushflow.NewHuhConfirm(), form: HuhPullRequestForm(),
-			}
-			// Tolerant readers: the branch menu runs this with the root command.
-			d.push, d.noPush = pushflow.ReadFlags(cmd)
-			d.yes = cmdutil.StringFlag(cmd, "yes") == "true"
-			if d.trackerType != "" {
-				t, err := tracker.New(b.appConfig.IssueTracker)
-				if err != nil {
-					return fmt.Errorf("init tracker: %w", err)
-				}
-				d.forge = tracker.PullRequestsOf(t)
+			d, err := b.prDepsFor(cmd, c)
+			if err != nil {
+				return err
 			}
 
 			name := ""
@@ -193,6 +182,26 @@ the base, and "Closes #N" when the issue is mirrored with the tracker.`,
 }
 
 // runPr opens a pull request for branchName (the current branch when "").
+// prDepsFor is the production prDeps of cmd, which may be the branch root
+// command (the table runs pr with it): the flags are read tolerantly.
+func (b Branch) prDepsFor(cmd *cobra.Command, c *git.Client) (prDeps, error) {
+	d := prDeps{
+		client: c, cfg: b.appConfig, trackerType: b.appConfig.IssueTracker.Type,
+		pushConfirm: pushflow.NewHuhConfirm(), form: HuhPullRequestForm(),
+	}
+	d.push, d.noPush = pushflow.ReadFlags(cmd)
+	d.yes = cmdutil.StringFlag(cmd, "yes") == "true"
+	if d.trackerType != "" {
+		t, err := tracker.New(b.appConfig.IssueTracker)
+		if err != nil {
+			return d, fmt.Errorf("init tracker: %w", err)
+		}
+		d.forge = tracker.PullRequestsOf(t)
+	}
+
+	return d, nil
+}
+
 func runPr(ctx context.Context, d prDeps, branchName string) error {
 	switch {
 	case d.trackerType == "":

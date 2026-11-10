@@ -40,6 +40,12 @@ func (b Branch) mergeRunE(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	return runMerge(ctx, b.mergeDepsFor(cmd, c), newHuhMergePrompter(c, b.appConfig))
+}
+
+// mergeDepsFor is the production mergeDeps of cmd, which may be the branch
+// root command (the table runs merge with it): the flags are read tolerantly.
+func (b Branch) mergeDepsFor(cmd *cobra.Command, c *git.Client) mergeDeps {
 	push, noPush := pushflow.ReadFlags(cmd)
 	d := mergeDeps{
 		client: c, cfg: b.appConfig,
@@ -54,7 +60,7 @@ func (b Branch) mergeRunE(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	return runMerge(ctx, d, newHuhMergePrompter(c, b.appConfig))
+	return d
 }
 
 // mergeDeps bundles what runMerge needs; the E2E rig builds it directly.
@@ -94,6 +100,12 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		return err //nolint:wrapcheck // prompter already wraps
 	}
 
+	return runMergeSource(ctx, d, prompter, target, source)
+}
+
+// runMergeSource merges source into target (the current branch) without the
+// source picker: the branch table calls it with the row under the cursor.
+func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, target string, source SourceBranch) (err error) {
 	// SAFETY: refuse issue-branch sources — merging one here would bypass the
 	// review incorporation, sub-task guard, and tracker update that issue close
 	// runs. The gate is branch.Parse, so it also catches remote-only issue

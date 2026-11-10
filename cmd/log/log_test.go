@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,6 +157,77 @@ func TestPlanLinearize(t *testing.T) {
 		}
 		if got := run("rev-list", "--count", "main"); got != "3" {
 			t.Errorf("main holds %s commits, want 3", got)
+		}
+	})
+}
+
+func TestWithoutAllRefs(t *testing.T) {
+	t.Run("drops --all", func(t *testing.T) {
+		if got := withoutAllRefs([]string{"log", "--all", "--graph"}); !slices.Equal(got, []string{"log", "--graph"}) {
+			t.Errorf("got %v", got)
+		}
+	})
+	t.Run("drops --branches=glob and --tags", func(t *testing.T) {
+		if got := withoutAllRefs([]string{"--branches=feat/*", "--tags", "--remotes", "-n"}); !slices.Equal(got, []string{"-n"}) {
+			t.Errorf("got %v", got)
+		}
+	})
+	t.Run("keeps --exclude and the format", func(t *testing.T) {
+		in := []string{"--exclude=*zf/*", "--pretty=tformat:%h", "--all-match"}
+		if got := withoutAllRefs(in); !slices.Equal(got, in) {
+			t.Errorf("got %v", got)
+		}
+	})
+}
+
+func TestRunLog_Branch(t *testing.T) {
+	t.Parallel()
+
+	client, out, dir := newLogRig(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = dir
+		if o, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, o)
+		}
+	}
+	run("checkout", "-q", "-b", "side", "HEAD~1")
+	if err := os.WriteFile(filepath.Join(dir, "side.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "side.txt")
+	run("commit", "-q", "-m", "feat: side commit")
+	run("checkout", "-q", "main")
+
+	if err := RunLog(t.Context(), client, defaults(t), "side", false); err != nil {
+		t.Fatalf("RunLog: %v", err)
+	}
+
+	t.Run("prints only the branch's history", func(t *testing.T) {
+		if got := out.String(); !strings.Contains(got, "feat: side commit") || strings.Contains(got, "feat: second commit") {
+			t.Errorf("out = %q", got)
+		}
+	})
+	t.Run("the default graph command loses --all", func(t *testing.T) {
+		cfg := defaults(t)
+		args, err := cfg.Cmds[cfg.DefaultIndex()].Args()
+		if err != nil || !slices.Contains(args, "--all") || slices.Contains(withoutAllRefs(args), "--all") {
+			t.Errorf("args = %v (%v)", args, err)
+		}
+	})
+}
+
+func TestRunLog_FullRef(t *testing.T) {
+	t.Parallel()
+
+	client, out, _ := newLogRig(t)
+	if err := RunLog(t.Context(), client, defaults(t), "refs/heads/main", false); err != nil {
+		t.Fatalf("RunLog: %v", err)
+	}
+	t.Run("a full ref is accepted", func(t *testing.T) {
+		if !strings.Contains(out.String(), "feat: second commit") {
+			t.Errorf("out = %q", out.String())
 		}
 	})
 }

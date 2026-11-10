@@ -754,3 +754,29 @@ func TestRunMerge_PullRequest_BaseIsNotTheCurrentBranch(t *testing.T) {
 		}
 	})
 }
+
+func TestRunMergeSource_SkipsThePicker(t *testing.T) {
+	t.Run("merges the given source without PickSource", func(t *testing.T) {
+		rig := newMergeRig(t)
+		rig.addLocalBranch(t, "feature")
+		p := &scriptedMergePrompter{Strategy: commit.MergeStrategySquash, Confirm: true, Message: []byte("chore: merge feature\n")}
+
+		err := runMergeSource(t.Context(), rig.deps(declinePush), p, "master", SourceBranch{Name: "feature"})
+		if err != nil {
+			t.Fatalf("runMergeSource: %v", err)
+		}
+		if got := rig.headSubject(t, "master"); got != "chore: merge feature" || p.PickSourceCalls != 0 {
+			t.Errorf("master HEAD = %q, PickSource called %d times", got, p.PickSourceCalls)
+		}
+	})
+	t.Run("refuses an issue branch source", func(t *testing.T) {
+		rig := newMergeRig(t)
+		rig.addLocalBranch(t, "7@feat@x")
+		p := &scriptedMergePrompter{Strategy: commit.MergeStrategySquash, Confirm: true, Message: []byte("no\n")}
+
+		err := runMergeSource(t.Context(), rig.deps(declinePush), p, "master", SourceBranch{Name: "7@feat@x"})
+		if err != nil || !strings.Contains(rig.stdout.String(), "issue close") || rig.headSubject(t, "master") != "chore: init" {
+			t.Errorf("err = %v, stdout = %q, master = %q", err, rig.stdout.String(), rig.headSubject(t, "master"))
+		}
+	})
+}

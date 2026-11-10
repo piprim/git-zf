@@ -15,6 +15,18 @@ nowhere, git zf branch track records one checked out with plain git, and git
 zf branch merge merges a branch with no tracker step. If there is a ticket,
 go through git zf issue instead.
 
+Without a subcommand, a table shows every local branch: a tracked one with
+its issue, type, status, title and creation date, a plain one with those
+columns empty; the current branch is starred. S checks the statuses shown
+(plain, in_progress, merged, closed), T the types, R adds the branches that
+exist only on the remote, / filters by text. Enter opens the actions of the
+branch under the cursor: checkout; issue close (merge) for an in-progress
+branch, the flow of git zf issue close; merge into current for a plain
+branch; pull request; abandon (record closed, no merge); track, which records
+a plain branch after the branch new form and renames it &lt;id&gt;@&lt;type&gt;@&lt;slug&gt;;
+log, the commits of that branch alone; delete. n creates a branch, p prunes,
+P prunes with the tracker, q quits. Without a terminal the rows are printed.
+
 list shows the tracked branches, yours and the ones other clones started.
 prune records what happened to in-progress branches outside git-zf, and
 prune-tracker reaps local branches whose tracker issue is closed. pr opens
@@ -23,8 +35,6 @@ a pull request on the forge.
 branch close &lt;name&gt; does not merge: it records a branch as abandoned. The
 action that merges an issue branch and updates the tracker is git zf issue
 close.
-
-Without a subcommand a menu offers these actions.
 
 ```
 git zf branch [flags]

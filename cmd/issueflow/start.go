@@ -221,7 +221,7 @@ func issueFromRow(
 func newIssueFromUser(
 	ctx context.Context, c *git.Client, p StartPrompter, id string, types []string,
 ) (*issue.Issue, error) {
-	got, err := p.PickIssueFromUser(ctx, id, types)
+	got, err := p.PickIssueFromUser(ctx, id, "", types)
 	if err != nil {
 		return nil, fmt.Errorf("issue input: %w", err)
 	}

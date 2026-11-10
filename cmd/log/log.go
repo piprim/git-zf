@@ -50,10 +50,39 @@ Without a terminal the default command's output is printed like git log.`,
 }
 
 func runLog(ctx context.Context, client *git.Client, cfg config.LogConfig, extra []string, isTTY bool) error {
+	return run(ctx, client, cfg, extra, "", isTTY)
+}
+
+// RunLog is runLog for a caller outside the package: with branch != "" every
+// command runs on that branch alone (its --all, --branches, --remotes and
+// --tags arguments dropped, --exclude kept, the branch appended).
+func RunLog(ctx context.Context, client *git.Client, cfg config.LogConfig, branch string, isTTY bool) error {
+	return run(ctx, client, cfg, nil, branch, isTTY)
+}
+
+// withoutAllRefs drops exactly --all, --branches, --remotes and --tags, with
+// or without their =<glob> form.
+func withoutAllRefs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		switch name, _, _ := strings.Cut(a, "="); name {
+		case "--all", "--branches", "--remotes", "--tags":
+		default:
+			out = append(out, a)
+		}
+	}
+
+	return out
+}
+
+func run(ctx context.Context, client *git.Client, cfg config.LogConfig, extra []string, branch string, isTTY bool) error {
 	args := func(c config.LogCmd) ([]string, error) {
 		a, err := c.Args()
 		if err != nil {
 			return nil, fmt.Errorf("config: %w", err)
+		}
+		if branch != "" {
+			a = append(withoutAllRefs(a), branch)
 		}
 
 		return append(a, extra...), nil

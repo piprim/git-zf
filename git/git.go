@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/piprim/git-zf/internal/pkg"
 )
@@ -774,6 +776,38 @@ func (c *Client) RemoteBranchNames() ([]string, error) {
 	}
 
 	return names, nil
+}
+
+// RenameBranch runs `git branch -m <old> <new>`: the reflog, upstream and
+// any working tree holding the branch follow.
+func (c *Client) RenameBranch(ctx context.Context, oldName, newName string) error {
+	if _, err := c.output(ctx, "branch", "-m", oldName, newName); err != nil {
+		return fmt.Errorf("rename branch %q to %q: %w", oldName, newName, err)
+	}
+
+	return nil
+}
+
+// CommitterDates returns the committer date of the tip of every ref under the
+// given prefixes, keyed by full refname, in one for-each-ref call.
+func (c *Client) CommitterDates(ctx context.Context, refPrefixes ...string) (map[string]time.Time, error) {
+	args := append([]string{"for-each-ref", "--format=%(refname) %(committerdate:unix)"}, refPrefixes...)
+	out, err := c.output(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list references: %w", err)
+	}
+
+	dates := map[string]time.Time{}
+	for _, line := range strings.Split(out, "\n") {
+		ref, unix, ok := strings.Cut(line, " ")
+		n, perr := strconv.ParseInt(unix, 10, 64)
+		if !ok || perr != nil {
+			continue
+		}
+		dates[ref] = time.Unix(n, 0)
+	}
+
+	return dates, nil
 }
 
 // ErrBranchNotMerged is returned (wrapped) by SafeDeleteBranch / DeleteLocalBranch

@@ -18,8 +18,8 @@ command.
 
 Without a subcommand, git zf opens a menu of the workflow commands (commit,
 issue, branch, review, log) and runs the one you pick with its interactive
-defaults. git zf branch and git zf review do the same one level down; git zf
-issue opens the issue table. Esc or ctrl+c leaves the menu quietly. When stdin
+defaults. git zf review does the same one level down; git zf issue and git zf
+branch open their tables. Esc or ctrl+c leaves the menu quietly. When stdin
 is not a terminal (a script, CI) the menu is skipped and this help is printed.
 The setup commands (init, install, uninstall, config, completion, version)
 are not in the menu.

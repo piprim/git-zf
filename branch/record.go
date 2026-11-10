@@ -168,6 +168,12 @@ type Row struct {
 	Status     string    `json:"status"`
 	CreatedAt  time.Time `json:"created_at"`
 	Author     string    `json:"-"` // who wrote the branch's start op
+
+	// Set by TableRows only.
+	Plain      bool      `json:"-"` // a git branch with no record
+	Current    bool      `json:"-"` // checked out in this working tree
+	RemoteOnly bool      `json:"-"` // exists on the remote, not locally
+	LastCommit time.Time `json:"-"` // committer date of the tip
 }
 
 // Rows flattens states into one row per branch, newest first. status keeps
@@ -195,15 +201,14 @@ func Rows(states []State, status string) []Row {
 }
 
 // TitleFromName derives a readable title from a branch name's slug segment:
-// "42@feat@add-login" gives "add login". It returns "" for a name that is not
-// a git-zf branch name.
+// "42@feat@add-login" gives "add login". A name that is not a git-zf branch
+// name gives the whole name with "-" and "_" as spaces.
 func TitleFromName(name string) string {
-	b, err := Parse(name)
-	if err != nil {
-		return ""
+	if b, err := Parse(name); err == nil {
+		name = b.Title()
 	}
 
-	return strings.ReplaceAll(b.Title(), "-", " ")
+	return strings.NewReplacer("-", " ", "_", " ").Replace(name)
 }
 
 // Children returns the states whose parent is slug.

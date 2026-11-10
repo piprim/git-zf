@@ -3,6 +3,7 @@ package review
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1537,6 +1538,37 @@ func TestReviewRequest_ProposesFeatureBranchPush(t *testing.T) {
 			"rev-parse", "refs/heads/77@feat@my-feature")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("origin missing 77@feat@my-feature: %v\n%s", err, out)
+		}
+	})
+}
+
+func TestTrackBranch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a review name without a review is the reviewer error", func(t *testing.T) {
+		rig := newReviewE2ERig(t)
+		err := TrackBranch(t.Context(), rig.cfg, rig.client, "X.9@review")
+		if err == nil || !strings.Contains(err.Error(), "no review found") {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("a parseable name is recorded in progress", func(t *testing.T) {
+		rig := newReviewE2ERig(t)
+		if err := rig.client.RunGitAt(t.Context(), rig.dir, "branch", "X.2@feat@part-two"); err != nil {
+			t.Fatalf("branch: %v", err)
+		}
+		if err := TrackBranch(t.Context(), rig.cfg, rig.client, "X.2@feat@part-two"); err != nil {
+			t.Fatalf("TrackBranch: %v", err)
+		}
+		_, e, _ := branch.Find(t.Context(), rig.client, "X.2@feat@part-two")
+		if e == nil || e.Status != branch.StatusInProgress {
+			t.Errorf("entry = %+v", e)
+		}
+	})
+	t.Run("a plain name is ErrNotTrackable", func(t *testing.T) {
+		rig := newReviewE2ERig(t)
+		if err := TrackBranch(t.Context(), rig.cfg, rig.client, "spike"); !errors.Is(err, ErrNotTrackable) {
+			t.Errorf("err = %v", err)
 		}
 	})
 }
