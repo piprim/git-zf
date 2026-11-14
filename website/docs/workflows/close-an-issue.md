@@ -60,6 +60,12 @@ when the *base* branch is checked out in another linked worktree.
 A branch that has an open pull request on the forge is merged through the
 forge instead: see [pull requests](pull-requests.md).
 
+While a step waits on the remote, the forge or the tracker, a spinner names
+it (`Fetching the branches and the issues…`, `Recording the merge of
+<branch>…`). Warnings and git's output are printed above it; git shows no
+progress counters meanwhile. Nothing is drawn when stderr is not a terminal.
+`git zf branch merge` and the push proposal do the same.
+
 ## Abandon an issue
 
 ```

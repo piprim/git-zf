@@ -1,6 +1,7 @@
 package mergeflow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -241,7 +242,10 @@ func (r *run) rebasePreflight(ctx context.Context, tree *git.Client) (rebasePlan
 		return rebasePlan{}, fmt.Errorf("resolve remote: %w", err)
 	}
 
-	if err := r.client.Fetch(ctx); err != nil {
+	stop := r.client.IO().Spin("Fetching " + cmp.Or(remoteName, "the remote"))
+	err = r.client.Fetch(ctx)
+	stop()
+	if err != nil {
 		return rebasePlan{}, fmt.Errorf("fetch: %w", err)
 	}
 

@@ -119,6 +119,10 @@ func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, ta
 		return nil
 	}
 
+	// Every step down to the strategy picker may ask the remote or the forge.
+	stop := d.client.IO().Spin("Checking the pull request of " + source.Name)
+	defer func() { stop() }() //nolint:gocritic // stop is replaced by the delete's spinner
+
 	mergeCommitted := false
 	created := false
 	if source.RemoteOnly {
@@ -163,6 +167,7 @@ func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, ta
 	// A source checked out in a linked worktree cannot be checked out here;
 	// give the engine a client on that worktree instead.
 	srcClient, wt, err := mergeflow.SourceTree(ctx, d.client, source.Name)
+	stop()
 	if err != nil {
 		return err
 	}
@@ -207,6 +212,7 @@ func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, ta
 	if del, derr := prompter.ConfirmDeleteBranch(ctx, source.Name); derr != nil {
 		return derr //nolint:wrapcheck // prompter already wraps
 	} else if del {
+		stop = d.client.IO().Spin("Deleting the branch " + source.Name)
 		if wt != nil && !worktreeRemoved {
 			fmt.Fprintf(d.client.IO().Err,
 				"warning: branch %q is still checked out in its worktree; delete it after `git worktree remove`\n",
@@ -222,6 +228,7 @@ func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, ta
 				fmt.Fprintf(d.client.IO().Err, "warning: delete remote branch: %v\n", rErr)
 			}
 		}
+		stop()
 	}
 
 	if d.pushConfirm != nil {

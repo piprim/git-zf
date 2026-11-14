@@ -70,7 +70,10 @@ func Propose(ctx context.Context, c Pusher, opts Opts, confirm ConfirmFunc) erro
 		return nil
 	}
 
+	stop := c.IO().Spin("Checking what a push of " + opts.Branch + " would send")
+	defer func() { stop() }() //nolint:gocritic // stop is replaced by the push's spinner
 	outcome, ok, err := c.PushDryRun(ctx, opts.Branch)
+	stop()
 	if err != nil || !ok {
 		// Unreachable remote or nothing to push → skip silently.
 		return nil
@@ -99,7 +102,10 @@ func Propose(ctx context.Context, c Pusher, opts Opts, confirm ConfirmFunc) erro
 		return nil
 	}
 
-	if err := c.PushBranch(ctx, opts.Branch); err != nil {
+	stop = c.IO().Spin("Pushing " + opts.Branch + " to " + remote)
+	err = c.PushBranch(ctx, opts.Branch)
+	stop()
+	if err != nil {
 		return fmt.Errorf("push %q: %w", opts.Branch, err)
 	}
 	fmt.Fprintf(c.IO().Out, "Pushed %q to %s.\n", opts.Branch, remote)

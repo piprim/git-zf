@@ -224,6 +224,10 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	// they never checked out) may exist only on the remote: materialize it so
 	// the rest of the flow, reviewPreflight and the merge, behaves exactly as
 	// for a locally-started branch.
+	// Every step down to the target picker may ask the remote or the forge.
+	stop := deps.client.IO().Spin("Checking the pull request and the review of " + picked.BranchName)
+	defer stop()
+
 	createdBranch, err := issueflow.MaterializeBranch(ctx, deps.client, picked.BranchName)
 	if err != nil {
 		return err //nolint:wrapcheck // already names the branch
@@ -277,6 +281,7 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	reviewCleanup, err := reviewPreflight(ctx, deps, picked, srcClient)
+	stop()
 	if err != nil {
 		return err
 	}
@@ -289,6 +294,8 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	// incorporation from scratch.
 	defer func() {
 		if mergeCommitted && reviewCleanup != nil {
+			stop := deps.client.IO().Spin("Closing the review")
+			defer stop()
 			reviewCleanup(context.WithoutCancel(ctx))
 		}
 	}()
@@ -695,6 +702,10 @@ func reviewPreflight(
 func getPickedBranch(
 	ctx context.Context,
 	client *git.Client, invokedBranch, issueID, branchName string, prompter ClosePrompter) (*branch.Row, error) {
+	// Stopped before every picker; what is printed meanwhile goes above it.
+	stop := client.IO().Spin("Fetching the branches and the issues")
+	defer stop()
+
 	// A branch closed or started in a sibling clone is only on the remote's
 	// chains until they are fetched (best-effort).
 	if err := branch.Fetch(ctx, client); err != nil {
@@ -711,6 +722,7 @@ func getPickedBranch(
 		// one needs no picker.
 		issueflow.FetchIssues(ctx, client)
 		slugs, known, err := issueSlugsOf(ctx, client, issueID)
+		stop()
 		if err != nil {
 			return nil, err
 		}
@@ -737,6 +749,7 @@ func getPickedBranch(
 
 		return prompter.PickBranch(ctx, branches, invokedBranch) //nolint:wrapcheck // prompter error already wrapped
 	}
+	stop()
 
 	if len(branches) == 0 {
 		// Best-effort nudge: a user standing on a non-issue branch that still
@@ -803,6 +816,9 @@ func issueSlugsOf(ctx context.Context, client *git.Client, id string) (slugs []s
 // clean up drift manually. With the issue mirror on, the record and the
 // tracker issue are reconciled afterwards.
 func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row, prompter ClosePrompter) {
+	stop := deps.client.IO().Spin("Recording the merge of " + picked.BranchName)
+	defer func() { stop() }() //nolint:gocritic // stop is replaced after the status picker
+
 	// Pushed so sibling developers on other clones see this close. The same
 	// chain also carries the repo issue and the tracker origin used below.
 	if err := branch.SetStatus(ctx, deps.client, picked.IssueSlug, picked.BranchName, branch.StatusMerged); err != nil {
@@ -831,9 +847,19 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 
 	// A tracker-born issue gets the status the operator picks.
 	if tracked {
-		issueflow.ApplyTrackerStatus(
-			ctx, deps.tracker, deps.client.IO().Err, picked.IssueSlug,
-			deps.cfg.IssueTracker.Type, prompter.PickTrackerStatus)
+		// The spinner leaves the terminal to the picker.
+		pick := func(ctx context.Context, issueID, trackerType string, statuses []string) (string, error) {
+			stop()
+			selected, err := prompter.PickTrackerStatus(ctx, issueID, trackerType, statuses)
+			if err == nil && selected != "" {
+				stop = deps.client.IO().Spin("Updating the issue " + issueID)
+			}
+
+			return selected, err //nolint:wrapcheck // prompter error already wrapped
+		}
+		// The spinners replace IO().Err: read it at each write.
+		errW := writerFunc(func(p []byte) (int, error) { return deps.client.IO().Err.Write(p) })
+		issueflow.ApplyTrackerStatus(ctx, deps.tracker, errW, picked.IssueSlug, deps.cfg.IssueTracker.Type, pick)
 	}
 
 	if mirror == nil {
@@ -856,6 +882,11 @@ func updateClosedStatus(ctx context.Context, deps closeDeps, picked *branch.Row,
 	// issue.
 	closeRepoIssue(ctx, deps.client, existing, mirror)
 }
+
+// writerFunc is an io.Writer made of a func.
+type writerFunc func(p []byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // trackerBornRecord reports whether the branch's repo issue was imported from
 // the tracker. The tracker type on the branch chain is no hint: a repo-born
@@ -886,6 +917,8 @@ func doDeleteBranch(
 	if !shouldDelete {
 		return nil
 	}
+	stop := c.IO().Spin("Deleting the branch " + picked.BranchName)
+	defer stop()
 
 	if heldByWorktree {
 		fmt.Fprintf(c.IO().Err,

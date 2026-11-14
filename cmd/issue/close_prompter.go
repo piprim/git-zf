@@ -73,7 +73,7 @@ type huhPrompter struct {
 
 func newHuhPrompter(client *git.Client, cfg *config.AppConfig) *huhPrompter {
 	return &huhPrompter{
-		HuhPrompter: mergeflow.HuhPrompter{Client: client, Cfg: cfg, TargetLabel: "local base"},
+		HuhPrompter: mergeflow.HuhPrompter{Client: client, Cfg: cfg},
 	}
 }
 

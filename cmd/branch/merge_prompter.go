@@ -41,7 +41,7 @@ type huhMergePrompter struct {
 }
 
 func newHuhMergePrompter(c *git.Client, cfg *config.AppConfig) *huhMergePrompter {
-	return &huhMergePrompter{mergeflow.HuhPrompter{Client: c, Cfg: cfg, TargetLabel: "current"}}
+	return &huhMergePrompter{mergeflow.HuhPrompter{Client: c, Cfg: cfg}}
 }
 
 func (p *huhMergePrompter) PickSource(ctx context.Context, sources []SourceBranch) (SourceBranch, error) {

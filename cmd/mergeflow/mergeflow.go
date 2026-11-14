@@ -108,7 +108,11 @@ func Run(ctx context.Context, client *git.Client, p Params, prompter Prompter, p
 	}
 
 	if p.PullRequest != nil {
-		if err := r.forge(ctx, p.PullRequest, strategy); err != nil {
+		stop := client.IO().Spin("Merging the pull request #" + p.PullRequest.Number + " on the forge")
+		defer stop()
+		err := r.forge(ctx, p.PullRequest, strategy)
+		stop()
+		if err != nil {
 			return Result{Strategy: strategy}, err
 		}
 

@@ -382,6 +382,24 @@ to the fork.
     mise exec -- go test ./cmd/issueflow/... -run "TestPullRequestHead" -v
     mise exec -- go test ./cmd/branch/... -run "^TestRunPr_FromAFork" -v
 
+### Testing the spinner
+
+A step that waits on the remote, the forge or the tracker is wrapped in
+`client.IO().Spin(msg)` (`internal/pkg/spin.go`), which returns an idempotent
+`stop`: `issue close` (`runClose`, `getPickedBranch`, `updateClosedStatus`,
+`doDeleteBranch`), `branch merge` (`runMergeSource`), the forge merge and the
+rebase's fetch (`cmd/mergeflow`), `pushflow.Propose`. It is a no-op when Err
+is not a terminal, so the E2E rigs never spin; `spinOn` is tested on a buffer.
+
+    mise exec -- go test -race ./internal/pkg/... -run "TestSpin" -v
+
+While it spins, `IO.Out` and `IO.Err` are writers that wipe the spinner's line
+first (a subprocess gets a pipe, not the TTY), and an unfinished line holds
+the spinner until its newline. Two rules for a new call site: stop before any
+form or bubbletea program (they draw on the terminal directly), and never
+keep a writer read from `IO()` across a `Spin` or a `stop` — read
+`IO().Err` at each write (`writerFunc` in `cmd/issue/close.go`).
+
 ## Architecture
 
 Main packages under `github.com/piprim/git-zf`:

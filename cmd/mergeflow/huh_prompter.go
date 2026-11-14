@@ -19,19 +19,15 @@ var _ Prompter = (*HuhPrompter)(nil)
 type HuhPrompter struct {
 	Client *git.Client       // Authors() for the commit-message form
 	Cfg    *config.AppConfig // template of the commit-message form
-
-	// TargetLabel names the merge target in the rebase hint ("local base",
-	// "current").
-	TargetLabel string
 }
 
-func (p *HuhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, error) {
+func (*HuhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, error) {
 	var picked string
 	form := tui.IssueMergeStrategy(&picked, []tui.StrategyOption{
 		{
 			Value: string(commit.MergeStrategyRebase),
 			Label: "Rebase",
-			Hint:  "Single clean commit on " + p.TargetLabel + ", submodule-safe (recommended)",
+			Hint:  "Single clean commit on local base, submodule-safe (recommended)",
 		},
 		{
 			Value: string(commit.MergeStrategySquash),
