@@ -2,6 +2,9 @@
 
 ## Enhancement
 
+-3. I'm on a git plain branch B. How can I merge/rebase it with git-zf ?
+-2. Displaying a log entry (press enter the log list), pressing `/` alows to search in the view.
+-1. Closing an issue from the list take time, add a spiner (with information) to inform the user that something is doing.
 0. Creating a worktree, when there are submodules, run `git submodule update --init --recursive`.
 1. Issue mirror, repo <-> tracker (first version shipped). Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
   c. `issue start` should assign to me if it's not already assigned to me.

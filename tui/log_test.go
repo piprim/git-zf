@@ -558,3 +558,182 @@ func TestLogModel_Linearize(t *testing.T) {
 		}
 	})
 }
+
+func TestHighlight(t *testing.T) {
+	t.Run("matches are reversed whatever their case and located in cells", func(t *testing.T) {
+		got, found := highlight("a Foo\nnone\nfoo foo", "foo", -1)
+		if want := "a " + matchOn + "Foo" + matchOff + "\nnone\n" + matchOn + "foo" + matchOff + " " + matchOn + "foo" + matchOff; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		if want := []dialogMatch{{0, 2, 3}, {2, 0, 3}, {2, 4, 3}}; !slices.Equal(found, want) {
+			t.Errorf("found = %v, want %v", found, want)
+		}
+	})
+
+	t.Run("a match spans the colors, which are kept", func(t *testing.T) {
+		got, found := highlight("\x1b[32m+fo\x1b[mo\x1b[36m bar\x1b[m", "foo", -1)
+		if want := "\x1b[32m+" + matchOn + "fo\x1b[m" + matchOn + "o" + matchOff + "\x1b[36m bar\x1b[m"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		if want := []dialogMatch{{0, 1, 3}}; !slices.Equal(found, want) {
+			t.Errorf("found = %v, want %v", found, want)
+		}
+	})
+
+	t.Run("the current match has its own color and gives the line's back", func(t *testing.T) {
+		got, _ := highlight("foo\n\x1b[32m+foo foo\x1b[m", "foo", 1)
+		want := matchOn + "foo" + matchOff + "\n\x1b[32m+" + currentOn + "foo" + currentOff + "\x1b[32m " + matchOn + "foo" + matchOff + "\x1b[m"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("the text is searched as typed, not as a regexp", func(t *testing.T) {
+		if _, found := highlight("a.b axb", "a.b", -1); len(found) != 1 {
+			t.Errorf("found = %v", found)
+		}
+	})
+}
+
+func TestLogModel_Search(t *testing.T) {
+	key, runeKey := logKey, logRuneKey
+	// 60 lines: "needle" on lines 5, 30 (twice, the second far right) and 31.
+	text := make([]string, 60)
+	for i := range text {
+		text[i] = "line"
+	}
+	text[5] = "a needle"
+	text[30] = "Needle" + strings.Repeat(" ", 200) + "needle"
+	text[31] = "\x1b[32m+needle\x1b[m"
+	show := func(string) (string, error) { return strings.Join(text, "\n"), nil }
+
+	// open returns the dialog of a commit; search types q after / and enter.
+	open := func() tea.Model {
+		m, _ := newLog([]string{"* bbbbbbb - feat"}, show).Update(key(tea.KeyEnter))
+
+		return m
+	}
+	search := func(m tea.Model, q string) tea.Model {
+		m, _ = m.Update(runeKey('/'))
+		for _, r := range q {
+			m, _ = m.Update(runeKey(r))
+		}
+		m, _ = m.Update(key(tea.KeyEnter))
+
+		return m
+	}
+	top := func(m tea.Model) int { return m.(*logModel).dialog.YOffset }
+
+	t.Run("the hint offers the search", func(t *testing.T) {
+		if v := open().View(); !strings.Contains(v, "/: search") || !strings.Contains(v, "n/p: next/prev") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("/ opens a prompt in place of the hint", func(t *testing.T) {
+		m, _ := open().Update(runeKey('/'))
+		m, _ = m.Update(runeKey('q')) // typed, not the key that closes the dialog
+		if v := m.View(); !strings.Contains(v, "> q") || !strings.Contains(v, "enter: search") || strings.Contains(v, "esc: back") {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("enter highlights the matches and jumps to the first one", func(t *testing.T) {
+		m := search(open(), "NEEDLE")
+		if top(m) != 5 {
+			t.Errorf("top line = %d, want 5", top(m))
+		}
+		if v := m.View(); !strings.Contains(v, currentOn+"needle"+currentOff) {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("the first match is the one at or below the top line", func(t *testing.T) {
+		m := open()
+		m.(*logModel).dialog.SetYOffset(10)
+		if m = search(m, "needle"); top(m) != 30 {
+			t.Errorf("top line = %d, want 30", top(m))
+		}
+	})
+
+	t.Run("n goes to the next match, scrolling sideways, and wraps", func(t *testing.T) {
+		m := search(open(), "needle")
+		m, _ = m.Update(runeKey('n'))
+		if top(m) != 30 || !strings.Contains(m.View(), currentOn+"Needle") || !strings.Contains(m.View(), "+"+matchOn+"needle") {
+			t.Errorf("top line = %d, view = %q", top(m), m.View())
+		}
+		m, _ = m.Update(runeKey('n')) // the second match of line 30, off to the right
+		if top(m) != 30 || strings.Contains(m.View(), "Needle") {
+			t.Errorf("top line = %d, view = %q", top(m), m.View())
+		}
+		m, _ = m.Update(runeKey('n'))
+		if top(m) != 31 || !strings.Contains(m.View(), "+"+currentOn+"needle") {
+			t.Errorf("top line = %d, view = %q", top(m), m.View())
+		}
+		if m, _ = m.Update(runeKey('n')); top(m) != 5 {
+			t.Errorf("top line = %d, want 5 after the wrap", top(m))
+		}
+	})
+
+	t.Run("p and N go to the previous match and wrap", func(t *testing.T) {
+		m := search(open(), "needle")
+		if m, _ = m.Update(runeKey('p')); top(m) != 31 {
+			t.Errorf("top line = %d, want 31", top(m))
+		}
+		if m, _ = m.Update(runeKey('N')); top(m) != 30 {
+			t.Errorf("top line = %d, want 30", top(m))
+		}
+	})
+
+	t.Run("a text that is not found is said so and nothing moves", func(t *testing.T) {
+		m := search(search(open(), "needle"), "absent") // typed after the last search: "needleabsent"
+		if v := m.View(); top(m) != 5 || !strings.Contains(v, "not found: needleabsent") || strings.Contains(v, matchOn) || strings.Contains(v, currentOn) {
+			t.Errorf("top line = %d, view = %q", top(m), v)
+		}
+		m, _ = m.Update(runeKey('n'))
+		if !strings.Contains(m.View(), "not found: needleabsent") {
+			t.Errorf("view = %q", m.View())
+		}
+	})
+
+	t.Run("esc cancels the prompt and keeps the dialog and its search", func(t *testing.T) {
+		m := search(open(), "needle")
+		m, _ = m.Update(runeKey('/'))
+		m, _ = m.Update(runeKey('x'))
+		m, _ = m.Update(key(tea.KeyEsc))
+		if v := m.View(); !strings.Contains(v, "esc: back") || !strings.Contains(v, currentOn) {
+			t.Errorf("view = %q", v)
+		}
+		if m, _ = m.Update(runeKey('n')); top(m) != 30 {
+			t.Errorf("top line = %d, want 30", top(m))
+		}
+	})
+
+	t.Run("/ again edits the last search", func(t *testing.T) {
+		m := search(open(), "needl")
+		if v := m.View(); !strings.Contains(v, currentOn+"needl"+currentOff) {
+			t.Errorf("view = %q", v)
+		}
+		m, _ = m.Update(runeKey('/'))
+		if v := m.View(); !strings.Contains(v, "> needl") {
+			t.Errorf("view = %q", v)
+		}
+		m, _ = m.Update(runeKey('e'))
+		m, _ = m.Update(key(tea.KeyEnter))
+		if v := m.View(); !strings.Contains(v, currentOn+"needle"+currentOff) {
+			t.Errorf("view = %q", v)
+		}
+	})
+
+	t.Run("a search does not outlive its commit", func(t *testing.T) {
+		m := search(open(), "needle")
+		m, _ = m.Update(key(tea.KeyEsc))
+		m, _ = m.Update(key(tea.KeyEnter))
+		if v := m.View(); top(m) != 0 || strings.Contains(v, matchOn) || strings.Contains(v, currentOn) {
+			t.Errorf("top line = %d, view = %q", top(m), v)
+		}
+		if m, _ = m.Update(runeKey('n')); top(m) != 0 {
+			t.Errorf("top line = %d, want 0", top(m))
+		}
+	})
+}

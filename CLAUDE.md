@@ -258,7 +258,9 @@ Without a TTY on stdout the default command is printed as `git log` would
 
 The hash of a graph line is read by `commitHash` (`tui/log.go`) after
 stripping colors; a graph-only line (`|/`) has none and enter ignores it, so a
-command's format must start with the hash. The built-in commands live in
+command's format must start with the hash. In the dialog `/` searches as
+`less` does (`tui/log_search.go`, `TestHighlight`, `TestLogModel_Search`):
+matches in reverse video, `n` next, `p`/`N` previous. The built-in commands live in
 `config/default.toml`; a user `[[log.cmds]]` array replaces them wholesale.
 
 `L` on a merge at the tip of a local branch replaces it by one commit holding

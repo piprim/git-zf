@@ -100,6 +100,9 @@ func LogModel(lines []string, cmds []config.LogCmd, current int, actions LogActi
 	m.list.SetHorizontalStep(horizontalStep)
 	m.dialog = viewport.New(logDefaultWidth-4, logDefaultHeight-4)
 	m.dialog.SetHorizontalStep(horizontalStep)
+	m.searchInput = textinput.New()
+	m.searchInput.Placeholder = "type to search…"
+	m.searchInput.CharLimit = 64
 	m.render()
 
 	return m
@@ -124,6 +127,15 @@ type logModel struct {
 	// viewing is set while the dialog replaces the list.
 	viewing bool
 	dialog  viewport.Model
+	// dialogText is the commit as git printed it; the dialog shows it with
+	// the matches of query highlighted, match being the current one.
+	dialogText   string
+	searchInput  textinput.Model
+	searching    bool
+	query        string
+	matches      []dialogMatch
+	match        int
+	dialogStatus string
 	// asking is the y/n question the hint shows about plan; status is a
 	// line shown in place of the hint until the next key.
 	asking int
@@ -398,14 +410,19 @@ func (m *logModel) openDialog() {
 	if err != nil {
 		text = "Error: " + err.Error()
 	}
-	m.dialog.SetContent(text)
+	m.dialogText = text
 	m.dialog.GotoTop()
 	m.dialog.SetXOffset(0)
+	m.search("") // a search does not outlive its commit
 	m.viewing = true
 }
 
 func (m *logModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.searching {
+		return m.updateSearching(msg)
+	}
 	if key, ok := msg.(tea.KeyMsg); ok {
+		m.dialogStatus = ""
 		switch key.String() {
 		case "esc", "q":
 			m.viewing = false
@@ -413,6 +430,20 @@ func (m *logModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+c":
 			return m, tea.Quit
+		case "/":
+			m.searching = true
+			m.searchInput.SetValue(m.query) // the last search, to edit; ctrl+u empties it
+			m.searchInput.CursorEnd()
+
+			return m, m.searchInput.Focus()
+		case "n":
+			m.gotoMatch(m.match + 1)
+
+			return m, nil
+		case "p", "N":
+			m.gotoMatch(m.match - 1)
+
+			return m, nil
 		}
 	}
 
@@ -424,7 +455,15 @@ func (m *logModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *logModel) View() string {
 	if m.viewing {
-		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓←→ scroll · esc: back"
+		hint := "↑↓←→ scroll · /: search · n/p: next/prev · esc: back"
+		switch {
+		case m.searching:
+			hint = "/" + m.searchInput.View() + "  (esc: cancel  enter: search)"
+		case m.dialogStatus != "":
+			hint = m.dialogStatus
+		}
+
+		return dialogStyle.Render(m.dialog.View()) + "\n\n" + hint
 	}
 
 	head := "Log: " + activeTabStyle.Render(m.cmds[m.current].Name) + inactiveTabStyle.Render(describe(m.cmds[m.current])) +
