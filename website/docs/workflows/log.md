@@ -18,12 +18,29 @@ An interactive view of `git log`, without git-zf's own refs (`refs/zf/*`).
 | Key | Does |
 |---|---|
 | `enter` | opens the commit under the cursor in a dialog with its stat, raw file list and patch; `esc` returns |
-| `/` | filters the lines as you type; `enter` keeps the filter, `esc` clears it |
+| `/` | filters the lines as you type; `enter` keeps the filter, `esc` clears it. In an open commit it searches instead (below) |
 | `←` `→` | scroll long lines |
 | `1` to `9` | switch to the command with that key |
 | `c` | pick a command by name |
 | `L` | linearize the merge under the cursor (below) |
 | `q` | quits |
+
+## Search in a commit
+
+In the dialog of a commit, `/` searches its text as `less` does, to find one
+file among many. The search ignores case and takes the text as typed, not as
+a regular expression.
+
+| Key | Does |
+|---|---|
+| `/` | opens the search prompt, holding the last search to edit; `ctrl+u` empties it, `enter` searches, `esc` cancels |
+| `n` | goes to the next match |
+| `p` `N` | go to the previous match |
+| `esc` `q` | return to the list |
+
+Every match is shown in reverse video and the current one in yellow. The
+view jumps to the first match at or below the top line and wraps around at
+the ends. The search is forgotten when the commit is closed.
 
 ## The commands
 

@@ -11,6 +11,8 @@ Browse the commit graph; enter shows a commit
 
 Browse the commit graph of every branch and tag, without git-zf's own refs.
 Enter opens the commit under the cursor with its stat and patch; esc returns.
+There / searches as less does: n goes to the next match, p or N to the previous,
+and / again edits the search.
 L on a merge at the tip of a local branch replaces it by one commit holding its
 tree (the branch stays bit-identical but linear), after fetching: it is refused
 when the upstream moved, and the push that follows is offered with a lease on
