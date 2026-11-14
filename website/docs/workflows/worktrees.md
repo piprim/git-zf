@@ -25,6 +25,11 @@ worktree-dir = "~/worktrees" # omit = <repo>/.worktrees/<branch>
 When a worktree is created the command prints its path and a `cd` hint,
 since the shell cannot change directory for you.
 
+When the new worktree has submodules, they are checked out too
+(`git submodule update --init --recursive`). If that fails, say the remote
+is unreachable, the worktree is still created and a warning gives the
+command to retry.
+
 The default path is `.worktrees/<branch>` under the repository root, for
 instance `~/code/myapp/.worktrees/ABC-42@feat@add-oauth-login`. Add
 `.worktrees/` to your `.gitignore`. The directory is also added to the

@@ -2,7 +2,6 @@
 
 ## Enhancement
 
-0. Creating a worktree, when there are submodules should run `git submodule update --init --recursive`.
 1. Issue mirror, repo <-> tracker (first version shipped). Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
   c. `issue start` should assign to me if it's not already assigned to me.
       m in issue list keeps filtering on the tracker's assignment only, so a repo-assigned issue will not show under "mine" yet.
@@ -112,7 +111,6 @@ Submodules changed but not updated:
 
 no changes added to commit (use "git add" and/or "git commit -a")
 ```
-10. Creating a git worktree does not update submodules
 11. Closing an issue developped in a worktree with submodule, removing the worktree failed with:
     `fatal: working trees containing submodules cannot be moved or removed`
 12. Starting an issue in a dedicaced branch, prush the branch and create a PR in the tracker. The PR is accepted from the tracker. How close the issue localy ?

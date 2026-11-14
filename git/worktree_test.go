@@ -1,9 +1,14 @@
 package git
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/piprim/git-zf/internal/pkg"
 )
 
 func TestParseWorktreeList(t *testing.T) {
@@ -226,6 +231,117 @@ func TestHoldingWorktree(t *testing.T) {
 		}
 		if got == nil || !got.Prunable {
 			t.Fatalf("HoldingWorktree after rm = %+v, want Prunable", got)
+		}
+	})
+}
+
+// addSubmodule adds the repository at url as submodule name of the repo at
+// repoDir and commits it on the current branch.
+func addSubmodule(t *testing.T, repoDir, url, name string) {
+	t.Helper()
+
+	mustGit(t, repoDir, "submodule", "add", url, name)
+	mustGit(t, repoDir, "commit", "-m", "chore: add submodule")
+}
+
+// Not parallel: t.Setenv lets git clone a submodule from a local path.
+func TestCreateWorktree_Submodules(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+
+	// repo returns a client writing Err to the returned buffer, and its dir.
+	repo := func(t *testing.T) (*Client, string, *bytes.Buffer) {
+		t.Helper()
+
+		_, dir := newDiskRepo(t)
+		errBuf := &bytes.Buffer{}
+
+		c, err := NewClientAt(&pkg.IO{Out: io.Discard, Err: errBuf}, dir)
+		if err != nil {
+			t.Fatalf("NewClientAt: %v", err)
+		}
+
+		return c, dir, errBuf
+	}
+
+	t.Run("submodule on base branch is checked out even when main tree has no .gitmodules", func(t *testing.T) {
+		c, dir, errBuf := repo(t)
+		_, src := newDiskRepo(t)
+
+		mustGit(t, dir, "checkout", "-q", "-b", "with-sub")
+		addSubmodule(t, dir, src, "lib")
+		mustGit(t, dir, "checkout", "-q", "main")
+
+		if _, err := os.Stat(filepath.Join(dir, ".gitmodules")); err == nil {
+			t.Fatal("main tree still has .gitmodules")
+		}
+
+		wt := filepath.Join(t.TempDir(), "wt")
+		if err := c.CreateWorktree(t.Context(), "feat/sub", "with-sub", wt); err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(wt, "lib", "base.go")); err != nil {
+			t.Errorf("submodule not checked out: %v", err)
+		}
+		if strings.Contains(errBuf.String(), "warning:") {
+			t.Errorf("unexpected warning:\n%s", errBuf)
+		}
+	})
+
+	t.Run("no submodules: nothing runs, no warning is printed", func(t *testing.T) {
+		c, _, errBuf := repo(t)
+
+		if err := c.CreateWorktree(t.Context(), "feat/sub", "main", filepath.Join(t.TempDir(), "wt")); err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
+		}
+		if got := errBuf.String(); strings.Contains(got, "warning:") || strings.Contains(got, "submodule") {
+			t.Errorf("unexpected output on Err:\n%s", got)
+		}
+	})
+
+	t.Run("unreachable submodule warns, keeps the worktree, and still excludes in-repo dir", func(t *testing.T) {
+		c, dir, errBuf := repo(t)
+		_, src := newDiskRepo(t)
+
+		addSubmodule(t, dir, src, "lib")
+		if err := os.RemoveAll(src); err != nil {
+			t.Fatalf("remove submodule source: %v", err)
+		}
+
+		wt := filepath.Join(dir, ".worktrees", "feat-sub")
+		if err := c.CreateWorktree(t.Context(), "feat/sub", "main", wt); err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
+		}
+		if _, err := os.Stat(wt); err != nil {
+			t.Errorf("worktree dir missing: %v", err)
+		}
+		for _, want := range []string{"warning:", "git -C " + wt + " submodule update --init --recursive"} {
+			if !strings.Contains(errBuf.String(), want) {
+				t.Errorf("Err lacks %q:\n%s", want, errBuf)
+			}
+		}
+
+		exclude, err := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+		if err != nil {
+			t.Fatalf("read exclude: %v", err)
+		}
+		if !strings.Contains(string(exclude), "/.worktrees/\n") {
+			t.Errorf("exclude lacks /.worktrees/:\n%s", exclude)
+		}
+	})
+
+	t.Run("unreachable submodule with nil client IO does not panic", func(t *testing.T) {
+		c, dir := newDiskRepo(t)
+		_, src := newDiskRepo(t)
+
+		addSubmodule(t, dir, src, "lib")
+		if err := os.RemoveAll(src); err != nil {
+			t.Fatalf("remove submodule source: %v", err)
+		}
+
+		if err := c.CreateWorktree(t.Context(), "feat/sub", "main", filepath.Join(t.TempDir(), "wt")); err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
 		}
 	})
 }

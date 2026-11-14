@@ -75,6 +75,17 @@ tracker, and true for `issue start` and `issue list`. When adding a toggle, conf
 `StartPrompter` and add a matching E2E test alongside the existing
 happy-path and failure-mode tests.
 
+`git.Client.CreateWorktree` (`git/worktree.go`) is the only place a worktree
+is created. After `git worktree add` it excludes an in-repo worktree
+directory, then `initSubmodules` runs `git submodule update --init
+--recursive` when the new worktree (not the main tree) holds a
+`.gitmodules`. A failure there is a warning on Err with the command to
+retry, never an error: the branch exists and must still be recorded.
+`TestCreateWorktree_Submodules` (`git/worktree_test.go`) is not parallel: it
+sets `protocol.file.allow=always` with `t.Setenv` to clone a local submodule.
+
+    mise exec -- go test ./git/... -run "TestCreateWorktree" -v
+
 ### Testing the prune flow
 
 The branch-prune flow is end-to-end tested in `cmd/branch/prune_e2e_test.go`.

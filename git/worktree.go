@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 // For a path inside the working tree, its first component (the directory
 // holding the worktrees) is added to .git/info/exclude once, so the main tree
 // never sees the worktrees as untracked (and never stages them).
+// When the new worktree has submodules they are then initialized, recursively;
+// a failure there is a warning: the worktree and its branch exist.
 func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, path string) error {
 	root := c.root
 
@@ -20,16 +23,37 @@ func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, pat
 		return fmt.Errorf("create worktree %q: %w", path, err)
 	}
 
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		return nil
+	if rel, err := filepath.Rel(root, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		if err := c.excludeDir(strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]); err != nil {
+			return fmt.Errorf("exclude worktree %q: %w", path, err)
+		}
 	}
 
-	if err := c.excludeDir(strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]); err != nil {
-		return fmt.Errorf("exclude worktree %q: %w", path, err)
-	}
+	c.initSubmodules(ctx, path)
 
 	return nil
+}
+
+// initSubmodules runs `git submodule update --init --recursive` in the
+// worktree at path when it holds a .gitmodules file. A failure (network,
+// auth) is reported on Err with the command to retry, never returned.
+func (c *Client) initSubmodules(ctx context.Context, path string) {
+	if _, err := os.Stat(filepath.Join(path, ".gitmodules")); err != nil {
+		return
+	}
+
+	err := c.runInteractive(ctx, path, "submodule", "update", "--init", "--recursive")
+	if err == nil {
+		return
+	}
+
+	errW := io.Writer(os.Stderr)
+	if c.io != nil && c.io.Err != nil {
+		errW = c.io.Err
+	}
+
+	fmt.Fprintf(errW, "warning: submodules not initialized in %s: %v\n"+
+		"run 'git -C %s submodule update --init --recursive' to retry\n", path, err, path)
 }
 
 // excludeDir appends "/<dir>/" to .git/info/exclude unless the line is there.
