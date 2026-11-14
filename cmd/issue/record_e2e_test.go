@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/huh"
+	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
@@ -21,9 +24,12 @@ import (
 type scriptedRecordPrompter struct {
 	New issuepkg.NewIssue // copied into the form input by NewIssue
 	// NewOffered is the input the `issue new` form opened with.
-	NewOffered issuepkg.NewIssue
-	PickID     string // returned by PickRecord; "" picks the first record offered
-	Comment    string
+	NewOffered   issuepkg.NewIssue
+	Start        bool   // returned by ConfirmStart
+	StartErr     error  // returned by ConfirmStart when non-nil
+	StartOffered string // display ID offered to ConfirmStart
+	PickID       string // returned by PickRecord; "" picks the first record offered
+	Comment      string
 	// LabelSet is what LabelChanges returns; LabelOffered records what it, or
 	// NewIssue, was offered.
 	LabelSet     []string
@@ -60,6 +66,18 @@ func (s *scriptedRecordPrompter) NewIssue(_ context.Context, _, choices []string
 	*in = s.New
 
 	return nil
+}
+
+func (s *scriptedRecordPrompter) ConfirmStart(_ context.Context, displayID string) (bool, error) {
+	s.StartOffered = displayID
+	if s.StartErr != nil {
+		return false, s.StartErr
+	}
+	if s.Err != nil {
+		return false, s.Err
+	}
+
+	return s.Start, nil
 }
 
 func (s *scriptedRecordPrompter) PickRecord(_ context.Context, records []issuepkg.Record) (string, error) {
@@ -513,6 +531,181 @@ func TestNewCmd_Assign(t *testing.T) {
 	t.Run("--assign assigns the issue to its creator", func(t *testing.T) {
 		if rec := rig.onlyRecord(t); rec.Assignee != "alice <alice@test.com>" {
 			t.Errorf("Assignee = %q", rec.Assignee)
+		}
+	})
+}
+
+func TestRunNew_ProposeStart(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	formNew := issuepkg.NewIssue{Title: "From form", BranchType: "fix"}
+
+	t.Run("declining the start proposal leaves no branch and no error", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, Start: false}
+		sp := &scriptedStartPrompter{ConfirmBranch: true}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, sp)
+		if err != nil || started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		rec := rig.onlyRecord(t)
+		if p.StartOffered != rec.ShortID() {
+			t.Errorf("StartOffered = %q, want %q", p.StartOffered, rec.ShortID())
+		}
+		if out := gitOutput(t, rig.dir, "branch", "--format=%(refname:short)"); out != "main" {
+			t.Errorf("branches = %q, want only main", out)
+		}
+	})
+
+	t.Run("accepting the start proposal creates and checks out the issue branch", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, Start: true}
+		sp := &scriptedStartPrompter{ConfirmBranch: true}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, sp)
+		if err != nil || !started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		rec := rig.onlyRecord(t)
+		wantBranch := rec.ShortID() + "@fix@from-form"
+		exists, err := rig.client.BranchExists(wantBranch)
+		if err != nil || !exists {
+			t.Errorf("branch %q exists = %v (%v)", wantBranch, exists, err)
+		}
+		ref, err := branch.Load(ctx, rig.client, rec.ShortID())
+		if err != nil || ref == nil || ref.IssueID != rec.ID || ref.Entry(wantBranch) == nil {
+			t.Errorf("ref = %+v (%v)", ref, err)
+		}
+	})
+
+	t.Run("esc on the start proposal keeps the created issue and returns no error", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, StartErr: huh.ErrUserAborted}
+		sp := &scriptedStartPrompter{ConfirmBranch: true}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, sp)
+		if err != nil || started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		if rec := rig.onlyRecord(t); rec.Title != "From form" {
+			t.Errorf("record = %+v", rec)
+		}
+		if out := gitOutput(t, rig.dir, "branch", "--format=%(refname:short)"); out != "main" {
+			t.Errorf("branches = %q, want only main", out)
+		}
+	})
+
+	t.Run("declining the branch confirm keeps the created issue", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, Start: true}
+		sp := &scriptedStartPrompter{ConfirmBranch: false}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, sp)
+		if err != nil || !started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		if rec := rig.onlyRecord(t); rec.Title != "From form" {
+			t.Errorf("record = %+v", rec)
+		}
+		if out := gitOutput(t, rig.dir, "branch", "--format=%(refname:short)"); out != "main" {
+			t.Errorf("branches = %q, want only main", out)
+		}
+	})
+
+	t.Run("esc inside the start flow keeps the created issue and returns no error", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, Start: true}
+		sp := &scriptedStartPrompter{ConfirmBranchErr: huh.ErrUserAborted}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, sp)
+		if err != nil || started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		if rec := rig.onlyRecord(t); rec.Title != "From form" {
+			t.Errorf("record = %+v", rec)
+		}
+		if out := gitOutput(t, rig.dir, "branch", "--format=%(refname:short)"); out != "main" {
+			t.Errorf("branches = %q, want only main", out)
+		}
+	})
+
+	t.Run("a nil start prompter never asks to start", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, Start: true}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, nil)
+		if err != nil || started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		if p.StartOffered != "" {
+			t.Errorf("StartOffered = %q, want empty", p.StartOffered)
+		}
+		if out := gitOutput(t, rig.dir, "branch", "--format=%(refname:short)"); out != "main" {
+			t.Errorf("branches = %q, want only main", out)
+		}
+	})
+
+	t.Run("flag-driven run never asks to start", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		sp := &scriptedStartPrompter{ConfirmBranch: true}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{Title: "Flagged"}, nil, sp)
+		if err != nil || started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		if rec := rig.onlyRecord(t); rec.Title != "Flagged" {
+			t.Errorf("record = %+v", rec)
+		}
+		if out := gitOutput(t, rig.dir, "branch", "--format=%(refname:short)"); out != "main" {
+			t.Errorf("branches = %q, want only main", out)
+		}
+	})
+
+	t.Run("a non-abort error on the start proposal is returned after creating the issue", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, StartErr: errors.New("boom")}
+		sp := &scriptedStartPrompter{ConfirmBranch: true}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, sp)
+		if err == nil || !strings.Contains(err.Error(), "confirm start: boom") || started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		if rec := rig.onlyRecord(t); rec.Title != "From form" {
+			t.Errorf("record = %+v", rec)
+		}
+	})
+
+	t.Run("a non-abort error inside the start flow is returned after creating the issue", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newRecordRig(t, "alice", "")
+		p := &scriptedRecordPrompter{New: formNew, Start: true}
+		sp := &scriptedStartPrompter{ConfirmBranchErr: errors.New("boom")}
+
+		started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg}, issuepkg.NewIssue{}, p, sp)
+		if err == nil || !strings.Contains(err.Error(), "start issue:") || !strings.Contains(err.Error(), "boom") || started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+		if rec := rig.onlyRecord(t); rec.Title != "From form" {
+			t.Errorf("record = %+v", rec)
 		}
 	})
 }

@@ -5,13 +5,13 @@ sidebar_label: "issue new"
 
 ## git zf issue new
 
-Create an issue in the repository (no branch)
+Create an issue in the repository
 
 ### Synopsis
 
-Create an issue stored in the repository under refs/zf/issues/ and push it.
-No branch is created: run "git zf issue start" to begin work on it.
-Passing any flag skips the form.
+Create an issue stored in the repository under refs/zf/issues/ and push it,
+then propose to start work on it right away. Passing any flag skips the form
+and creates no branch.
 
 ```
 git zf issue new [flags]

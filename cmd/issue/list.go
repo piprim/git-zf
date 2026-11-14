@@ -159,7 +159,13 @@ func (ir Issue) listAction(
 			return false, err
 		}
 	case tui.IssuePickNew:
-		err = runNew(ctx, infra.client, ir.appConfig, issuepkg.NewIssue{}, p, infra.mirror)
+		deps := infra.deps()
+		deps.Cfg = ir.appConfig
+		var started bool
+		started, err = runNewWithStart(ctx, deps, issuepkg.NewIssue{}, p, sp)
+		if started {
+			return false, nil
+		}
 	case tui.IssuePickClose:
 		// The merge flow of `issue close <id>`: the row's issue names the
 		// branch, the flow confirms on its own.

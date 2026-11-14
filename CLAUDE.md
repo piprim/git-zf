@@ -166,11 +166,15 @@ not recorded in `RecordedOpens`.
 the form): an `assign` op holding the git identity, shown by `issue show`.
 The mirror's export then calls `AssignToMe` for a record assigned to the
 clone's own identity (the fake: `RecordedAssigns`, `AssignErr`), and nowhere
-else.
+else. When run interactively (`issue new` with no flags or `n` in `issue
+list`), it then asks whether to start work on the issue right away
+(`recordPrompter.ConfirmStart`, default no) and runs `issueflow.StartRow` on
+yes (`runNewWithStart`, `TestRunNew_ProposeStart`,
+`TestMirror_NewStartUsesTrackerNumber`).
 
     mise exec -- go test ./issue/... -run "TestFold_Assign|TestCreate_Assign|TestReconcile_ExportAssign" -v
     mise exec -- go test ./tracker/... -run "AssignToMe" -v
-    mise exec -- go test ./cmd/issue/... -run "^TestRunNew_Assign|^TestNewCmd_Assign|^TestMirror_NewAssigns" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestRunNew_Assign|^TestNewCmd_Assign|^TestMirror_NewAssigns|^TestRunNew_ProposeStart|^TestMirror_NewStart" -v
 
 The fake's `Edit` and `WebComment` play the tracker's web UI (not recorded, the
 issue's `UpdatedAt` moves); `StatusIsLabel` makes it behave like Redmine. A

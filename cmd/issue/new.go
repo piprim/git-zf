@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
@@ -20,10 +21,10 @@ func (i Issue) getNewCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "new",
-		Short: "Create an issue in the repository (no branch)",
-		Long: `Create an issue stored in the repository under refs/zf/issues/ and push it.
-No branch is created: run "git zf issue start" to begin work on it.
-Passing any flag skips the form.`,
+		Short: "Create an issue in the repository",
+		Long: `Create an issue stored in the repository under refs/zf/issues/ and push it,
+then propose to start work on it right away. Passing any flag skips the form
+and creates no branch.`,
 		Args: cobra.NoArgs,
 	}
 
@@ -58,15 +59,66 @@ func (i Issue) newRunE(cmd *cobra.Command, in issuepkg.NewIssue, interactive boo
 		p = huhRecordPrompter{}
 	}
 
-	return runNew(cmd.Context(), client, i.appConfig, in, p, openMirror(i.appConfig, client.IO().Err))
+	_, err = runNewWithStart(
+		cmd.Context(),
+		issueflow.StartDeps{Client: client, Cfg: i.appConfig, Mirror: openMirror(i.appConfig, client.IO().Err)},
+		in, p, issueflow.NewHuhStartPrompter(),
+	)
+
+	return err
 }
 
-// runNew creates the issue described by in. A non-nil p fills in from the
-// form first.
+// runNew creates the issue described by in without proposing to start it. A
+// non-nil p fills in from the form first.
 func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in issuepkg.NewIssue, p recordPrompter, m *issuepkg.Mirror) error {
+	_, err := runNewWithStart(ctx, issueflow.StartDeps{Client: client, Cfg: cfg, Mirror: m}, in, p, nil)
+
+	return err
+}
+
+// runNewWithStart creates the issue described by in and, when both p and sp
+// are non-nil, proposes to start a branch for it right away. It reports
+// whether the start flow ran to its end; a declined branch confirm counts,
+// as for s.
+func runNewWithStart(
+	ctx context.Context, deps issueflow.StartDeps, in issuepkg.NewIssue, p recordPrompter, sp issueflow.StartPrompter,
+) (bool, error) {
+	rec, err := createIssue(ctx, deps.Client, deps.Cfg, in, p, deps.Mirror)
+	if err != nil {
+		return false, err
+	}
+	if p == nil || sp == nil {
+		return false, nil
+	}
+
+	start, err := p.ConfirmStart(ctx, rec.DisplayID())
+	if errors.Is(err, huh.ErrUserAborted) || (err == nil && !start) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("confirm start: %w", err)
+	}
+
+	err = issueflow.StartRow(ctx, deps, sp, &issuepkg.Row{IssueSlug: rec.ID, State: rec.State})
+	if errors.Is(err, huh.ErrUserAborted) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("start issue: %w", err)
+	}
+
+	return true, nil
+}
+
+// createIssue creates the issue described by in, pushes it, reconciles the
+// mirror and prints the Created line. A non-nil p fills in from the form
+// first.
+func createIssue(
+	ctx context.Context, client *git.Client, cfg *config.AppConfig, in issuepkg.NewIssue, p recordPrompter, m *issuepkg.Mirror,
+) (issuepkg.Record, error) {
 	types := commitTypeNames(cfg)
 	if len(types) == 0 {
-		return errors.New("config: no commit types found")
+		return issuepkg.Record{}, errors.New("config: no commit types found")
 	}
 
 	if p != nil {
@@ -76,27 +128,27 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 		// The form proposes to assign the issue to its creator.
 		in.Assign = true
 		if err := p.NewIssue(ctx, types, choices, single, &in); err != nil {
-			return fmt.Errorf("issue form: %w", err)
+			return issuepkg.Record{}, fmt.Errorf("issue form: %w", err)
 		}
 	}
 
 	in.Title = strings.TrimSpace(in.Title)
 	if in.Title == "" {
-		return errors.New("issue title is required (--title)")
+		return issuepkg.Record{}, errors.New("issue title is required (--title)")
 	}
 
 	if in.BranchType == "" {
 		in.BranchType = types[0]
 	}
 	if !slices.Contains(types, in.BranchType) {
-		return fmt.Errorf("unknown type %q (want one of: %s)", in.BranchType, strings.Join(types, ", "))
+		return issuepkg.Record{}, fmt.Errorf("unknown type %q (want one of: %s)", in.BranchType, strings.Join(types, ", "))
 	}
 
 	in.Labels = issuepkg.CleanLabels(in.Labels)
 
 	rec, err := issuepkg.Create(ctx, client, in)
 	if err != nil {
-		return fmt.Errorf("create issue: %w", err)
+		return issuepkg.Record{}, fmt.Errorf("create issue: %w", err)
 	}
 
 	pushIssue(ctx, client, rec.ID)
@@ -114,5 +166,5 @@ func runNew(ctx context.Context, client *git.Client, cfg *config.AppConfig, in i
 	}
 	fmt.Fprintf(client.IO().Out, "Created issue %s: %s\n", rec.DisplayID(), rec.Title)
 
-	return nil
+	return rec, nil
 }

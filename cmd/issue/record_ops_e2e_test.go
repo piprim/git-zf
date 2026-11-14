@@ -731,12 +731,47 @@ func TestListAction(t *testing.T) {
 			t.Errorf("reopen = %v, err = %v, comments = %+v", reopen, err, after.Comments)
 		}
 	})
-	t.Run("n creates an issue from the form and reopens", func(t *testing.T) {
-		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From the table", BranchType: "fix"}}
+	t.Run("n creates an issue, declines start and reopens", func(t *testing.T) {
+		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From the table", BranchType: "fix"}, Start: false}
 		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickNew, nil)
 		recs, _, listErr := issuepkg.List(ctx, rig.client)
-		if !reopen || err != nil || listErr != nil || !slices.ContainsFunc(recs, func(r issuepkg.Record) bool { return r.Title == "From the table" }) {
-			t.Errorf("reopen = %v, err = %v, records = %+v (%v)", reopen, err, recs, listErr)
+		idx := slices.IndexFunc(recs, func(r issuepkg.Record) bool { return r.Title == "From the table" })
+		if !reopen || err != nil || listErr != nil || idx < 0 {
+			t.Fatalf("reopen = %v, err = %v, records = %+v (%v)", reopen, err, recs, listErr)
+		}
+		if p.StartOffered != recs[idx].ShortID() {
+			t.Errorf("StartOffered = %q, want %q", p.StartOffered, recs[idx].ShortID())
+		}
+		if head := gitOutput(t, rig.dir, "rev-parse", "--abbrev-ref", "HEAD"); head != "main" {
+			t.Errorf("HEAD = %q, want main", head)
+		}
+	})
+	t.Run("n creates an issue, starts it and does not reopen", func(t *testing.T) {
+		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "Started from table", BranchType: "feat"}, Start: true}
+		sp := &scriptedStartPrompter{ConfirmBranch: true}
+		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickNew, nil)
+		recs, _, listErr := issuepkg.List(ctx, rig.client)
+		idx := slices.IndexFunc(recs, func(r issuepkg.Record) bool { return r.Title == "Started from table" })
+		if reopen || err != nil || listErr != nil || idx < 0 {
+			t.Fatalf("reopen = %v, err = %v, records = %+v (%v)", reopen, err, recs, listErr)
+		}
+		wantBranch := recs[idx].ShortID() + "@feat@started-from-table"
+		if head := gitOutput(t, rig.dir, "rev-parse", "--abbrev-ref", "HEAD"); head != wantBranch {
+			t.Errorf("HEAD = %q, want %q", head, wantBranch)
+		}
+	})
+	t.Run("n creates an issue, esc during start reopens without an error", func(t *testing.T) {
+		beforeHead := gitOutput(t, rig.dir, "rev-parse", "--abbrev-ref", "HEAD")
+		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "Aborted start", BranchType: "feat"}, Start: true}
+		sp := &scriptedStartPrompter{ConfirmBranchErr: huh.ErrUserAborted}
+		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickNew, nil)
+		recs, _, listErr := issuepkg.List(ctx, rig.client)
+		idx := slices.IndexFunc(recs, func(r issuepkg.Record) bool { return r.Title == "Aborted start" })
+		if !reopen || err != nil || listErr != nil || idx < 0 {
+			t.Fatalf("reopen = %v, err = %v, records = %+v (%v)", reopen, err, recs, listErr)
+		}
+		if head := gitOutput(t, rig.dir, "rev-parse", "--abbrev-ref", "HEAD"); head != beforeHead {
+			t.Errorf("HEAD = %q, want %q", head, beforeHead)
 		}
 	})
 	t.Run("a form left with esc reopens without an error", func(t *testing.T) {

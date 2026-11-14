@@ -48,7 +48,7 @@ git zf issue [flags]
 * [git zf issue edit](git_zf_issue_edit.md)	 - Edit the title and description of an issue stored in the repository
 * [git zf issue label](git_zf_issue_label.md)	 - Add or remove labels on an issue stored in the repository
 * [git zf issue list](git_zf_issue_list.md)	 - List issues
-* [git zf issue new](git_zf_issue_new.md)	 - Create an issue in the repository (no branch)
+* [git zf issue new](git_zf_issue_new.md)	 - Create an issue in the repository
 * [git zf issue show](git_zf_issue_show.md)	 - Show an issue stored in the repository and its comments
 * [git zf issue start](git_zf_issue_start.md)	 - Start work on an issue (create branch)
 * [git zf issue sync](git_zf_issue_sync.md)	 - Fetch, merge and push the issues stored in the repository

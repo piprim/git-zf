@@ -36,6 +36,8 @@ type recordPrompter interface {
 	// the tracker knows (nil: unknown, the text line applies to current);
 	// single means one label only, the status.
 	LabelChanges(ctx context.Context, choices, current []string, single bool) ([]string, error)
+	// ConfirmStart asks whether to start work on displayID right away.
+	ConfirmStart(ctx context.Context, displayID string) (bool, error)
 }
 
 type huhRecordPrompter struct{}
@@ -108,6 +110,15 @@ func (huhRecordPrompter) LabelChanges(ctx context.Context, choices, current []st
 	}
 
 	return labels(), nil
+}
+
+func (huhRecordPrompter) ConfirmStart(ctx context.Context, displayID string) (bool, error) {
+	var start bool
+	if err := tui.Form(tui.IssueConfirm("Start issue "+displayID+" now?", &start)).RunWithContext(ctx); err != nil {
+		return false, fmt.Errorf("confirm start form: %w", err)
+	}
+
+	return start, nil
 }
 
 // commitTypeNames returns the configured commit types, which are the allowed

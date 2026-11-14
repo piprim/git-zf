@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/config"
 	issuepkg "github.com/piprim/git-zf/issue"
@@ -653,6 +654,47 @@ func TestMirror_NewAssignsTheTrackerIssue(t *testing.T) {
 	t.Run("the record keeps its assignee", func(t *testing.T) {
 		if rec.Assignee != "alice <alice@test.com>" {
 			t.Errorf("Assignee = %q", rec.Assignee)
+		}
+	})
+}
+
+func TestMirror_NewStartUsesTrackerNumber(t *testing.T) {
+	t.Parallel()
+
+	rig, ft, m := newMirrorRig(t)
+	ctx := t.Context()
+	p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "Mirrored start", BranchType: "feat"}, Start: true}
+	sp := &scriptedStartPrompter{ConfirmBranch: true}
+
+	started, err := runNewWithStart(ctx, issueflow.StartDeps{Client: rig.client, Cfg: rig.cfg, Mirror: m}, issuepkg.NewIssue{}, p, sp)
+	rec := rig.onlyRecord(t)
+
+	t.Run("no error and started", func(t *testing.T) {
+		if err != nil || !started {
+			t.Fatalf("started = %v, err = %v", started, err)
+		}
+	})
+	t.Run("the start confirm is offered the tracker number", func(t *testing.T) {
+		if p.StartOffered != "1" {
+			t.Errorf("StartOffered = %q, want 1", p.StartOffered)
+		}
+	})
+	t.Run("the branch is named after the tracker number", func(t *testing.T) {
+		const want = "1@feat@mirrored-start"
+		exists, err := rig.client.BranchExists(want)
+		if err != nil || !exists {
+			t.Errorf("branch %q exists = %v (%v)", want, exists, err)
+		}
+	})
+	t.Run("the branch chain under the number records the full issue ID", func(t *testing.T) {
+		ref, err := branch.Load(ctx, rig.client, "1")
+		if err != nil || ref == nil || ref.IssueID != rec.ID {
+			t.Errorf("ref = %+v (%v)", ref, err)
+		}
+	})
+	t.Run("no status change reached the tracker", func(t *testing.T) {
+		if len(ft.RecordedUpdates) != 0 {
+			t.Errorf("RecordedUpdates = %+v, want none", ft.RecordedUpdates)
 		}
 	})
 }
