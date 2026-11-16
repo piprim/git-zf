@@ -205,3 +205,25 @@ func TestPullRequestClean(t *testing.T) {
 		})
 	}
 }
+
+func TestIssueClean_AuthorAndAssignees(t *testing.T) {
+	t.Parallel()
+
+	in := tracker.Issue{Author: "al\x1bice", Assignees: []string{"b\x1bob"}}
+	out := in.Clean()
+
+	t.Run("control characters are dropped", func(t *testing.T) {
+		t.Parallel()
+
+		if out.Author != "alice" || !slices.Equal(out.Assignees, []string{"bob"}) {
+			t.Errorf("Author = %q, Assignees = %q", out.Author, out.Assignees)
+		}
+	})
+	t.Run("the input's slice is not written to", func(t *testing.T) {
+		t.Parallel()
+
+		if in.Assignees[0] != "b\x1bob" {
+			t.Errorf("input Assignees = %q", in.Assignees)
+		}
+	})
+}

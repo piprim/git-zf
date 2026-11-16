@@ -59,11 +59,14 @@ type Op struct {
 	TrackerID   string `json:"tracker_id,omitempty"`   // create, link_tracker: the tracker's issue number
 	Status      string `json:"status,omitempty"`       // tracker_state: the tracker's status name
 
-	Labels  []string `json:"labels,omitempty"`  // tracker_seen: the tracker's labels
-	Updated string   `json:"updated,omitempty"` // tracker_seen: the tracker's updated time, RFC 3339
+	Labels []string `json:"labels,omitempty"` // tracker_seen: the tracker's labels
+	// tracker_seen: who the tracker assigns the issue to, in its order. The
+	// issue's author travels in TrackerAuthor.
+	Assignees []string `json:"assignees,omitempty"`
+	Updated   string   `json:"updated,omitempty"` // tracker_seen: the tracker's updated time, RFC 3339
 
 	TrackerCommentID string `json:"tracker_comment_id,omitempty"` // add_comment (imported), link_comment
-	TrackerAuthor    string `json:"tracker_author,omitempty"`     // add_comment (imported): the tracker login
+	TrackerAuthor    string `json:"tracker_author,omitempty"`     // add_comment (imported), tracker_seen: the tracker login
 	TrackerAt        string `json:"tracker_at,omitempty"`         // add_comment (imported): the tracker's time, RFC 3339
 	Comment          string `json:"comment,omitempty"`            // link_comment: the op ID of the add_comment
 
@@ -89,6 +92,9 @@ func DecodeOp(id string, parents []string, payload []byte) (op Op, ok bool) {
 		text.Line(op.Updated), text.Line(op.TrackerCommentID), text.Line(op.TrackerAuthor), text.Line(op.TrackerAt), text.Line(op.Comment)
 	for i := range op.Labels {
 		op.Labels[i] = text.Line(op.Labels[i])
+	}
+	for i := range op.Assignees {
+		op.Assignees[i] = text.Line(op.Assignees[i])
 	}
 	op.Description, op.Body = text.Clean(op.Description), text.Clean(op.Body)
 	if op.Type == OpSetDescription {
@@ -118,6 +124,11 @@ type TrackerSnapshot struct {
 	Description string    `json:"description"`
 	Labels      []string  `json:"labels"`
 	Updated     time.Time `json:"updated"`
+	// Author is who opened the issue on the tracker and Assignees who it is
+	// assigned to there, in the tracker's order (never sorted: the first one
+	// is the one a table shows).
+	Author    string   `json:"author"`
+	Assignees []string `json:"assignees"`
 }
 
 // TrackerLink names the tracker issue a record is mirrored with.
@@ -140,6 +151,10 @@ type Record struct {
 	Labels      []string  `json:"labels"`
 	Comments    []Comment `json:"comments"`
 	CreatedAt   time.Time `json:"created_at"`
+	// Author is who opened the issue: the tracker's user for an issue born
+	// in the tracker, the git identity of the create op otherwise; "" when
+	// unknown (an import whose snapshot has no author yet).
+	Author string `json:"author"`
 	// Assignee is the git identity ("name <email>") of who works on the
 	// issue; "" when nobody was assigned.
 	Assignee string `json:"assignee"`
@@ -158,6 +173,19 @@ type Record struct {
 
 	// Warnings lists the commits Load skipped as malformed.
 	Warnings []string `json:"-"`
+}
+
+// AssignedTo is who works on the issue: the tracker's assignees when it
+// names any, the local Assignee otherwise. Never nil.
+func (r *Record) AssignedTo() []string {
+	switch {
+	case r.TrackerSeen != nil && len(r.TrackerSeen.Assignees) > 0:
+		return r.TrackerSeen.Assignees
+	case r.Assignee != "":
+		return []string{r.Assignee}
+	default:
+		return []string{}
+	}
 }
 
 // ShortID returns the first 7 characters of the ID.
@@ -195,7 +223,7 @@ func Fold(id string, ops []Op) Record {
 		case OpCreate:
 			rec.Title, rec.Description, rec.BranchType = op.Title, op.Description, op.BranchType
 			if op.ID == id {
-				rec.CreatedAt = chain.ParseAt(op.At)
+				rec.CreatedAt, rec.Author = chain.ParseAt(op.At), op.Author
 				if op.TrackerID != "" {
 					rec.Tracker = &TrackerLink{Type: op.TrackerType, Project: op.Project, ID: op.TrackerID, Born: true}
 				}
@@ -241,9 +269,15 @@ func Fold(id string, ops []Op) Record {
 				seenComments[op.TrackerCommentID] = true
 			}
 		case OpTrackerSeen:
-			seen := &TrackerSnapshot{Title: op.Title, Description: op.Description, Labels: slices.Clone(op.Labels)}
+			seen := &TrackerSnapshot{
+				Title: op.Title, Description: op.Description, Labels: slices.Clone(op.Labels),
+				Author: op.TrackerAuthor, Assignees: slices.Clone(op.Assignees),
+			}
 			if seen.Labels == nil {
 				seen.Labels = []string{}
+			}
+			if seen.Assignees == nil {
+				seen.Assignees = []string{}
 			}
 			slices.Sort(seen.Labels)
 			if op.Updated != "" {
@@ -269,6 +303,15 @@ func Fold(id string, ops []Op) Record {
 		rec.Labels = append(rec.Labels, l)
 	}
 	slices.Sort(rec.Labels)
+
+	// An issue born in the tracker was opened there: its root carries the
+	// importing clone's identity at best.
+	if rec.Tracker != nil && rec.Tracker.Born {
+		rec.Author = ""
+		if rec.TrackerSeen != nil {
+			rec.Author = rec.TrackerSeen.Author
+		}
+	}
 
 	return rec
 }

@@ -1156,3 +1156,25 @@ func TestIssueTable_Menu(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildIssueTableColumns_Assigned(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an 8-wide Assigned column sits right before Created", func(t *testing.T) {
+		t.Parallel()
+
+		cols := buildIssueTableColumns([]issue.Row{{IssueSlug: "1"}})
+		n := len(cols)
+		if n < 2 || cols[n-2].Title != "Assigned" || cols[n-2].Width != 8 || cols[n-1].Title != "Created" {
+			t.Errorf("cols = %+v", cols)
+		}
+	})
+	t.Run("a row has one cell per column", func(t *testing.T) {
+		t.Parallel()
+
+		rows := []issue.Row{{IssueSlug: "1", Assignee: "bob"}}
+		if cells, cols := issue.RowCells(&rows[0], false), buildIssueTableColumns(rows); len(cells) != len(cols) {
+			t.Errorf("%d cells for %d columns", len(cells), len(cols))
+		}
+	})
+}

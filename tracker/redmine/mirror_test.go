@@ -368,3 +368,47 @@ func TestRedmineContent(t *testing.T) {
 		}
 	})
 }
+
+func TestIssues_AuthorAndAssignees(t *testing.T) {
+	t.Parallel()
+
+	const assigned = `{"id": 42, "subject": "T", "status": {"id": 2, "name": "In Progress"},
+		"author": {"id": 3, "name": "Alice Martin"}, "assigned_to": {"id": 5, "name": "Bob Stone"}}`
+	serve := func(one string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/issues/42.json"):
+				fmt.Fprint(w, `{"issue": `+one+`}`)
+			case strings.HasSuffix(r.URL.Path, "/issues.json"):
+				fmt.Fprint(w, `{"issues": [`+one+`], "total_count": 1}`)
+			default:
+				fmt.Fprint(w, `{"user": {"id": 1}}`)
+			}
+		}
+	}
+
+	t.Run("listing reports the author's and the assignee's names", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := newMirrorAdapter(t, serve(assigned)).ListIssues(t.Context())
+		if err != nil || len(got) != 1 || got[0].Author != "Alice Martin" || !slices.Equal(got[0].Assignees, []string{"Bob Stone"}) {
+			t.Errorf("ListIssues = %+v, %v", got, err)
+		}
+	})
+	t.Run("a single read reports them too", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := newMirrorAdapter(t, serve(assigned)).GetIssue(t.Context(), "42")
+		if err != nil || got.Author != "Alice Martin" || !slices.Equal(got.Assignees, []string{"Bob Stone"}) {
+			t.Errorf("GetIssue = %+v, %v", got, err)
+		}
+	})
+	t.Run("no author and nobody assigned are empty", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := newMirrorAdapter(t, serve(`{"id": 42, "subject": "T"}`)).GetIssue(t.Context(), "42")
+		if err != nil || got.Author != "" || got.Assignees != nil {
+			t.Errorf("GetIssue = %+v, %v", got, err)
+		}
+	})
+}

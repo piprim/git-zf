@@ -1355,3 +1355,49 @@ func TestAssignToMe(t *testing.T) {
 		}
 	})
 }
+
+func TestIssues_AuthorAndAssignees(t *testing.T) {
+	t.Parallel()
+
+	const assigned = `{"number": 42, "title": "T", "state": "open", "user": {"login": "alice"},
+		"assignees": [{"login": "bob"}, {"login": "carol"}]}`
+	serve := func(one string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/issues/42"):
+				fmt.Fprint(w, one)
+			case strings.HasSuffix(r.URL.Path, "/issues") && r.URL.Query().Get("page") == "1":
+				fmt.Fprint(w, "["+one+"]")
+			case strings.HasSuffix(r.URL.Path, "/issues"):
+				fmt.Fprint(w, "[]")
+			default:
+				fmt.Fprint(w, `{"login": "me"}`)
+			}
+		}
+	}
+
+	t.Run("listing reports author and assignees in order", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := newMirrorAdapter(t, serve(assigned)).ListIssues(t.Context())
+		if err != nil || len(got) != 1 || got[0].Author != "alice" || !slices.Equal(got[0].Assignees, []string{"bob", "carol"}) {
+			t.Errorf("ListIssues = %+v, %v", got, err)
+		}
+	})
+	t.Run("a single read reports them too", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := newMirrorAdapter(t, serve(assigned)).GetIssue(t.Context(), "42")
+		if err != nil || got.Author != "alice" || !slices.Equal(got.Assignees, []string{"bob", "carol"}) {
+			t.Errorf("GetIssue = %+v, %v", got, err)
+		}
+	})
+	t.Run("a deleted author is empty", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := newMirrorAdapter(t, serve(`{"number": 42, "title": "T", "state": "open", "user": null}`)).GetIssue(t.Context(), "42")
+		if err != nil || got.Author != "" || got.Assignees != nil {
+			t.Errorf("GetIssue = %+v, %v", got, err)
+		}
+	})
+}

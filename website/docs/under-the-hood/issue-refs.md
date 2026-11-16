@@ -47,7 +47,7 @@ commit is signed when `commit.gpgsign` is true.
 | `link_tracker` | `tracker_type`, `project`, `tracker_id` | The tracker issue a repo-born issue was created as. The first one wins. |
 | `tracker_state` | `value`: `open` or `closed`, `status` | The last tracker state the chain saw. |
 | `link_comment` | `comment` (the op ID of an `add_comment`), `tracker_comment_id` | The tracker comment a local comment was posted as. |
-| `tracker_seen` | `title`, `description`, `labels`, `updated` | What the tracker showed the last time the mirror read the issue. |
+| `tracker_seen` | `title`, `description`, `labels`, `updated`, `tracker_author`, `assignees` | What the tracker showed the last time the mirror read the issue, with who opened it and who it is assigned to. |
 | `merge` | none | Two-parent commit joining changes made on two clones. |
 
 `v` is the format version, currently 1. `at` is RFC 3339, UTC, with a

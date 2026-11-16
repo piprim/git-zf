@@ -2,38 +2,9 @@
 
 ## Enhancement
 
-0. Creating a worktree, when there are submodules, run `git submodule update --init --recursive`.
-1. Issue mirror, repo <-> tracker (first version shipped). Spec: docs/superpowers/specs/2026-10-06-issue-tracker-mirror-design.md. Left out of its first version:
-  c. `issue start` should assign to me if it's not already assigned to me.
-      m in issue list keeps filtering on the tracker's assignment only, so a repo-assigned issue will not show under "mine" yet.
-      Now filtering on the tracker's assignment and the repo-assigned. Show eventual conflict. Syncing, tracker wins.
-  d. A warning from the reconcile when two records link the same tracker number (one clone exported while another imported the new issue before fetching).
-2. In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine'. Comes after the issue mirror.
+2. In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity.
 3. AI assistant. See https://github.com/rshdhere/vibecheck
-4. git zf branch close <branch-name>
-   No menu entry or picker. The command takes exactly one name and is not in the git zf branch menu. A picker over in-progress branches is a small addition
-5. `git zf issue new` should propose to start the issue now (yes/no).
-6. `git zf issue list` show the issues. Allow to pick one and open a view the same `git zf shwo <id>`
-7. In a submodule:
-```txt
->  git branch
-  master
-* scaffold
-
-pi@pi-machine mmw cpro/development  scaffold ending at 09:41:09
->  git zf branch merge
-┃ Branch to merge into current:
-┃ > master
-┃   14-middleware-authorization (origin)
-```
-
-The branch `14-middleware-authorization` is in the root git directory not in the submodule.
-
-And
-```txt
->  git zf branch list
-No branches found.
-```
+4. On issue close, the commit options are not useful
 8. Stupid functionality:
 Launching `git zf issue` and pressing two time on `c` to close the issue 22 output an error :
 `error: issue 22 has a branch in progress (22@feat@mmw-module-scaffolding): merge it with `git zf issue close`, or abandon it with `git zf branch close <branch-name>`, then close the issue`

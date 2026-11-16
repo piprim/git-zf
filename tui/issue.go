@@ -22,6 +22,7 @@ const (
 	issueTableColWidthBranch        = 38
 	issueTableColWidthLocalStatus   = 12
 	issueTableColWidthTrackerStatus = 14
+	issueTableColWidthAssigned      = 8
 	issueTableColWidthCreated       = 10
 	issueTableHeight                = 20
 
@@ -329,6 +330,7 @@ func buildIssueTableColumns(rows []issue.Row) []btable.Column {
 		btable.Column{Title: "Branch", Width: issueTableColWidthBranch},
 		btable.Column{Title: "Local Status", Width: issueTableColWidthLocalStatus},
 		btable.Column{Title: "Issue Status", Width: issueTableColWidthTrackerStatus},
+		btable.Column{Title: "Assigned", Width: issueTableColWidthAssigned},
 		btable.Column{Title: "Created", Width: issueTableColWidthCreated},
 	)
 }

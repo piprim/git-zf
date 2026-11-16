@@ -101,7 +101,7 @@ func mergeTrackerIssues(issues []tracker.Issue, rows []issue.Row) []issue.Row {
 		seen[iss.ID] = true
 		status := iss.Status
 		rows[i].Title, rows[i].Project, rows[i].TrackerStatus, rows[i].CreatedAt = iss.Subject, iss.Project, &status, iss.CreatedAt
-		rows[i].AssignedToMe = iss.AssignedToMe
+		rows[i].AssignedToMe, rows[i].Assignee = iss.AssignedToMe, firstAssignee(iss)
 	}
 
 	for i := range issues {
@@ -112,11 +112,21 @@ func mergeTrackerIssues(issues []tracker.Issue, rows []issue.Row) []issue.Row {
 		status := iss.Status
 		rows = append(rows, issue.Row{
 			IssueSlug: iss.ID, Title: iss.Subject, Project: iss.Project, TrackerStatus: &status, CreatedAt: iss.CreatedAt,
-			AssignedToMe: iss.AssignedToMe,
+			AssignedToMe: iss.AssignedToMe, Assignee: firstAssignee(iss),
 		})
 	}
 
 	return rows
+}
+
+// firstAssignee is the first of the tracker's assignees of iss, "" when
+// nobody is assigned.
+func firstAssignee(iss *tracker.Issue) string {
+	if len(iss.Assignees) == 0 {
+		return ""
+	}
+
+	return iss.Assignees[0]
 }
 
 // mergeRepoIssues enriches the branch rows with the issues stored in the
@@ -160,6 +170,7 @@ func mergeRepoIssues(ctx context.Context, deps StartDeps, rows []issue.Row) ([]i
 		rr := issue.RecordRow(rec)
 		out[i].Title, out[i].Labels, out[i].State = rr.Title, rr.Labels, rr.State
 		out[i].TrackerStatus, out[i].TrackerID, out[i].CreatedAt = rr.TrackerStatus, rr.TrackerID, rr.CreatedAt
+		out[i].Assignee = rr.Assignee
 	}
 
 	for i := range records {

@@ -38,7 +38,9 @@ primary source when configured; otherwise the rows are the issues stored in
 the repository plus the tracked branches.
 
 Columns: Issue ID, [Project], Title, Branch, Local Status, Issue Status,
-Created. Labels follow the title in brackets. Created is the issue's creation
+Assigned, Created. Labels follow the title in brackets. Assigned is the first
+8 characters of who works on the issue: the tracker's first assignee, or the
+git identity the issue was assigned to in the repository. Created is the issue's creation
 date, or its branch's for a row with no issue behind it. `∅` means no
 branch started yet; `N.A.` means the row has neither a tracker nor a
 repository issue.

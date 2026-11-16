@@ -836,17 +836,29 @@ func snapshotOf(t *tracker.Issue) TrackerSnapshot {
 	}
 	slices.Sort(labels)
 
-	return TrackerSnapshot{Title: t.Subject, Description: t.Description, Labels: labels, Updated: t.UpdatedAt}
+	assignees := slices.Clone(t.Assignees)
+	if assignees == nil {
+		assignees = []string{}
+	}
+
+	return TrackerSnapshot{
+		Title: t.Subject, Description: t.Description, Labels: labels, Updated: t.UpdatedAt,
+		Author: t.Author, Assignees: assignees,
+	}
 }
 
 func sameSnapshot(a, b *TrackerSnapshot) bool {
 	return a != nil && a.Title == b.Title && a.Description == b.Description &&
-		slices.Equal(a.Labels, b.Labels) && a.Updated.Equal(b.Updated)
+		slices.Equal(a.Labels, b.Labels) && a.Updated.Equal(b.Updated) &&
+		a.Author == b.Author && slices.Equal(a.Assignees, b.Assignees)
 }
 
 // snapshotOp is the tracker_seen op of s.
 func snapshotOp(s *TrackerSnapshot) *Op {
-	op := &Op{Type: OpTrackerSeen, Title: s.Title, Description: s.Description, Labels: s.Labels}
+	op := &Op{
+		Type: OpTrackerSeen, Title: s.Title, Description: s.Description, Labels: s.Labels,
+		TrackerAuthor: s.Author, Assignees: s.Assignees,
+	}
 	if !s.Updated.IsZero() {
 		op.Updated = s.Updated.UTC().Format(time.RFC3339Nano)
 	}

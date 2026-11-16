@@ -161,6 +161,21 @@ else.
     mise exec -- go test ./tracker/... -run "AssignToMe" -v
     mise exec -- go test ./cmd/issue/... -run "^TestRunNew_Assign|^TestNewCmd_Assign|^TestMirror_NewAssigns" -v
 
+`issue show` prints who opened an issue (`Record.Author`: the tracker's user
+for an issue born in the tracker, the create op's git identity otherwise) and
+who works on it (`Record.AssignedTo()`: the tracker's assignees, else the
+local `assign` identity); `issue list` shows the first assignee, cut to 8
+runes, in its `Assigned` column (`issue.AssignedCell`). The adapters report
+`tracker.Issue.Author` and `Assignees`, and the mirror keeps them in the
+`tracker_seen` snapshot, assignees in the tracker's order: `sameSnapshot`
+comparing them is the whole backfill, so never make `contentSettled`,
+`recordSettled` or `pullComments` look at them. The fake needs no knob: set
+the fields on the issue, or through `Edit` for a reassignment in the web UI.
+
+    mise exec -- go test ./tracker/... -run "AuthorAndAssignees" -v
+    mise exec -- go test ./issue/... -run "TestFold_AuthorAndAssignees|TestReconcile_AuthorAndAssignees|TestAssignedCell|TestRecordRow_Assignee" -v
+    mise exec -- go test ./cmd/issue/... -run "AuthorAndAssignee|TestBuildRows_TrackerAndRepository" -v
+
 The fake's `Edit` and `WebComment` play the tracker's web UI (not recorded, the
 issue's `UpdatedAt` moves); `StatusIsLabel` makes it behave like Redmine. A
 reconcile runs state, content, state again, then writes `tracker_seen`; a

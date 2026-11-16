@@ -585,3 +585,84 @@ func TestFold_Assign(t *testing.T) {
 		}
 	})
 }
+
+func TestFold_AuthorAndAssignees(t *testing.T) {
+	t.Parallel()
+
+	const pi = "Pi <pi@test.com>"
+	create := op("c0", OpCreate, "2026-10-01T10:00:00Z")
+	create.Author = pi
+	born := op("c0", OpCreate, "2026-10-01T10:00:00Z")
+	born.TrackerType, born.Project, born.TrackerID = "fake", "zf", "42"
+	seen := op("c1", OpTrackerSeen, "2026-10-01T11:00:00Z", "c0")
+	seen.TrackerAuthor, seen.Assignees = "alice", []string{"carol", "bob"}
+	bare := op("c1", OpTrackerSeen, "2026-10-01T11:00:00Z", "c0")
+	assign := op("c2", OpAssign, "2026-10-01T12:00:00Z", "c1")
+	assign.Value = pi
+	local := op("c1", OpAssign, "2026-10-01T12:00:00Z", "c0")
+	local.Value = pi
+
+	authors := []struct {
+		name string
+		ops  []Op
+		want string
+	}{
+		{"an issue created in git-zf: the create op's identity", []Op{create}, pi},
+		{"an issue born in the tracker: the snapshot's author", []Op{born, seen}, "alice"},
+		{"born in the tracker, no snapshot yet: empty", []Op{born}, ""},
+		{"an exported issue keeps its git identity", []Op{create, seen}, pi},
+	}
+	for _, tc := range authors {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := Fold("c0", tc.ops).Author; got != tc.want {
+				t.Errorf("Author = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	assigned := []struct {
+		name string
+		ops  []Op
+		want []string
+	}{
+		{"assignees keep the tracker's order", []Op{born, seen}, []string{"carol", "bob"}},
+		{"the tracker's assignees win over the local one", []Op{born, seen, assign}, []string{"carol", "bob"}},
+		{"the local assignee when the tracker names nobody", []Op{create, local}, []string{pi}},
+		{"nobody: empty", []Op{create}, []string{}},
+	}
+	for _, tc := range assigned {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := Fold("c0", tc.ops)
+			if got := rec.AssignedTo(); got == nil || !slices.Equal(got, tc.want) {
+				t.Errorf("AssignedTo() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("a snapshot without assignees holds an empty list, not nil", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Fold("c0", []Op{born, bare})
+		if rec.TrackerSeen == nil || rec.TrackerSeen.Assignees == nil || len(rec.TrackerSeen.Assignees) != 0 {
+			t.Errorf("TrackerSeen = %#v", rec.TrackerSeen)
+		}
+	})
+}
+
+func TestDecodeOp_Assignees(t *testing.T) {
+	t.Parallel()
+
+	t.Run("control characters are dropped from the assignees", func(t *testing.T) {
+		t.Parallel()
+
+		got, ok := DecodeOp("abc", nil, []byte(`{"v":1,"type":"tracker_seen","at":"2026-10-01T10:00:00Z",`+
+			`"tracker_author":"al\u001bice","assignees":["b\u001bob"]}`))
+		if !ok || got.TrackerAuthor != "alice" || !slices.Equal(got.Assignees, []string{"bob"}) {
+			t.Errorf("got %+v ok=%v", got, ok)
+		}
+	})
+}

@@ -36,6 +36,11 @@ type Issue struct {
 	Closed bool
 	// AssignedToMe reports whether the authenticated user is an assignee.
 	AssignedToMe bool
+	// Author is who opened the issue and Assignees who it is assigned to, in
+	// the tracker's order: logins on GitHub and Forgejo, the users' names on
+	// Redmine. Author is "" when the tracker no longer knows the user.
+	Author    string
+	Assignees []string
 }
 
 // Clean returns i with the control characters dropped from what the tracker
@@ -43,6 +48,11 @@ type Issue struct {
 // escape sequence. Every adapter returns Issues through it.
 func (i Issue) Clean() Issue {
 	i.Subject, i.Status, i.Project = text.Line(i.Subject), text.Line(i.Status), text.Line(i.Project)
+	i.Author = text.Line(i.Author)
+	i.Assignees = slices.Clone(i.Assignees)
+	for k := range i.Assignees {
+		i.Assignees[k] = text.Line(i.Assignees[k])
+	}
 	i.Description = text.Clean(i.Description)
 	i.Labels = slices.Clone(i.Labels)
 	for k := range i.Labels {
