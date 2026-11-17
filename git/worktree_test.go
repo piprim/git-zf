@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -343,5 +344,79 @@ func TestCreateWorktree_Submodules(t *testing.T) {
 		if err := c.CreateWorktree(t.Context(), "feat/sub", "main", filepath.Join(t.TempDir(), "wt")); err != nil {
 			t.Fatalf("CreateWorktree: %v", err)
 		}
+	})
+}
+
+// git refuses to remove a worktree holding submodules, clean or not:
+// RemoveWorktree forces it, unless the worktree holds work that exists
+// nowhere else. Not parallel: t.Setenv lets git clone a local submodule.
+func TestRemoveWorktree_Submodules(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+
+	// rig returns a client, and a worktree of it holding the submodule "lib".
+	rig := func(t *testing.T) (*Client, string) {
+		t.Helper()
+
+		c, dir := newDiskRepo(t)
+		_, src := newDiskRepo(t)
+		addSubmodule(t, dir, src, "lib")
+
+		wt := filepath.Join(t.TempDir(), "wt")
+		if err := c.CreateWorktree(t.Context(), "feat/sub", "main", wt); err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
+		}
+
+		return c, wt
+	}
+	// commitInLib commits a file in the worktree's submodule.
+	commitInLib := func(t *testing.T, wt string) {
+		t.Helper()
+
+		lib := filepath.Join(wt, "lib")
+		if err := os.WriteFile(filepath.Join(lib, "new.go"), []byte("package lib\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		mustGit(t, lib, "add", "new.go")
+		mustGit(t, lib, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "-m", "feat: new")
+	}
+	refused := func(t *testing.T, err error, wt, want string) {
+		t.Helper()
+
+		if !errors.Is(err, ErrWorktreeHoldsWork) || !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want ErrWorktreeHoldsWork naming %q", err, want)
+		}
+		if _, statErr := os.Stat(wt); statErr != nil {
+			t.Errorf("worktree dir gone: %v", statErr)
+		}
+	}
+
+	t.Run("a clean worktree whose submodule commits are on the remote is removed", func(t *testing.T) {
+		c, wt := rig(t)
+
+		if err := c.RemoveWorktree(t.Context(), wt); err != nil {
+			t.Fatalf("RemoveWorktree: %v", err)
+		}
+		if _, err := os.Stat(wt); !os.IsNotExist(err) {
+			t.Errorf("worktree dir still there: %v", err)
+		}
+	})
+
+	t.Run("a submodule commit that is on no remote keeps the worktree", func(t *testing.T) {
+		c, wt := rig(t)
+		commitInLib(t, wt)
+		mustGit(t, wt, "commit", "-q", "-am", "feat: bump lib")
+
+		refused(t, c.RemoveWorktree(t.Context(), wt), wt, "lib")
+	})
+
+	t.Run("an untracked file keeps the worktree", func(t *testing.T) {
+		c, wt := rig(t)
+		if err := os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("x\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		refused(t, c.RemoveWorktree(t.Context(), wt), wt, "scratch.txt")
 	})
 }

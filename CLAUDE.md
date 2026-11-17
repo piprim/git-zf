@@ -86,6 +86,22 @@ sets `protocol.file.allow=always` with `t.Setenv` to clone a local submodule.
 
     mise exec -- go test ./git/... -run "TestCreateWorktree" -v
 
+A merge moves the commit recorded for a submodule and leaves its checkout
+behind: `mergeflow.Run` ends with `git.Client.UpdateMovedSubmodules`, which
+updates the submodules whose gitlink differs between the HEAD before the merge
+and the one after, and no other, in the target's tree and in the source's
+worktree (`TestRun_UpdatesMovedSubmodules`, `_SourceWorktree`).
+`git.Client.RemoveWorktree` is the only place a worktree is removed. git
+refuses one holding submodules, so it is removed with `--force`, but only
+after `submoduleWorktreeSafe`: no modified or untracked file, no submodule
+commit that is on no remote (the submodules of a worktree are stored in that
+worktree alone). Otherwise it returns `git.ErrWorktreeHoldsWork`, for which
+`mergeflow.removeHint` does not offer `--force`. Both tests set
+`protocol.file.allow` and are not parallel.
+
+    mise exec -- go test ./git/... -run "TestRemoveWorktree" -v
+    mise exec -- go test ./cmd/mergeflow/... -run "TestRun_UpdatesMovedSubmodules|TestRemoveHint" -v
+
 ### Testing the prune flow
 
 The branch-prune flow is end-to-end tested in `cmd/branch/prune_e2e_test.go`.

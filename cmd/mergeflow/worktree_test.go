@@ -2,11 +2,15 @@ package mergeflow
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/piprim/git-zf/git"
 )
 
 func accept(context.Context, string) (bool, error)  { return true, nil }
@@ -173,6 +177,26 @@ func TestRemoveWorktreeStep(t *testing.T) {
 		}
 		if want := cdHint(t, rig.dir); !strings.Contains(rig.stdout.String(), want) {
 			t.Fatalf("stdout = %q, want it to contain %q", rig.stdout.String(), want)
+		}
+	})
+}
+
+func TestRemoveHint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("git's own refusal: --force is offered", func(t *testing.T) {
+		t.Parallel()
+
+		if got := removeHint(errors.New("contains untracked files"), "/wt"); !strings.Contains(got, `git worktree remove --force "/wt"`) {
+			t.Fatalf("hint = %q", got)
+		}
+	})
+	t.Run("submodule work that exists nowhere else: --force is not the command to run", func(t *testing.T) {
+		t.Parallel()
+
+		got := removeHint(fmt.Errorf("remove: %w", git.ErrWorktreeHoldsWork), "/wt")
+		if !strings.Contains(got, `run: git worktree remove "/wt"`) || !strings.Contains(got, "--force would delete it") {
+			t.Fatalf("hint = %q", got)
 		}
 	})
 }

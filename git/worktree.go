@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,14 +36,16 @@ func (c *Client) CreateWorktree(ctx context.Context, branchName, baseBranch, pat
 }
 
 // initSubmodules runs `git submodule update --init --recursive` in the
-// worktree at path when it holds a .gitmodules file. A failure (network,
-// auth) is reported on Err with the command to retry, never returned.
-func (c *Client) initSubmodules(ctx context.Context, path string) {
+// worktree at path when it holds a .gitmodules file, for the submodules at
+// subs or for all of them. A failure (network, auth) is reported on Err with
+// the command to retry, never returned.
+func (c *Client) initSubmodules(ctx context.Context, path string, subs ...string) {
 	if _, err := os.Stat(filepath.Join(path, ".gitmodules")); err != nil {
 		return
 	}
 
-	err := c.runInteractive(ctx, path, "submodule", "update", "--init", "--recursive")
+	args := append([]string{"submodule", "update", "--init", "--recursive", "--"}, subs...)
+	err := c.runInteractive(ctx, path, args...)
 	if err == nil {
 		return
 	}
@@ -52,8 +55,33 @@ func (c *Client) initSubmodules(ctx context.Context, path string) {
 		errW = c.io.Err
 	}
 
-	fmt.Fprintf(errW, "warning: submodules not initialized in %s: %v\n"+
+	fmt.Fprintf(errW, "warning: submodules not updated in %s: %v\n"+
 		"run 'git -C %s submodule update --init --recursive' to retry\n", path, err, path)
+}
+
+// UpdateMovedSubmodules checks out, in the client's working tree, the
+// submodules whose recorded commit differs between from and HEAD. A merge or
+// a checkout moves that commit and leaves the submodule's checkout behind,
+// which `git status` then shows as a modification nobody made. The other
+// submodules are left alone: one the user moved on purpose stays there.
+func (c *Client) UpdateMovedSubmodules(ctx context.Context, from Hash) {
+	out, err := c.output(ctx, "diff", "--raw", "-z", "--no-renames", string(from), "HEAD")
+	if err != nil {
+		return
+	}
+
+	// -z: ":<old mode> <new mode> <old> <new> <status>" NUL "<path>" NUL.
+	var moved []string
+	fields := strings.Split(out, "\x00")
+	for i := 0; i+1 < len(fields); i += 2 {
+		if meta := strings.Fields(fields[i]); len(meta) > 1 && meta[1] == "160000" {
+			moved = append(moved, fields[i+1])
+		}
+	}
+
+	if len(moved) > 0 {
+		c.initSubmodules(ctx, c.root, moved...)
+	}
 }
 
 // excludeDir appends "/<dir>/" to .git/info/exclude unless the line is there.
@@ -162,15 +190,62 @@ func (c *Client) HoldingWorktree(ctx context.Context, branch string) (*Worktree,
 	return nil, nil //nolint:nilnil // nil,nil is the documented "not checked out anywhere" answer
 }
 
+// ErrWorktreeHoldsWork is returned by RemoveWorktree for a worktree with
+// submodules that holds work existing nowhere else: forcing its removal would
+// delete the only copy.
+var ErrWorktreeHoldsWork = errors.New("worktree holds work that exists nowhere else")
+
 // RemoveWorktree runs `git worktree remove <path>` without --force, so git's
 // own safety checks (modified or untracked files) apply and the error carries
-// git's reason.
+// git's reason. git refuses a worktree holding submodules whatever its state:
+// that one is checked here, then removed with --force.
 func (c *Client) RemoveWorktree(ctx context.Context, path string) error {
-	cmd := c.gitCmd(ctx, "worktree", "remove", path)
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := c.worktreeRemove(ctx, path)
+	if err != nil && strings.Contains(out, "containing submodules") {
+		if err := c.submoduleWorktreeSafe(ctx, path); err != nil {
+			return fmt.Errorf("worktree remove %s: %w", path, err)
+		}
 
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("worktree remove %s: %w: %s", path, err, strings.TrimSpace(string(out)))
+		out, err = c.worktreeRemove(ctx, "--force", path)
+	}
+	if err != nil {
+		return fmt.Errorf("worktree remove %s: %w: %s", path, err, out)
+	}
+
+	return nil
+}
+
+func (c *Client) worktreeRemove(ctx context.Context, args ...string) (string, error) {
+	cmd := c.gitCmd(ctx, append([]string{"worktree", "remove"}, args...)...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.CombinedOutput()
+
+	return strings.TrimSpace(string(out)), err
+}
+
+// submoduleWorktreeSafe says whether the worktree at path can be removed with
+// --force, which skips git's checks and deletes the submodules' repositories
+// (they live under the worktree's own git dir, shared with no other tree). It
+// returns ErrWorktreeHoldsWork for modified or untracked files, in the
+// worktree or in a submodule, and for a submodule holding a commit (HEAD, a
+// branch, a stash) that none of its remote-tracking refs reaches.
+func (c *Client) submoduleWorktreeSafe(ctx context.Context, path string) error {
+	status, err := c.output(ctx, "-C", path, "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("git status: %w", err)
+	}
+	if status != "" {
+		return fmt.Errorf("%w: modified or untracked files:\n%s", ErrWorktreeHoldsWork, status)
+	}
+
+	unpushed, err := c.output(ctx, "-C", path, "submodule", "--quiet", "foreach", "--recursive",
+		`test -z "$(git rev-list -n 1 HEAD --all --not --remotes)" || echo "$displaypath"`)
+	if err != nil {
+		return fmt.Errorf("git submodule foreach: %w", err)
+	}
+	if unpushed != "" {
+		return fmt.Errorf("%w: commits that are on no remote in the submodule(s) %s",
+			ErrWorktreeHoldsWork, strings.Join(strings.Split(unpushed, "\n"), ", "))
 	}
 
 	return nil

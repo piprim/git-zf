@@ -2,6 +2,7 @@ package mergeflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/piprim/git-zf/git"
@@ -53,9 +54,10 @@ func SourceTree(ctx context.Context, caller *git.Client, branch string) (*git.Cl
 type ConfirmRemoveFunc func(ctx context.Context, path string) (bool, error)
 
 // RemoveWorktreeStep is the post-merge step shared by issue close and branch
-// merge: confirm, then `git worktree remove` (never --force). A refusal by git
-// (modified or untracked files) is printed as a warning with a manual --force
-// hint and is not an error: the merge already landed. The main working tree is
+// merge: confirm, then git.Client.RemoveWorktree (--force only for a worktree
+// with submodules that holds no work of its own). A refusal (modified or
+// untracked files, unpushed submodule commits) is printed as a warning with
+// removeHint and is not an error: the merge already landed. The main working tree is
 // never offered for removal (git refuses it, and the user's checkout lives
 // there). invokedFrom is the working-tree root the command was typed in; when
 // it is the removed worktree a cd hint back to the caller's tree is printed,
@@ -85,8 +87,7 @@ func RemoveWorktreeStep(
 	inside := invokedFrom != "" && git.SamePath(invokedFrom, wt.Path)
 
 	if err := caller.RemoveWorktree(ctx, wt.Path); err != nil {
-		fmt.Fprintf(caller.IO().Err,
-			"warning: %v\nRemove it manually with: git worktree remove --force %q\n", err, wt.Path)
+		fmt.Fprintf(caller.IO().Err, "warning: %v\n%s\n", err, removeHint(err, wt.Path))
 
 		return false, nil
 	}
@@ -100,4 +101,16 @@ func RemoveWorktreeStep(
 	}
 
 	return true, nil
+}
+
+// removeHint says what to do about a worktree that was not removed. --force
+// is only named for a worktree whose loss git can describe (its files): for
+// one holding submodule work it would delete the only copy without a word.
+func removeHint(err error, path string) string {
+	if errors.Is(err, git.ErrWorktreeHoldsWork) {
+		return fmt.Sprintf("Commit and push that work, then run: git worktree remove %q\n"+
+			"(--force would delete it: the submodules of a worktree are stored in that worktree alone)", path)
+	}
+
+	return fmt.Sprintf("Remove it manually with: git worktree remove --force %q", path)
 }

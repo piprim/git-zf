@@ -107,6 +107,31 @@ func Run(ctx context.Context, client *git.Client, p Params, prompter Prompter, p
 		return Result{Strategy: strategy, Aborted: true}, nil
 	}
 
+	// The commit each working tree is on before the merge moves it: HEAD, not
+	// the target's tip. The submodules on disk match what is checked out (the
+	// source, in a single tree), so the gitlinks that differ between that
+	// commit and the final HEAD are the checkouts the merge left behind. The
+	// source's own worktree counts too: the rebase merges the target into it.
+	type treeHead struct {
+		tree *git.Client
+		head git.Hash
+	}
+	var heads []treeHead
+	trees := []*git.Client{client}
+	if src != client {
+		trees = append(trees, src)
+	}
+	for _, tree := range trees {
+		if head, err := tree.ResolveRef("HEAD"); err == nil {
+			heads = append(heads, treeHead{tree, head})
+		}
+	}
+	updateSubmodules := func() {
+		for _, h := range heads {
+			h.tree.UpdateMovedSubmodules(ctx, h.head)
+		}
+	}
+
 	if p.PullRequest != nil {
 		stop := client.IO().Spin("Merging the pull request #" + p.PullRequest.Number + " on the forge")
 		defer stop()
@@ -115,6 +140,7 @@ func Run(ctx context.Context, client *git.Client, p Params, prompter Prompter, p
 		if err != nil {
 			return Result{Strategy: strategy}, err
 		}
+		updateSubmodules()
 
 		return Result{Strategy: strategy, ViaForge: true}, nil
 	}
@@ -131,11 +157,15 @@ func Run(ctx context.Context, client *git.Client, p Params, prompter Prompter, p
 	}
 
 	if errors.Is(err, errFastForwardDeferred) {
+		// The target did not move, the source's tree did.
+		updateSubmodules()
+
 		return Result{Strategy: strategy, FastForwardDeferred: true}, nil
 	}
 	if err != nil {
 		return Result{Strategy: strategy}, err
 	}
+	updateSubmodules()
 
 	return Result{Strategy: strategy}, nil
 }
