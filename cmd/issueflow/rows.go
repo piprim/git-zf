@@ -37,7 +37,11 @@ func PrintWarnings(w io.Writer, warnings []string) {
 // remote ref that is not an issue chain is left out without a word here:
 // `issue sync` names it and the way out, once, when asked.
 func FetchIssues(ctx context.Context, client *git.Client) {
-	if _, err := issue.Fetch(ctx, client); err != nil && !errors.Is(err, git.ErrForeignChain) {
+	// A Spin under a caller's Spin is a no-op: Err is then no terminal.
+	stop := client.IO().Spin("Fetching the issues")
+	_, err := issue.Fetch(ctx, client)
+	stop()
+	if err != nil && !errors.Is(err, git.ErrForeignChain) {
 		fmt.Fprintf(client.IO().Err, "warning: could not fetch issues, using local data: %v\n", err)
 	}
 }
@@ -45,7 +49,12 @@ func FetchIssues(ctx context.Context, client *git.Client) {
 // ReconcileIssues runs the mirror's reconcile, warnings to stderr. A nil m
 // is a no-op with an empty result.
 func ReconcileIssues(ctx context.Context, client *git.Client, m *issue.Mirror) issue.MirrorResult {
+	stop := func() {}
+	if m != nil {
+		stop = client.IO().Spin("Syncing the issues with the tracker")
+	}
 	res, err := m.Reconcile(ctx, client)
+	stop()
 	if err != nil {
 		fmt.Fprintf(client.IO().Err, "warning: tracker mirror: %v\n", err)
 	}

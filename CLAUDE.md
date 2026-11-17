@@ -434,7 +434,10 @@ A step that waits on the remote, the forge or the tracker is wrapped in
 `client.IO().Spin(msg)` (`internal/pkg/spin.go`), which returns an idempotent
 `stop`: `issue close` (`runClose`, `getPickedBranch`, `updateClosedStatus`,
 `doDeleteBranch`), `branch merge` (`runMergeSource`), the forge merge and the
-rebase's fetch (`cmd/mergeflow`), `pushflow.Propose`. It is a no-op when Err
+rebase's fetch (`cmd/mergeflow`), `pushflow.Propose`, and the helpers every
+issue command syncs through (`issueflow.FetchIssues`, `ReconcileIssues`,
+`pushIssue`, `syncOne`, `labelChoices`; a Spin under a caller's Spin is a
+no-op). It is a no-op when Err
 is not a terminal, so the E2E rigs never spin; `spinOn` is tested on a buffer.
 
     mise exec -- go test -race ./internal/pkg/... -run "TestSpin" -v

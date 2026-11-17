@@ -135,7 +135,10 @@ func commitTypeNames(cfg *config.AppConfig) []string {
 // pushIssue pushes issue id. A failure is a warning: the op is committed
 // locally and goes out with the next push or `git zf issue sync`.
 func pushIssue(ctx context.Context, client *git.Client, id string) {
-	if err := issuepkg.Push(ctx, client, id); err != nil {
+	stop := client.IO().Spin("Pushing the issue")
+	err := issuepkg.Push(ctx, client, id)
+	stop()
+	if err != nil {
 		fmt.Fprintf(client.IO().Err,
 			"warning: issue saved locally but not pushed (run `git zf issue sync` later): %v\n", err)
 	}
@@ -163,7 +166,12 @@ func openMirror(cfg *config.AppConfig, errW io.Writer) *issuepkg.Mirror {
 // was pushed. A failure is a warning: the next reconcile retries from the
 // chain. A nil m is a no-op.
 func syncOne(ctx context.Context, client *git.Client, m *issuepkg.Mirror, id string) {
+	stop := func() {}
+	if m != nil {
+		stop = client.IO().Spin("Updating the tracker")
+	}
 	res, err := m.SyncOne(ctx, client, id)
+	stop()
 	if err != nil {
 		fmt.Fprintf(client.IO().Err, "warning: tracker mirror: %v\n", err)
 	}
@@ -278,7 +286,10 @@ func runAbandon(ctx context.Context, client *git.Client, p recordPrompter, args 
 	}
 
 	// Another clone may have started a branch for the issue.
-	if err := branch.Fetch(ctx, client); err != nil {
+	stop := client.IO().Spin("Fetching the branches")
+	err = branch.Fetch(ctx, client)
+	stop()
+	if err != nil {
 		fmt.Fprintf(client.IO().Err, "warning: fetch branch refs: %v\n", err)
 	}
 

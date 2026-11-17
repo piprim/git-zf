@@ -40,7 +40,9 @@ func (i Issue) syncRunE(cmd *cobra.Command) error {
 }
 
 func runSync(ctx context.Context, client *git.Client, m *issuepkg.Mirror) error {
+	stop := client.IO().Spin("Syncing the issues")
 	res, err := issuepkg.Sync(ctx, client)
+	stop()
 	if err != nil {
 		return fmt.Errorf("sync issues: %w", err)
 	}

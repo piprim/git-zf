@@ -339,6 +339,13 @@ func editIssue(ctx context.Context, infra issueListInfra, slug, title, descripti
 		return "", err
 	}
 
+	// The table owns the terminal here: Err is hidden behind a plain writer,
+	// which makes every Spin under applyEdit a no-op.
+	cio := infra.client.IO()
+	errW := cio.Err
+	cio.Err = struct{ io.Writer }{errW}
+	defer func() { cio.Err = errW }()
+
 	changed, err := applyEdit(ctx, infra.client, &rec, title, description, infra.mirror)
 	if err != nil {
 		return "", err

@@ -115,7 +115,9 @@ func labelChoices(ctx context.Context, client *git.Client, m *issuepkg.Mirror, c
 	if m == nil {
 		return nil, false
 	}
+	stop := client.IO().Spin("Reading the tracker's labels")
 	names, err := m.Labels(ctx)
+	stop()
 	if err != nil {
 		fmt.Fprintf(client.IO().Err, "warning: could not list the tracker's labels: %v\n", err)
 
