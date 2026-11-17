@@ -17,8 +17,12 @@ import (
 // CommitOption holds commit option values for the commit options group of the TUI.
 // Used both as flag-derived defaults (input) and as user selections (output).
 type CommitOption struct {
-	Skip    bool
-	Authors []string
+	Skip bool
+	// MergeOnly shows only the options that fit a merge commit (author,
+	// no-verify, signoff): the merge is already staged, so staging and amend
+	// flags would be useless or harmful.
+	MergeOnly bool
+	Authors   []string
 	git.CommitOptions
 }
 
@@ -109,6 +113,35 @@ func CommitMessageGroup(commitTypes []config.CommitTypeOption, items []config.Co
 // CommitOptionsGroup builds the second commit form group (author + commit flags).
 // opt is written directly by the form fields.
 func CommitOptionsGroup(opt *CommitOption) *huh.Group {
+	return huh.NewGroup(
+		authorSelect(opt),
+		huh.NewConfirm().Title("Stage all tracked modified/deleted files? (--all)").Value(&opt.All),
+		huh.NewConfirm().Title("Stage untracked files? (--include-untracked)").Value(&opt.IncludeUntracked),
+		huh.NewConfirm().Title("Amend last commit? (--amend)").Value(&opt.Amend),
+		noVerifyConfirm(opt),
+		signoffConfirm(opt),
+		huh.NewConfirm().Title("Allow empty commit? (--allow-empty)").Value(&opt.AllowEmpty),
+	)
+}
+
+// MergeOptionsGroup is the options group of a merge commit (CommitOption.MergeOnly):
+// the fields of CommitOptionsGroup that still mean something once the merge is
+// staged, in the same order.
+func MergeOptionsGroup(opt *CommitOption) *huh.Group {
+	return huh.NewGroup(authorSelect(opt), noVerifyConfirm(opt), signoffConfirm(opt))
+}
+
+func noVerifyConfirm(opt *CommitOption) *huh.Confirm {
+	return huh.NewConfirm().Title("Skip hooks? (--no-verify)").Value(&opt.NoVerify)
+}
+
+func signoffConfirm(opt *CommitOption) *huh.Confirm {
+	return huh.NewConfirm().Title("Add Signed-off-by trailer? (--signoff)").Value(&opt.Signoff)
+}
+
+// authorSelect builds the author picker; an empty opt.Author defaults to the
+// first author (the git config identity, see git.Client.Authors).
+func authorSelect(opt *CommitOption) *huh.Select[string] {
 	authorOpts := make([]huh.Option[string], 0, len(opt.Authors))
 	for _, a := range opt.Authors {
 		authorOpts = append(authorOpts, huh.NewOption(a, a))
@@ -121,18 +154,10 @@ func CommitOptionsGroup(opt *CommitOption) *huh.Group {
 		opt.Author = opt.Authors[0]
 	}
 
-	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Title("Author:").
-			Options(authorOpts...).
-			Value(&opt.Author),
-		huh.NewConfirm().Title("Stage all tracked modified/deleted files? (--all)").Value(&opt.All),
-		huh.NewConfirm().Title("Stage untracked files? (--include-untracked)").Value(&opt.IncludeUntracked),
-		huh.NewConfirm().Title("Amend last commit? (--amend)").Value(&opt.Amend),
-		huh.NewConfirm().Title("Skip hooks? (--no-verify)").Value(&opt.NoVerify),
-		huh.NewConfirm().Title("Add Signed-off-by trailer? (--signoff)").Value(&opt.Signoff),
-		huh.NewConfirm().Title("Allow empty commit? (--allow-empty)").Value(&opt.AllowEmpty),
-	)
+	return huh.NewSelect[string]().
+		Title("Author:").
+		Options(authorOpts...).
+		Value(&opt.Author)
 }
 
 // TitleCase upper-cases the first rune of s and leaves the rest untouched.

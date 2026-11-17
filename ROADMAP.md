@@ -5,6 +5,8 @@
 2. In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity.
 3. AI assistant. See https://github.com/rshdhere/vibecheck
 4. On issue close, the commit options are not useful
+5. `git zf issue new` never ask me if I want start immediately the issue nor display a spinner informing work in progress (with mirror tracker config).
+6. In `git zf issue` pressing r add the spiner.
 8. Stupid functionality:
 Launching `git zf issue` and pressing two time on `c` to close the issue 22 output an error :
 `error: issue 22 has a branch in progress (22@feat@mmw-module-scaffolding): merge it with `git zf issue close`, or abandon it with `git zf branch close <branch-name>`, then close the issue`
