@@ -1516,3 +1516,88 @@ func TestReconcile_ExportAssignFails(t *testing.T) {
 		}
 	})
 }
+
+// commentCountingTracker counts the GetIssue and ListComments calls.
+type commentCountingTracker struct {
+	countingTracker
+	comments int
+}
+
+func (c *commentCountingTracker) ListComments(ctx context.Context, id string) ([]tracker.Comment, error) {
+	c.comments++
+
+	return c.Tracker.ListComments(ctx, id)
+}
+
+func TestReconcile_AuthorAndAssignees(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an import records them and a reassignment on the tracker follows", func(t *testing.T) {
+		t.Parallel()
+
+		c := newRepo(t, "alice", "")
+		iss := trackerIssue("42", "A")
+		iss.Author, iss.Assignees = "alice", []string{"bob"}
+		ft := &fake.Tracker{ProjectIssues: []tracker.Issue{iss}}
+		m := newTestMirror(ft)
+		mustReconcile(t, m, c)
+		rec := onlyRecord(t, c)
+
+		t.Run("imported", func(t *testing.T) {
+			if rec.Author != "alice" || !slices.Equal(rec.AssignedTo(), []string{"bob"}) {
+				t.Errorf("Author = %q, AssignedTo = %q", rec.Author, rec.AssignedTo())
+			}
+		})
+
+		ft.Edit("42", func(i *tracker.Issue) { i.Assignees = []string{"carol", "bob"} })
+		mustReconcile(t, m, c)
+		rec = onlyRecord(t, c)
+
+		t.Run("reassigned, in the tracker's order", func(t *testing.T) {
+			if !slices.Equal(rec.AssignedTo(), []string{"carol", "bob"}) {
+				t.Errorf("AssignedTo = %q", rec.AssignedTo())
+			}
+		})
+	})
+
+	t.Run("a snapshot written before the author was recorded is backfilled once", func(t *testing.T) {
+		t.Parallel()
+
+		c, ft, _, rec := importOne(t)
+		ct := &commentCountingTracker{countingTracker: countingTracker{Tracker: ft}}
+		m := &Mirror{Tracker: ct, Type: "fake", Project: "zf"}
+		before := opCount(t, c, rec.ID)
+
+		// Not through Edit: the tracker's updated time must not move.
+		ft.ProjectIssues[0].Author, ft.ProjectIssues[0].Assignees = "alice", []string{"bob"}
+		mustReconcile(t, m, c)
+		got := onlyRecord(t, c)
+		after := opCount(t, c, rec.ID)
+
+		t.Run("the record gets them with one op", func(t *testing.T) {
+			if got.Author != "alice" || !slices.Equal(got.AssignedTo(), []string{"bob"}) || after != before+1 {
+				t.Errorf("Author = %q, AssignedTo = %q, ops %d → %d", got.Author, got.AssignedTo(), before, after)
+			}
+		})
+
+		mustReconcile(t, m, c)
+
+		t.Run("then nothing changed: no op, no GetIssue, no ListComments", func(t *testing.T) {
+			if n := opCount(t, c, rec.ID); n != after || ct.gets != 0 || ct.comments != 0 {
+				t.Errorf("ops %d → %d, gets %d, comments %d", after, n, ct.gets, ct.comments)
+			}
+		})
+	})
+
+	t.Run("no author and nobody assigned settles too", func(t *testing.T) {
+		t.Parallel()
+
+		c, _, m, rec := importOne(t)
+		before := opCount(t, c, rec.ID)
+		mustReconcile(t, m, c)
+		mustReconcile(t, m, c)
+		if n := opCount(t, c, rec.ID); n != before {
+			t.Errorf("ops %d → %d", before, n)
+		}
+	})
+}

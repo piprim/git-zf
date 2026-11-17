@@ -17,7 +17,7 @@ func RenderIssueTable(w io.Writer, rows []issue.Row) {
 		headers = append(headers, "PROJECT")
 	}
 
-	headers = append(headers, "TITLE", "BRANCH", "LOCAL STATUS", "ISSUE STATUS", "CREATED")
+	headers = append(headers, "TITLE", "BRANCH", "LOCAL STATUS", "ISSUE STATUS", "ASSIGNED", "CREATED")
 
 	t := lgtable.New().
 		Headers(headers...).

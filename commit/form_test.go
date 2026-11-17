@@ -736,3 +736,128 @@ func TestIssueHint_Prefill(t *testing.T) {
 		})
 	}
 }
+
+// optionsPageView advances form to its second group and returns what it shows.
+// huh v1.0.0: NextGroup runs the update itself.
+func optionsPageView(t *testing.T, form *huh.Form) string {
+	t.Helper()
+
+	form.Init()
+	form.NextGroup()
+
+	return form.View()
+}
+
+func TestLoadForm_OptionsPage(t *testing.T) {
+	t.Parallel()
+
+	authors := []string{"Ann <a@x>"}
+
+	t.Run("MergeOnly shows the merge options", func(t *testing.T) {
+		t.Parallel()
+
+		form, _, _ := loadForm(minimalCfg(), tui.CommitOption{MergeOnly: true, Authors: authors}, nil)
+		view := optionsPageView(t, form)
+
+		for _, flag := range []string{"--no-verify", "--signoff"} {
+			if !strings.Contains(view, flag) {
+				t.Errorf("merge page lacks %s:\n%s", flag, view)
+			}
+		}
+	})
+
+	t.Run("MergeOnly hides the staging and amend options", func(t *testing.T) {
+		t.Parallel()
+
+		form, _, _ := loadForm(minimalCfg(), tui.CommitOption{MergeOnly: true, Authors: authors}, nil)
+		view := optionsPageView(t, form)
+
+		for _, flag := range []string{"--all", "--include-untracked", "--amend", "--allow-empty"} {
+			if strings.Contains(view, flag) {
+				t.Errorf("merge page shows %s:\n%s", flag, view)
+			}
+		}
+	})
+
+	t.Run("MergeOnly drops staging and amend flags the caller passed", func(t *testing.T) {
+		t.Parallel()
+
+		_, _, extractOpts := loadForm(minimalCfg(), tui.CommitOption{
+			MergeOnly: true,
+			Authors:   authors,
+			CommitOptions: git.CommitOptions{
+				All: true, IncludeUntracked: true, Amend: true, AllowEmpty: true,
+			},
+		}, nil)
+
+		o := extractOpts()
+		if o.All || o.IncludeUntracked || o.Amend || o.AllowEmpty {
+			t.Errorf("opts = %+v, want All, IncludeUntracked, Amend, AllowEmpty false", o.CommitOptions)
+		}
+	})
+
+	t.Run("MergeOnly keeps the no-verify and signoff flags the caller passed", func(t *testing.T) {
+		t.Parallel()
+
+		_, _, extractOpts := loadForm(minimalCfg(), tui.CommitOption{
+			MergeOnly:     true,
+			Authors:       authors,
+			CommitOptions: git.CommitOptions{NoVerify: true, Signoff: true},
+		}, nil)
+
+		if o := extractOpts(); !o.NoVerify || !o.Signoff {
+			t.Errorf("opts = %+v, want NoVerify and Signoff true", o.CommitOptions)
+		}
+	})
+
+	t.Run("default shows the full page", func(t *testing.T) {
+		t.Parallel()
+
+		form, _, _ := loadForm(minimalCfg(), tui.CommitOption{Authors: authors}, nil)
+
+		if view := optionsPageView(t, form); !strings.Contains(view, "--amend") {
+			t.Errorf("full page lacks --amend:\n%s", view)
+		}
+	})
+
+	t.Run("Skip wins over MergeOnly", func(t *testing.T) {
+		t.Parallel()
+
+		form, _, _ := loadForm(minimalCfg(), tui.CommitOption{Skip: true, MergeOnly: true, Authors: authors}, nil)
+		view := optionsPageView(t, form)
+
+		for _, flag := range []string{"--signoff", "--amend"} {
+			if strings.Contains(view, flag) {
+				t.Errorf("skipped options page shows %s:\n%s", flag, view)
+			}
+		}
+	})
+}
+
+func TestFillOutForm_MergeOnlySurvivesHistory(t *testing.T) {
+	// Not parallel — swaps the global runFormFn.
+
+	t.Run("the form reopened after ctrl+r keeps the merge page", func(t *testing.T) {
+		var forms []*huh.Form
+		swapRunFormFn(t, func(f *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+			forms = append(forms, f)
+			// Call 1: main form, ctrl+r. Call 2: the "No commit history yet."
+			// dialog. Call 3: the reopened main form, submitted.
+			return &stubFormRunner{wantHistoryVal: len(forms) == 1}, nil
+		})
+
+		_, _, err := FillOutForm(context.Background(), minimalCfg(),
+			tui.CommitOption{MergeOnly: true, Authors: []string{"Ann <a@x>"}}, &fakeHistoryStore{}, nil, nil)
+		if err != nil {
+			t.Fatalf("FillOutForm: %v", err)
+		}
+		if len(forms) != 3 {
+			t.Fatalf("runner called %d times, want 3", len(forms))
+		}
+
+		view := optionsPageView(t, forms[2])
+		if !strings.Contains(view, "--signoff") || strings.Contains(view, "--amend") {
+			t.Errorf("reopened form's options page is not the merge one:\n%s", view)
+		}
+	})
+}

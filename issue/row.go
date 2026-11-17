@@ -31,6 +31,9 @@ type Row struct {
 	CreatedAt time.Time `json:"created_at,omitzero"`
 	// AssignedToMe reports whether the tracker assigns the issue to the user.
 	AssignedToMe bool `json:"assigned_to_me"`
+	// Assignee is who works on the issue, in full: the first of the tracker's
+	// assignees, or the git identity assigned locally; "" when nobody is.
+	Assignee string `json:"assignee"`
 }
 
 // MatchesStatus reports whether r belongs under status ("open", "closed" or
@@ -100,9 +103,22 @@ func CreatedCell(r *Row) string {
 	return created.Format("2006-01-02")
 }
 
+// assignedCellWidth is how much of an assignee a table shows.
+const assignedCellWidth = 8
+
+// AssignedCell is the first characters of r's assignee, cut by runes: a name
+// may hold multi-byte characters.
+func AssignedCell(r *Row) string {
+	if runes := []rune(r.Assignee); len(runes) > assignedCellWidth {
+		return string(runes[:assignedCellWidth])
+	}
+
+	return r.Assignee
+}
+
 // RowCells returns r's table cells in display order: issue ID, project (only
 // when includeProject is set), title, branch, branch status, tracker status,
-// creation date.
+// assignee, creation date.
 func RowCells(r *Row, includeProject bool) []string {
 	id := r.IssueSlug
 	if r.TrackerID != "" && r.TrackerID != r.IssueSlug {
@@ -118,6 +134,7 @@ func RowCells(r *Row, includeProject bool) []string {
 		BranchFieldOrEmpty(r.Branch, func(b *branch.Row) string { return b.BranchName }),
 		BranchFieldOrEmpty(r.Branch, func(b *branch.Row) string { return b.Status }),
 		TrackerStatusOrNA(r.TrackerStatus),
+		AssignedCell(r),
 		CreatedCell(r),
 	)
 }
@@ -152,7 +169,17 @@ func RecordRow(rec *Record) Row {
 		IssueSlug: rec.DisplayID(), Title: rec.Title,
 		Labels: rec.Labels, State: rec.State, TrackerStatus: recordStatus(rec),
 		TrackerID: trackerNumber(rec), CreatedAt: rec.CreatedAt,
+		Assignee: first(rec.AssignedTo()),
 	}
+}
+
+// first is the first element of s, "" when it has none.
+func first(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+
+	return s[0]
 }
 
 // recordStatus is the status shown for a repo issue: the tracker's status

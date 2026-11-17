@@ -210,9 +210,14 @@ func TestBuildRows_TrackerAndRepository(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	tk := &fakeIssueTracker{issues: []tracker.Issue{
-		{ID: "T-1", Subject: "First", Status: "In Progress", Project: "octo/cat", AssignedToMe: true},
-		{ID: "T-3", Subject: "Third", Status: "New", Project: "octo/cat"},
+		{ID: "T-1", Subject: "First", Status: "In Progress", Project: "octo/cat", AssignedToMe: true, Assignees: []string{"bob", "carol"}},
+		{ID: "T-3", Subject: "Third", Status: "New", Project: "octo/cat", Assignees: []string{"dan"}},
 	}}
+	mine, err := issuepkg.Create(ctx, s, issuepkg.NewIssue{Title: "Mine", BranchType: "fix", Assign: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	branchtest.Seed(t, s, branch.Op{Branch: mine.ShortID() + "@fix@mine@uuid-m1", Title: "Mine"}, branch.StatusInProgress)
 
 	rows, err := buildRows(ctx, issueListInfra{client: s, tracker: tk, stderr: io.Discard}, "")
 	if err != nil {
@@ -247,8 +252,31 @@ func TestBuildRows_TrackerAndRepository(t *testing.T) {
 		}
 	})
 	t.Run("one row per issue and branch, nothing else", func(t *testing.T) {
-		if len(rows) != 4 {
+		if len(rows) != 5 {
 			t.Errorf("rows = %+v", rows)
+		}
+	})
+	t.Run("a branch row of a tracker issue carries its first assignee", func(t *testing.T) {
+		for _, r := range bySlug["T-1"] {
+			if r.Assignee != "bob" {
+				t.Errorf("Assignee = %q, want bob", r.Assignee)
+			}
+		}
+	})
+	t.Run("a tracker issue without a branch carries its first assignee", func(t *testing.T) {
+		if got := bySlug["T-3"]; len(got) != 1 || got[0].Assignee != "dan" {
+			t.Errorf("rows = %+v", got)
+		}
+	})
+	t.Run("a branch row of a repository issue carries its assignee", func(t *testing.T) {
+		got := bySlug[mine.ShortID()]
+		if len(got) != 1 || got[0].Branch == nil || !strings.Contains(got[0].Assignee, "@") {
+			t.Errorf("rows = %+v", got)
+		}
+	})
+	t.Run("an unassigned repository issue has none", func(t *testing.T) {
+		if got := bySlug[rec.ShortID()]; len(got) != 1 || got[0].Assignee != "" {
+			t.Errorf("rows = %+v", got)
 		}
 	})
 }

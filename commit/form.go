@@ -454,7 +454,15 @@ func loadForm(
 	groups := []*huh.Group{tui.CommitMessageGroup(cfg.CommitTypes, items, &selectedType)}
 
 	opts := defaults
-	if !defaults.Skip {
+	switch {
+	case defaults.Skip:
+		// No options page: the launch flags are the options.
+	case defaults.MergeOnly:
+		// The merge is already staged: the flags the merge page does not
+		// offer must not reach git commit, whatever the caller passed.
+		opts.All, opts.IncludeUntracked, opts.Amend, opts.AllowEmpty = false, false, false, false
+		groups = append(groups, tui.MergeOptionsGroup(&opts))
+	default:
 		groups = append(groups, tui.CommitOptionsGroup(&opts))
 	}
 

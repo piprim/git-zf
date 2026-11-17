@@ -46,4 +46,16 @@ func TestRenderIssueTable(t *testing.T) {
 			t.Errorf("expected project values in output, got:\n%s", out)
 		}
 	})
+
+	t.Run("shows the ASSIGNED column, cut to 8 characters", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		RenderIssueTable(&buf, []issue.Row{{IssueSlug: "1", Title: "a", Assignee: "alexander"}})
+		out := buf.String()
+
+		if !strings.Contains(out, "ASSIGNED") || !strings.Contains(out, "alexande") || strings.Contains(out, "alexander") {
+			t.Errorf("got:\n%s", out)
+		}
+	})
 }

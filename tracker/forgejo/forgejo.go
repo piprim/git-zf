@@ -65,6 +65,13 @@ type issue struct {
 	Assignees []struct {
 		Login string `json:"login"`
 	} `json:"assignees"`
+	// User is who opened the issue; nil when the account was deleted.
+	User *author `json:"user"`
+}
+
+// author is the subset of the Forgejo User object an issue's author needs.
+type author struct {
+	Login string `json:"login"`
 }
 
 // comment is the subset of the Forgejo Comment object we consume.
@@ -375,8 +382,18 @@ func (a *forgejoAdapter) toIssue(iss *issue, project string) tracker.Issue {
 	for i, l := range iss.Labels {
 		labels[i] = l.Name
 	}
+	var author string
+	if iss.User != nil {
+		author = iss.User.Login
+	}
+	var assignees []string
+	for _, u := range iss.Assignees {
+		assignees = append(assignees, u.Login)
+	}
 
 	return tracker.Issue{
+		Author:      author,
+		Assignees:   assignees,
 		TrackerType: a.trackerType,
 		ID:          strconv.Itoa(iss.Number),
 		Subject:     iss.Title,

@@ -67,6 +67,17 @@ func runShow(ctx context.Context, client *git.Client, p recordPrompter, args []s
 	return nil
 }
 
+// renderPeople prints who opened an issue and who works on it; a line is
+// left out when nobody is known.
+func renderPeople(w io.Writer, author string, assignees []string) {
+	if author != "" {
+		fmt.Fprintf(w, "Author: %s\n", author)
+	}
+	if len(assignees) > 0 {
+		fmt.Fprintf(w, "Assigned to: %s\n", strings.Join(assignees, ", "))
+	}
+}
+
 func renderRecord(w io.Writer, rec *issuepkg.Record) {
 	fmt.Fprintf(w, "%s  %s\n", rec.DisplayID(), rec.Title)
 	fmt.Fprintf(w, "State: %s   Type: %s   Created: %s\n",
@@ -74,9 +85,7 @@ func renderRecord(w io.Writer, rec *issuepkg.Record) {
 	if len(rec.Labels) > 0 {
 		fmt.Fprintf(w, "Labels: %s\n", strings.Join(rec.Labels, ", "))
 	}
-	if rec.Assignee != "" {
-		fmt.Fprintf(w, "Assigned to: %s\n", rec.Assignee)
-	}
+	renderPeople(w, rec.Author, rec.AssignedTo())
 	fmt.Fprintf(w, "ID: %s\n", rec.ID)
 	if t := rec.Tracker; t != nil {
 		fmt.Fprintf(w, "Tracker: %s %s #%s\n", t.Type, t.Project, t.ID)

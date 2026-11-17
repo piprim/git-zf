@@ -101,3 +101,69 @@ func TestRecordRow(t *testing.T) {
 		}
 	})
 }
+
+func TestAssignedCell(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, assignee, want string }{
+		{"nobody", "", ""},
+		{"shorter than the column", "bob", "bob"},
+		{"a login is cut to 8 characters", "alexander", "alexande"},
+		{"a git identity is cut as it is", "Pi <pi@example.org>", "Pi <pi@e"},
+		{"accented letters count as one character", "Élodie Müller", "Élodie M"},
+		{"multi-byte runes are never split", "日本語のユーザー名前", "日本語のユーザー"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := AssignedCell(&Row{Assignee: tc.assignee}); got != tc.want {
+				t.Errorf("AssignedCell(%q) = %q, want %q", tc.assignee, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRowCells_Assigned(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+
+	t.Run("the assigned cell sits before the creation date", func(t *testing.T) {
+		t.Parallel()
+
+		cells := RowCells(&Row{IssueSlug: "1", Assignee: "alexander", CreatedAt: created}, false)
+		if n := len(cells); n != 7 || cells[n-2] != "alexande" || cells[n-1] != "2026-10-01" {
+			t.Errorf("cells = %q", cells)
+		}
+	})
+}
+
+func TestRecordRow_Assignee(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the first of the tracker's assignees, in full", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Record{ID: "0123456789abcdef0123", Assignee: "Pi <pi@test.com>",
+			TrackerSeen: &TrackerSnapshot{Assignees: []string{"carol-the-third", "bob"}}}
+		if got := RecordRow(&rec).Assignee; got != "carol-the-third" {
+			t.Errorf("Assignee = %q", got)
+		}
+	})
+	t.Run("the local assignee, in full, when the tracker names nobody", func(t *testing.T) {
+		t.Parallel()
+
+		rec := Record{ID: "0123456789abcdef0123", Assignee: "Pi <pi@test.com>"}
+		if got := RecordRow(&rec).Assignee; got != "Pi <pi@test.com>" {
+			t.Errorf("Assignee = %q", got)
+		}
+	})
+	t.Run("nobody", func(t *testing.T) {
+		t.Parallel()
+
+		if got := RecordRow(&Record{ID: "0123456789abcdef0123"}).Assignee; got != "" {
+			t.Errorf("Assignee = %q", got)
+		}
+	})
+}

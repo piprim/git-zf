@@ -2,29 +2,11 @@
 
 ## Enhancement
 
-2. In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity. Lets `issue list` filter 'mine'. Comes after the issue mirror.
+2. In-repo issue must carry on author and assignee: Who opened it and who works on it, from git identity.
 3. AI assistant. See https://github.com/rshdhere/vibecheck
-6. `git zf issue list` show the issues. Allow to pick one and open a view the same `git zf show <id>`
-7. In a submodule:
-```txt
->  git branch
-  master
-* scaffold
-
-pi@pi-machine mmw cpro/development  scaffold ending at 09:41:09
->  git zf branch merge
-┃ Branch to merge into current:
-┃ > master
-┃   14-middleware-authorization (origin)
-```
-
-The branch `14-middleware-authorization` is in the root git directory not in the submodule.
-
-And
-```txt
->  git zf branch list
-No branches found.
-```
+4. On issue close, the commit options are not useful
+5. `git zf issue new` never ask me if I want start immediately the issue nor display a spinner informing work in progress (with mirror tracker config).
+6. In `git zf issue` pressing r add the spiner.
 8. Stupid functionality:
 Launching `git zf issue` and pressing two time on `c` to close the issue 22 output an error :
 `error: issue 22 has a branch in progress (22@feat@mmw-module-scaffolding): merge it with `git zf issue close`, or abandon it with `git zf branch close <branch-name>`, then close the issue`
@@ -103,6 +85,7 @@ Submodules changed but not updated:
 
 no changes added to commit (use "git add" and/or "git commit -a")
 ```
+10. Creating a git worktree does not update submodules
 11. Closing an issue developped in a worktree with submodule, removing the worktree failed with:
     `fatal: working trees containing submodules cannot be moved or removed`
 12. Starting an issue in a dedicaced branch, prush the branch and create a PR in the tracker. The PR is accepted from the tracker. How close the issue localy ?

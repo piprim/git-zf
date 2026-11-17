@@ -61,7 +61,8 @@ configured the tracker is the primary source; otherwise the rows are the
 issues stored in the repository plus the tracked branches. No sync: r syncs.
 
 Columns: Issue ID, [Project], Title, Branch, Local Status, Issue Status,
-Created. Labels follow the title in brackets. "∅" means no branch started
+Assigned, Created. Labels follow the title in brackets. Assigned is the first
+8 characters of who works on the issue. "∅" means no branch started
 yet; "N.A." means the row has neither a tracker nor a repository issue.
 
 Keys: Enter opens the actions of the issue under the cursor: show, start,
@@ -318,6 +319,7 @@ func renderTrackerIssue(w io.Writer, iss *tracker.Issue, comments []tracker.Comm
 	if len(iss.Labels) > 0 {
 		fmt.Fprintf(w, "Labels: %s\n", strings.Join(iss.Labels, ", "))
 	}
+	renderPeople(w, iss.Author, iss.Assignees)
 	fmt.Fprintf(w, "Tracker: %s %s #%s (not stored in the repository)\n", iss.TrackerType, iss.Project, iss.ID)
 
 	if iss.Description != "" {

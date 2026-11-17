@@ -59,8 +59,15 @@ type issue struct {
 	Journals  []journal `json:"journals"`
 	//nolint:tagliatelle // Redmine wire format
 	AssignedTo *struct {
-		ID int `json:"id"`
+		ID   int    `json:"id"`
+		Name string `json:"name"`
 	} `json:"assigned_to"`
+	Author *author `json:"author"`
+}
+
+// author is who opened an issue, as Redmine names its users.
+type author struct {
+	Name string `json:"name"`
 }
 
 type currentUserResponse struct {
@@ -201,8 +208,19 @@ func toIssues(issues []issue, project string, me int) []tracker.Issue {
 		if statusName != "" {
 			labels = []string{statusName}
 		}
+		var author string
+		if iss.Author != nil {
+			author = iss.Author.Name
+		}
+		// Redmine assigns an issue to one user at most.
+		var assignees []string
+		if iss.AssignedTo != nil && iss.AssignedTo.Name != "" {
+			assignees = []string{iss.AssignedTo.Name}
+		}
 
 		result = append(result, tracker.Issue{
+			Author:       author,
+			Assignees:    assignees,
 			TrackerType:  trackerType,
 			ID:           strconv.Itoa(iss.ID),
 			Subject:      iss.Subject,

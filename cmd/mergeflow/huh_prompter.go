@@ -57,17 +57,7 @@ func (*HuhPrompter) ConfirmMerge(ctx context.Context, source, target string, s c
 }
 
 func (p *HuhPrompter) ComposeMessage(ctx context.Context, prefill map[string]any) ([]byte, tui.CommitOption, error) {
-	authors, err := p.Client.Authors(ctx)
-	if err != nil {
-		slog.Warn("could not load author list", "error", err)
-
-		authors = []string{}
-	}
-
-	defaults := tui.CommitOption{Authors: authors}
-	if len(authors) > 0 {
-		defaults.Author = authors[0]
-	}
+	defaults := p.commitDefaults(ctx)
 
 	history, err := commit.OpenHistory(p.Client)
 	if err != nil {
@@ -80,6 +70,22 @@ func (p *HuhPrompter) ComposeMessage(ctx context.Context, prefill map[string]any
 	}
 
 	return msg, opts, nil
+}
+
+// commitDefaults is what the commit form of a merge starts from. MergeOnly:
+// the merge is already staged, so only the author, no-verify and signoff
+// options are offered. Author is left empty here: the options group fills in
+// the first author when it is built, and without the group (Skip) git falls
+// back to the config identity, which is that same first author.
+func (p *HuhPrompter) commitDefaults(ctx context.Context) tui.CommitOption {
+	authors, err := p.Client.Authors(ctx)
+	if err != nil {
+		slog.Warn("could not load author list", "error", err)
+
+		authors = []string{}
+	}
+
+	return tui.CommitOption{Authors: authors, MergeOnly: true}
 }
 
 // ConfirmRemoveWorktree runs after a successful merge, only when the merged

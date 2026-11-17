@@ -220,8 +220,14 @@ func toIssue(iss *gogithub.Issue, project string) tracker.Issue {
 	for i, l := range iss.Labels {
 		labels[i] = l.GetName()
 	}
+	var assignees []string
+	for _, u := range iss.Assignees {
+		assignees = append(assignees, u.GetLogin())
+	}
 
 	return tracker.Issue{
+		Author:      iss.GetUser().GetLogin(),
+		Assignees:   assignees,
 		TrackerType: trackerType,
 		ID:          strconv.Itoa(iss.GetNumber()),
 		Subject:     iss.GetTitle(),
