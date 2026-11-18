@@ -37,18 +37,22 @@ type historyStore interface {
 	ListCommandHistory(ctx context.Context, command string, limit int) ([]HistoryRow, error)
 }
 
-// formRunner is satisfied by *tui.FormRunner; the package-level var lets tests inject a stub.
+// formRunner is satisfied by *tui.FormRunner; tests return a stub from their runFormFunc.
 type formRunner interface {
 	WantHistory() bool
 }
 
-// runFormFn is the form runner used by FillOutForm and runHistoryPicker.
-// Tests can replace it with a stub to avoid requiring a real terminal.
+// runFormFunc runs a form: runTUIForm in production, a stub in tests, which
+// have no terminal. fillOutFormWith, runHistoryPicker and showNoHistoryDialog
+// take it as a parameter.
 //
 // entries is the working-tree snapshot for the status panel (nil = no panel);
 // classifyFn reads the form's live (--all, --include-untracked) values so the
 // panel re-classifies as the user toggles either one.
-var runFormFn = func(form *huh.Form, entries []git.StatusEntry, classifyFn func() (bool, bool)) (formRunner, error) {
+type runFormFunc func(form *huh.Form, entries []git.StatusEntry, classifyFn func() (bool, bool)) (formRunner, error)
+
+// runTUIForm is the runFormFunc of FillOutForm: the form on the terminal.
+func runTUIForm(form *huh.Form, entries []git.StatusEntry, classifyFn func() (bool, bool)) (formRunner, error) {
 	return tui.RunForm(form, entries, classifyFn)
 }
 
@@ -91,14 +95,14 @@ func historyLabel(tmplText string, row HistoryRow) (string, error) {
 // Returns (payload, nil) when user selects a history entry.
 // Returns (nil, huh.ErrUserAborted) when the user aborts the picker (ctrl+c / esc).
 // Returns (nil, err) on unexpected errors.
-func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (map[string]any, error) {
+func runHistoryPicker(ctx context.Context, run runFormFunc, tmplText string, hs historyStore) (map[string]any, error) {
 	entries, err := hs.ListCommandHistory(ctx, historyCmd, historyLimit)
 	if err != nil {
 		return nil, fmt.Errorf("list history: %w", err)
 	}
 
 	if len(entries) == 0 {
-		showNoHistoryDialog()
+		showNoHistoryDialog(run)
 
 		return nil, errNoHistory
 	}
@@ -124,7 +128,7 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 			Value(&selected),
 	))
 
-	_, runErr := runFormFn(pickerForm, nil, nil)
+	_, runErr := run(pickerForm, nil, nil)
 	if errors.Is(runErr, huh.ErrUserAborted) {
 		return nil, huh.ErrUserAborted
 	}
@@ -147,14 +151,14 @@ func runHistoryPicker(ctx context.Context, tmplText string, hs historyStore) (ma
 // showNoHistoryDialog renders a modal "No commit history yet." note the user dismisses
 // with enter/esc/ctrl+c. Any runner error is logged and swallowed; the dialog is purely
 // informational and never blocks the calling flow.
-func showNoHistoryDialog() {
+func showNoHistoryDialog(run runFormFunc) {
 	dialog := tui.NewForm(huh.NewGroup(
 		huh.NewNote().
 			Title("Commit history").
 			Description("No commit history yet.\n\nPress enter to continue."),
 	))
 
-	if _, err := runFormFn(dialog, nil, nil); err != nil && !errors.Is(err, huh.ErrUserAborted) {
+	if _, err := run(dialog, nil, nil); err != nil && !errors.Is(err, huh.ErrUserAborted) {
 		slog.Warn("could not show no-history dialog", "error", err)
 	}
 }
@@ -174,6 +178,19 @@ func FillOutForm(
 	initialPrefill map[string]any,
 	entries []git.StatusEntry,
 ) ([]byte, tui.CommitOption, error) {
+	return fillOutFormWith(ctx, runTUIForm, cfg, defaults, hs, initialPrefill, entries)
+}
+
+// fillOutFormWith is FillOutForm with the form runner as a parameter.
+func fillOutFormWith(
+	ctx context.Context,
+	run runFormFunc,
+	cfg *config.AppConfig,
+	defaults tui.CommitOption,
+	hs historyStore,
+	initialPrefill map[string]any,
+	entries []git.StatusEntry,
+) ([]byte, tui.CommitOption, error) {
 	prefill := initialPrefill
 
 	for {
@@ -183,7 +200,7 @@ func FillOutForm(
 		// (the CommitOptionsGroup writes into the opts extractOpts returns), so
 		// the status panel re-classifies as the user toggles either. When the
 		// options form is skipped, these are the fixed launch flags.
-		runner, err := runFormFn(form, entries, func() (bool, bool) {
+		runner, err := run(form, entries, func() (bool, bool) {
 			o := extractOpts()
 
 			return o.All, o.IncludeUntracked
@@ -193,7 +210,7 @@ func FillOutForm(
 		}
 
 		if runner.WantHistory() {
-			prefill, err = runHistoryPicker(ctx, cfg.CommitMessage.Template, hs)
+			prefill, err = runHistoryPicker(ctx, run, cfg.CommitMessage.Template, hs)
 			if errors.Is(err, errNoHistory) {
 				// Preserve current answers so re-opening the form is not destructive.
 				prefill = extractMsg()

@@ -18,6 +18,8 @@ import (
 )
 
 func TestAssembleMessage(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		tmpl    string
@@ -71,6 +73,8 @@ func TestAssembleMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			var buf bytes.Buffer
 			if err := assembleMessage(&buf, tt.tmpl, tt.answers); err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -208,15 +212,6 @@ type stubFormRunner struct{ wantHistoryVal bool }
 
 func (s *stubFormRunner) WantHistory() bool { return s.wantHistoryVal }
 
-// swapRunFormFn replaces runFormFn for the test and restores it in Cleanup.
-func swapRunFormFn(t *testing.T, fn func(*huh.Form, []git.StatusEntry, func() (bool, bool)) (formRunner, error)) {
-	t.Helper()
-
-	orig := runFormFn
-	runFormFn = fn
-	t.Cleanup(func() { runFormFn = orig })
-}
-
 func TestApplyPayload(t *testing.T) {
 	t.Parallel()
 
@@ -321,19 +316,21 @@ func minimalCfg() *config.AppConfig {
 }
 
 func TestFillOutForm(t *testing.T) {
-	// Not parallel — subtests swap the global runFormFn.
+	t.Parallel()
 
 	t.Run("saves history after successful form completion", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+		t.Parallel()
+
+		run := func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			return &stubFormRunner{}, nil
-		})
+		}
 
 		hs := &fakeHistoryStore{}
 
 		// AnyOptionSet() == true skips the options form group (cleaner test).
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
 		if err != nil {
-			t.Fatalf("FillOutForm: %v", err)
+			t.Fatalf("fillOutFormWith: %v", err)
 		}
 
 		if len(hs.inserts) != 1 {
@@ -345,19 +342,23 @@ func TestFillOutForm(t *testing.T) {
 	})
 
 	t.Run("propagates user abort from the main form", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
-			return nil, huh.ErrUserAborted
-		})
+		t.Parallel()
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, &fakeHistoryStore{}, nil, nil)
+		run := func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+			return nil, huh.ErrUserAborted
+		}
+
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, &fakeHistoryStore{}, nil, nil)
 		if !errors.Is(err, huh.ErrUserAborted) {
 			t.Errorf("err = %v, want huh.ErrUserAborted", err)
 		}
 	})
 
 	t.Run("preserves original answers when history is empty", func(t *testing.T) {
+		t.Parallel()
+
 		call := 0
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+		run := func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			call++
 			switch call {
 			case 1:
@@ -370,18 +371,18 @@ func TestFillOutForm(t *testing.T) {
 				// Re-opened main form: user submits.
 				return &stubFormRunner{}, nil
 			}
-		})
+		}
 
 		hs := &fakeHistoryStore{} // empty history → triggers errNoHistory path
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
 		if err != nil {
-			t.Fatalf("FillOutForm: %v", err)
+			t.Fatalf("fillOutFormWith: %v", err)
 		}
 
-		// Three runFormFn invocations: main form, dialog, main form again.
+		// Three runner invocations: main form, dialog, main form again.
 		if call != 3 {
-			t.Errorf("runFormFn calls: got %d, want 3", call)
+			t.Errorf("runner calls: got %d, want 3", call)
 		}
 
 		// The original answers ("my change" from minimalCfg) must have been preserved
@@ -395,9 +396,36 @@ func TestFillOutForm(t *testing.T) {
 		}
 	})
 
-	t.Run("exits flow when user aborts the history picker", func(t *testing.T) {
+	t.Run("a runner error in the no-history dialog does not stop the flow", func(t *testing.T) {
+		t.Parallel()
+
 		call := 0
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+		run := func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+			call++
+			// Call 1: main form, ctrl+r. Call 2: the dialog fails to render.
+			// Call 3: the reopened main form, submitted.
+			if call == 2 {
+				return nil, errors.New("render failed")
+			}
+
+			return &stubFormRunner{wantHistoryVal: call == 1}, nil
+		}
+
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(),
+			tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, &fakeHistoryStore{}, nil, nil)
+		if err != nil {
+			t.Fatalf("fillOutFormWith: %v", err)
+		}
+		if call != 3 {
+			t.Errorf("runner calls: got %d, want 3", call)
+		}
+	})
+
+	t.Run("exits flow when user aborts the history picker", func(t *testing.T) {
+		t.Parallel()
+
+		call := 0
+		run := func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			call++
 			if call == 1 {
 				// Main form: user presses ctrl+r.
@@ -406,7 +434,7 @@ func TestFillOutForm(t *testing.T) {
 
 			// Picker form: user aborts.
 			return nil, huh.ErrUserAborted
-		})
+		}
 
 		hs := &fakeHistoryStore{
 			rows: []HistoryRow{
@@ -414,16 +442,18 @@ func TestFillOutForm(t *testing.T) {
 			},
 		}
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, nil)
 		if !errors.Is(err, huh.ErrUserAborted) {
 			t.Errorf("err = %v, want huh.ErrUserAborted", err)
 		}
 	})
 
 	t.Run("prefill values appear in the rendered output", func(t *testing.T) {
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+		t.Parallel()
+
+		run := func(_ *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			return &stubFormRunner{}, nil
-		})
+		}
 
 		hs := &fakeHistoryStore{}
 		prefill := map[string]any{
@@ -431,9 +461,9 @@ func TestFillOutForm(t *testing.T) {
 			"type":    "feat",
 		}
 
-		msg, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, prefill, nil)
+		msg, _, err := fillOutFormWith(context.Background(), run, minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, prefill, nil)
 		if err != nil {
-			t.Fatalf("FillOutForm: %v", err)
+			t.Fatalf("fillOutFormWith: %v", err)
 		}
 
 		got := string(msg)
@@ -456,17 +486,19 @@ func TestFillOutForm(t *testing.T) {
 	})
 
 	t.Run("forwards the status entries to the form runner", func(t *testing.T) {
+		t.Parallel()
+
 		var gotEntries []git.StatusEntry
-		swapRunFormFn(t, func(_ *huh.Form, entries []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+		run := func(_ *huh.Form, entries []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			gotEntries = entries
 			return &stubFormRunner{}, nil
-		})
+		}
 
 		hs := &fakeHistoryStore{}
 		ents := []git.StatusEntry{{XY: " M", Path: "plop"}}
-		_, _, err := FillOutForm(context.Background(), minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, ents)
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(), tui.CommitOption{CommitOptions: git.CommitOptions{All: true}}, hs, nil, ents)
 		if err != nil {
-			t.Fatalf("FillOutForm: %v", err)
+			t.Fatalf("fillOutFormWith: %v", err)
 		}
 		if len(gotEntries) != 1 || gotEntries[0].Path != "plop" {
 			t.Errorf("entries forwarded = %+v, want single entry plop", gotEntries)
@@ -474,20 +506,22 @@ func TestFillOutForm(t *testing.T) {
 	})
 
 	t.Run("classifyFn reads the live --all and --include-untracked values", func(t *testing.T) {
+		t.Parallel()
+
 		var gotFn func() (bool, bool)
-		swapRunFormFn(t, func(_ *huh.Form, _ []git.StatusEntry, classifyFn func() (bool, bool)) (formRunner, error) {
+		run := func(_ *huh.Form, _ []git.StatusEntry, classifyFn func() (bool, bool)) (formRunner, error) {
 			gotFn = classifyFn
 			return &stubFormRunner{}, nil
-		})
+		}
 
 		hs := &fakeHistoryStore{}
 		// Skip=true so no interactive options group is built; opts stays at
 		// defaults, so classifyFn reflects the launch flags (both true here).
-		_, _, err := FillOutForm(context.Background(), minimalCfg(),
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(),
 			tui.CommitOption{Skip: true, CommitOptions: git.CommitOptions{All: true, IncludeUntracked: true}}, hs, nil,
 			[]git.StatusEntry{{XY: " M", Path: "x"}})
 		if err != nil {
-			t.Fatalf("FillOutForm: %v", err)
+			t.Fatalf("fillOutFormWith: %v", err)
 		}
 		if gotFn == nil {
 			t.Fatal("classifyFn was not passed to the runner")
@@ -835,21 +869,23 @@ func TestLoadForm_OptionsPage(t *testing.T) {
 }
 
 func TestFillOutForm_MergeOnlySurvivesHistory(t *testing.T) {
-	// Not parallel — swaps the global runFormFn.
+	t.Parallel()
 
 	t.Run("the form reopened after ctrl+r keeps the merge page", func(t *testing.T) {
+		t.Parallel()
+
 		var forms []*huh.Form
-		swapRunFormFn(t, func(f *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
+		run := func(f *huh.Form, _ []git.StatusEntry, _ func() (bool, bool)) (formRunner, error) {
 			forms = append(forms, f)
 			// Call 1: main form, ctrl+r. Call 2: the "No commit history yet."
 			// dialog. Call 3: the reopened main form, submitted.
 			return &stubFormRunner{wantHistoryVal: len(forms) == 1}, nil
-		})
+		}
 
-		_, _, err := FillOutForm(context.Background(), minimalCfg(),
+		_, _, err := fillOutFormWith(context.Background(), run, minimalCfg(),
 			tui.CommitOption{MergeOnly: true, Authors: []string{"Ann <a@x>"}}, &fakeHistoryStore{}, nil, nil)
 		if err != nil {
-			t.Fatalf("FillOutForm: %v", err)
+			t.Fatalf("fillOutFormWith: %v", err)
 		}
 		if len(forms) != 3 {
 			t.Fatalf("runner called %d times, want 3", len(forms))

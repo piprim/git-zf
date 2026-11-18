@@ -6,8 +6,31 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piprim/git-zf/config"
+	"github.com/piprim/git-zf/tracker"
 	"github.com/spf13/cobra"
 )
+
+// TestTrackerAdaptersRegistered pins the composition root: loading package
+// cmd registers every tracker adapter, whichever subcommand package runs.
+func TestTrackerAdaptersRegistered(t *testing.T) {
+	t.Parallel()
+
+	for _, typ := range []string{"forgejo", "gitea", "github", "redmine"} {
+		t.Run(typ, func(t *testing.T) {
+			t.Parallel()
+
+			// New validates and constructs: no network call.
+			tr, err := tracker.New(config.IssueTrackerConfig{Type: typ, URL: "https://example.invalid", Token: "t"})
+			if err != nil {
+				t.Fatalf("tracker.New(%q): %v", typ, err)
+			}
+			if tr == nil {
+				t.Fatalf("tracker.New(%q) returned a nil tracker", typ)
+			}
+		})
+	}
+}
 
 func TestGetRootCmd_menu(t *testing.T) {
 	root, err := GetRootCmd()

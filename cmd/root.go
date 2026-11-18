@@ -18,6 +18,9 @@ import (
 	"github.com/piprim/git-zf/cmd/uninstall"
 	"github.com/piprim/git-zf/cmd/version"
 	"github.com/piprim/git-zf/config"
+	_ "github.com/piprim/git-zf/tracker/forgejo" // registers forgejo + gitea adapters
+	_ "github.com/piprim/git-zf/tracker/github"  // registers github adapter
+	_ "github.com/piprim/git-zf/tracker/redmine" // registers redmine adapter
 	"github.com/spf13/cobra"
 )
 
