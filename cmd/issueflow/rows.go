@@ -63,6 +63,9 @@ func ReconcileIssues(ctx context.Context, client *git.Client, m *issue.Mirror) i
 	return res
 }
 
+// readingIssues is the spinner's message while ListRows works.
+const readingIssues = "Reading the issues"
+
 // ListRows lists the tracked branches, the tracker's open issues and the
 // issues stored in the repository, merged into one row per issue; status
 // ("open", "closed", "all", "" for every row) filters them as the list's
@@ -72,6 +75,10 @@ func ReconcileIssues(ctx context.Context, client *git.Client, m *issue.Mirror) i
 // either: `issue sync` (`r` in the table) does, so a listing is local work
 // and costs no round trip. A picker that must be fresh fetches first.
 func ListRows(ctx context.Context, deps StartDeps, status string) ([]issue.Row, error) {
+	// Local work is not instant on a repository holding many chains. The
+	// spinner stops before a warning: deps.Stderr is not the writer it wraps.
+	stop := deps.Client.IO().Spin(readingIssues)
+	defer stop()
 	rows, err := buildFromBranches(ctx, deps.Client)
 	if err != nil {
 		return nil, err
@@ -80,10 +87,12 @@ func ListRows(ctx context.Context, deps StartDeps, status string) ([]issue.Row, 
 	var issues []tracker.Issue
 	if deps.Flags.Tracker && deps.Mirror == nil && deps.Tracker != nil {
 		if issues, err = deps.Tracker.ListIssues(ctx); err != nil {
+			stop()
 			fmt.Fprintf(deps.errW(), "warning: tracker unavailable, listing the repository alone: %v\n", err)
 		}
 	}
 
+	stop()
 	rows, err = mergeRepoIssues(ctx, deps, mergeTrackerIssues(issues, rows))
 	if err != nil || status == "" {
 		return rows, err
@@ -143,7 +152,9 @@ func firstAssignee(iss *tracker.Issue) string {
 // state, and every record without a branch row is appended, so the backlog
 // shows up before anyone starts a branch.
 func mergeRepoIssues(ctx context.Context, deps StartDeps, rows []issue.Row) ([]issue.Row, error) {
+	stop := deps.Client.IO().Spin(readingIssues)
 	records, warnings, err := issue.List(ctx, deps.Client)
+	stop()
 	if err != nil {
 		return nil, fmt.Errorf("list repo issues: %w", err)
 	}
