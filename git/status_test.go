@@ -203,3 +203,104 @@ func TestStatusEntries(t *testing.T) {
 		}
 	})
 }
+
+func TestParseBranchHeaders(t *testing.T) {
+	t.Parallel()
+
+	const oid = "0123456789abcdef0123456789abcdef01234567"
+	full := BranchStatus{Head: "main", OID: oid, Upstream: "origin/main", HasAB: true, Ahead: 2, Behind: 1}
+	headers := "# branch.oid " + oid + "\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -1\n"
+
+	cases := []struct {
+		name string
+		raw  string
+		want BranchStatus
+	}{
+		{"branch with upstream", headers, full},
+		{"no upstream", "# branch.oid " + oid + "\n# branch.head wip\n", BranchStatus{Head: "wip", OID: oid}},
+		{
+			"upstream gone", "# branch.oid " + oid + "\n# branch.head x\n# branch.upstream origin/x\n",
+			BranchStatus{Head: "x", OID: oid, Upstream: "origin/x"},
+		},
+		{"detached", "# branch.oid " + oid + "\n# branch.head (detached)\n", BranchStatus{OID: oid}},
+		{"no commit yet", "# branch.oid (initial)\n# branch.head main\n", BranchStatus{Head: "main"}},
+		{
+			"entries are ignored",
+			headers + "1 .M N... 100644 100644 100644 aaaa bbbb # branch.head other\n? new.txt\n", full,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := parseBranchHeaders(tc.raw); got != tc.want {
+				t.Errorf("parseBranchHeaders = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reports the branch and the entries", func(t *testing.T) {
+		t.Parallel()
+
+		client, dir := newDiskRepo(t)
+		writeFile(t, dir, "base.go", "package main // changed\n")
+
+		bs, entries, err := client.Status(t.Context())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if bs.Head != "main" || len(bs.OID) != 40 || bs.Upstream != "" || bs.HasAB {
+			t.Errorf("branch = %+v, want main, a full hash, no upstream", bs)
+		}
+		if len(entries) != 1 || entries[0].XY != " M" || entries[0].Path != "base.go" {
+			t.Errorf("entries = %+v, want base.go modified", entries)
+		}
+	})
+
+	t.Run("reports ahead and behind of the upstream", func(t *testing.T) {
+		t.Parallel()
+
+		alice, aliceDir, originDir := newDiskRepoWithOrigin(t)
+		_, bobDir := cloneOf(t, originDir, "bob")
+		writeFile(t, bobDir, "bob.go", "package main\n")
+		runGitInDir(t, bobDir, "add", "bob.go")
+		runGitInDir(t, bobDir, "commit", "-m", "bob")
+		runGitInDir(t, bobDir, "push", "-q", "origin", "main")
+
+		writeFile(t, aliceDir, "alice.go", "package main\n")
+		runGitInDir(t, aliceDir, "add", "alice.go")
+		runGitInDir(t, aliceDir, "commit", "-m", "alice")
+		runGitInDir(t, aliceDir, "fetch", "-q", "origin")
+
+		bs, _, err := alice.Status(t.Context())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if bs.Upstream != "origin/main" || !bs.HasAB || bs.Ahead != 1 || bs.Behind != 1 {
+			t.Errorf("branch = %+v, want origin/main ahead 1 behind 1", bs)
+		}
+	})
+
+	t.Run("a repository with no commit yet", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		runGitInDir(t, dir, "init", "-q", "--initial-branch=trunk")
+		client, err := NewClientAt(nil, dir)
+		if err != nil {
+			t.Fatalf("NewClientAt: %v", err)
+		}
+
+		bs, entries, err := client.Status(t.Context())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if bs.Head != "trunk" || bs.OID != "" || len(entries) != 0 {
+			t.Errorf("branch = %+v entries = %v, want trunk with no hash", bs, entries)
+		}
+	})
+}

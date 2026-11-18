@@ -471,6 +471,9 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		m.notice = ""
+		if key.String() == "esc" && !m.picking && !m.filtering {
+			return m.updateEsc()
+		}
 		if key.String() != "a" {
 			m.armAbandon = ""
 		}
@@ -487,6 +490,23 @@ func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.table, cmd = m.table.Update(msg)
 	return m, cmd
+}
+
+// updateEsc handles esc at the table's top level: it dismisses what there is
+// to dismiss, an armed abandon then an applied filter, and closes the table
+// as q does when there is nothing.
+func (m *issueTableModel) updateEsc() (tea.Model, tea.Cmd) {
+	switch {
+	case m.armAbandon != "":
+		m.armAbandon = ""
+	case m.filter.Value() != "":
+		m.filter.Reset()
+		m.refreshRows()
+	default:
+		return m, tea.Quit
+	}
+
+	return m, nil
 }
 
 func (m *issueTableModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {

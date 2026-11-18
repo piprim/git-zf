@@ -263,8 +263,14 @@ func Resolve(ctx context.Context, c *git.Client, query string) (Record, error) {
 // Fetch fetches the remote's issue refs and reconciles the local ones with
 // them, merging diverged chains. Returns the number of merges. No-op without
 // a remote.
-func Fetch(ctx context.Context, c *git.Client) (merged int, err error) {
-	if err := c.FetchChainRefs(ctx, git.IssueRefs, false); err != nil {
+func Fetch(ctx context.Context, c *git.Client) (merged int, err error) { return fetch(ctx, c, false) }
+
+// FetchQuiet is Fetch printing nothing, git's error block included: the
+// caller words the failure.
+func FetchQuiet(ctx context.Context, c *git.Client) (merged int, err error) { return fetch(ctx, c, true) }
+
+func fetch(ctx context.Context, c *git.Client, silent bool) (merged int, err error) {
+	if err := c.FetchChainRefs(ctx, git.IssueRefs, silent); err != nil {
 		return 0, fmt.Errorf("fetch issues: %w", err)
 	}
 

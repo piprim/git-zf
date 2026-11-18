@@ -6,7 +6,7 @@
 
 > A TUI powered CLI that wraps a git workflow (issue → branch → commit → review → close) with optional issue-tracker integration and bi-directional synchronization.
 
-git-zf is a git subcommand. `git zf` opens a menu; `git zf issue start` names
+git-zf is a git subcommand. `git zf` opens a home screen; `git zf issue start` names
 a branch after an issue, `git zf commit` composes a commitizen-style message
 pre-filled from it, `git zf review request` locks the branch for a peer
 review, and `git zf issue close` merges it into the base with the strategy you

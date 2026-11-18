@@ -283,6 +283,9 @@ func (m *branchTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFiltering(msg, key)
 		}
 		m.notice = ""
+		if key.String() == "esc" {
+			return m.updateEsc()
+		}
 		if key.String() != m.armKey {
 			m.armKey, m.armBranch = "", ""
 		}
@@ -294,6 +297,25 @@ func (m *branchTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.table, cmd = m.table.Update(msg)
 
 	return m, cmd
+}
+
+// updateEsc handles esc at the table's top level: it dismisses what there is
+// to dismiss, an armed key then an applied filter, and closes the table as q
+// does when there is nothing.
+func (m *branchTableModel) updateEsc() (tea.Model, tea.Cmd) {
+	switch {
+	case m.armKey != "":
+		m.armKey, m.armBranch = "", ""
+	case m.filter.Value() != "":
+		m.filter.Reset()
+		m.refreshRows()
+	default:
+		model, cmd, _ := m.quitWith(BranchPickNone)
+
+		return model, cmd
+	}
+
+	return m, nil
 }
 
 func (m *branchTableModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {

@@ -9,21 +9,40 @@ around the menu, and know where the configuration lives.
 Every command is interactive by default. Passing a flag skips the matching
 prompt, and `--help` lists the flags of any command.
 
-## The menu
+## The home screen
 
 ```
 $ git zf
 ```
 
-Without a subcommand, `git zf` opens a menu of the workflow commands:
-**Commit**, **Issue**, **Branch**, **Review**, **Log**. It runs the one you
-pick with its interactive defaults. `git zf branch` and `git zf review` do
-the same one level down; `git zf issue` opens the issue table. `Esc` or
-`ctrl+c` leaves the menu quietly.
+Without a subcommand, `git zf` opens a home screen. Its header says where you
+are: the current branch and its issue, the files staged, modified and
+untracked, the commits ahead of and behind the upstream, and the state of the
+review. Under it are the workflow commands, each with a key and what waits
+there:
 
-When stdin is not a terminal, in a script or in CI, the menu is skipped and
-the usual `--help` text is printed. The setup commands (`init`, `install`,
-`uninstall`, `config`, `completion`, `version`) are not in the menu.
+| Key | Command | Hint |
+| --- | --- | --- |
+| `c` | **Commit** | the files staged or modified |
+| `i` | **Issue** | the open issues |
+| `b` | **Branch** | the branches in progress |
+| `v` | **Review** | the reviews waiting |
+| `l` | **Log** | |
+
+A key runs its command with its interactive defaults; `enter` runs the one
+under the cursor. `s` shows the working tree as `git status` does, `r`
+fetches the remote and reads everything again, `q` quits. `Esc` does nothing
+on the home screen.
+
+Leaving a command brings you back to the home screen, refreshed: `q`, or
+`Esc` once there is nothing left to dismiss, closes the issue table, the
+branch table and the log. `git zf review` opens a menu of its own that works
+the same way; `git zf issue` and `git zf branch` open their tables.
+
+When stdin is not a terminal, in a script or in CI, the usual `--help` text
+is printed instead. Outside a git repository it is printed too, under a line
+saying so. The setup commands (`init`, `install`, `uninstall`, `config`,
+`completion`, `version`) are not on the home screen.
 
 ## Your first commit
 

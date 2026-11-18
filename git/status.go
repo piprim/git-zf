@@ -31,6 +31,62 @@ func (c *Client) StatusEntries(ctx context.Context) ([]StatusEntry, error) {
 	return parsePorcelainV2(string(out)), nil
 }
 
+// BranchStatus is what the `#` header lines of `git status --porcelain=v2
+// --branch` say about HEAD.
+type BranchStatus struct {
+	// Head is the branch name, "" on a detached HEAD.
+	Head string
+	// OID is the full hash of HEAD, "" before the first commit.
+	OID string
+	// Upstream is the upstream's short name ("origin/main"), "" without one.
+	Upstream string
+	// HasAB is false when the upstream is gone: Ahead and Behind then mean
+	// nothing.
+	HasAB         bool
+	Ahead, Behind int
+}
+
+// Status returns the branch facts and the working-tree entries from one
+// `git status --porcelain=v2 --branch`.
+func (c *Client) Status(ctx context.Context) (BranchStatus, []StatusEntry, error) {
+	out, err := c.gitCmd(ctx, "status", "--porcelain=v2", "--branch").Output()
+	if err != nil {
+		return BranchStatus{}, nil, fmt.Errorf("git status: %w", err)
+	}
+
+	return parseBranchHeaders(string(out)), parsePorcelainV2(string(out)), nil
+}
+
+// parseBranchHeaders reads the `# branch.*` lines of porcelain=v2 output;
+// anything else is skipped.
+func parseBranchHeaders(raw string) BranchStatus {
+	var bs BranchStatus
+	for line := range strings.SplitSeq(raw, "\n") {
+		key, val, ok := strings.Cut(strings.TrimPrefix(line, "# branch."), " ")
+		if !ok || !strings.HasPrefix(line, "# branch.") {
+			continue
+		}
+		switch key {
+		case "oid":
+			if val != "(initial)" {
+				bs.OID = val
+			}
+		case "head":
+			if val != "(detached)" {
+				bs.Head = val
+			}
+		case "upstream":
+			bs.Upstream = val
+		case "ab":
+			if n, _ := fmt.Sscanf(val, "+%d -%d", &bs.Ahead, &bs.Behind); n == 2 {
+				bs.HasAB = true
+			}
+		}
+	}
+
+	return bs
+}
+
 // parsePorcelainV2 parses porcelain=v2 output into entries. Ignored ('!') and
 // header ('#') lines are dropped; unrecognised or malformed lines are skipped
 // defensively so a single odd line never fails the whole status.

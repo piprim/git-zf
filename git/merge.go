@@ -192,7 +192,13 @@ func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool)
 // Fetch runs `git fetch <remote>`. Returns nil immediately when no remote is
 // configured (local-only repo). Returns a wrapped error when the remote is
 // unreachable or auth fails.
-func (c *Client) Fetch(ctx context.Context) error {
+func (c *Client) Fetch(ctx context.Context) error { return c.fetch(ctx, false) }
+
+// FetchQuiet is Fetch printing nothing, git's error block included: the
+// caller words the failure.
+func (c *Client) FetchQuiet(ctx context.Context) error { return c.fetch(ctx, true) }
+
+func (c *Client) fetch(ctx context.Context, silent bool) error {
 	remote, err := c.Remote()
 	if err != nil {
 		return fmt.Errorf("resolve remote: %w", err)
@@ -202,7 +208,7 @@ func (c *Client) Fetch(ctx context.Context) error {
 		return nil
 	}
 
-	if err := c.remoteCmd(ctx, false, "fetch", remote); err != nil {
+	if err := c.remoteCmd(ctx, silent, "fetch", remote); err != nil {
 		return fmt.Errorf("fetch %s: %w", remote, err)
 	}
 

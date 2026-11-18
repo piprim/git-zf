@@ -252,6 +252,14 @@ func (m *logModel) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k := key.String(); k {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "esc":
+		// An applied filter is dismissed first; with nothing to dismiss esc
+		// closes the view as q does.
+		if m.filter.Value() == "" {
+			return m, tea.Quit
+		}
+		m.filter.Reset()
+		m.refilter()
 	case "enter":
 		m.openDialog()
 	case "up", "k":

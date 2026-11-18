@@ -277,13 +277,19 @@ func SetStatus(ctx context.Context, c *git.Client, slug, branchName, status stri
 // Fetch fetches the remote's branch chains and reconciles the local ones with
 // them, merging diverged chains. A local blob ref is replaced by the remote
 // chain when the remote has one. No-op without a remote.
-func Fetch(ctx context.Context, c *git.Client) error {
+func Fetch(ctx context.Context, c *git.Client) error { return fetch(ctx, c, false) }
+
+// FetchQuiet is Fetch printing nothing, git's error block included: the
+// caller words the failure.
+func FetchQuiet(ctx context.Context, c *git.Client) error { return fetch(ctx, c, true) }
+
+func fetch(ctx context.Context, c *git.Client, silent bool) error {
 	payload, err := mergePayload(ctx, c)
 	if err != nil {
 		return err
 	}
 
-	return c.FetchChains(ctx, git.BranchRefs, payload, false) //nolint:wrapcheck // names the family already
+	return c.FetchChains(ctx, git.BranchRefs, payload, silent) //nolint:wrapcheck // names the family already
 }
 
 // Reconcile brings the local chains up to date with what the last fetch saw

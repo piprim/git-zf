@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/piprim/git-zf/cmd/branch"
-	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/commit"
 	"github.com/piprim/git-zf/cmd/completion"
 	cfgcmd "github.com/piprim/git-zf/cmd/config"
@@ -32,7 +31,8 @@ var (
 	appConfig *config.AppConfig
 
 	// rootMenu lists, in display order, the workflow commands offered by the
-	// menu that `git zf` opens when run without a subcommand. Setup commands
+	// home screen that `git zf` opens when run without a subcommand; each
+	// needs a key in homeKeys. Setup commands
 	// (install, uninstall, init, config, completion, version) are deliberately
 	// absent: they are one-shot and stay CLI-only, listed by --help.
 	rootMenu = []string{"commit", "issue", "branch", "review", "log"}
@@ -58,15 +58,26 @@ Every command is interactive by default: it asks what it needs in a form.
 Passing a flag skips the matching prompt, and --help lists the flags of any
 command.
 
-Without a subcommand, git zf opens a menu of the workflow commands (commit,
-issue, branch, review, log) and runs the one you pick with its interactive
-defaults. git zf review does the same one level down; git zf issue and git zf
-branch open their tables. Esc or ctrl+c leaves the menu quietly. When stdin
-is not a terminal (a script, CI) the menu is skipped and this help is printed.
-The setup commands (init, install, uninstall, config, completion, version)
-are not in the menu.`,
+Without a subcommand, git zf opens a home screen. Its header says where you
+are: the current branch and its issue, the files staged, modified and
+untracked, the commits ahead of and behind the upstream, the state of the
+review. Under it are the workflow commands, each with a key and what waits
+there: c commit, i issue, b branch, v review, l log. A key runs its command
+with its interactive defaults, enter runs the one under the cursor. s shows
+the working tree as git status does, r fetches the remote and reads
+everything again, q quits. Esc does nothing on the home screen.
+
+Leaving a command returns to the home screen, refreshed: q, or Esc once
+there is nothing left to dismiss, closes the issue table, the branch table
+and the log. git zf review opens a menu of its own that works the same way;
+git zf issue and git zf branch open their tables.
+
+When stdin is not a terminal (a script, CI) this help is printed instead.
+Outside a git repository it is printed too, under a line saying so. The
+setup commands (init, install, uninstall, config, completion, version) are
+not on the home screen.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmdutil.RunMenu(cmd, appConfig.ProgName+":", menuSubs(cmd), cmdutil.NewHuhMenuPrompter())
+			return runHome(cmd, appConfig.ProgName, menuSubs(cmd), newHomeDeps())
 		},
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			cmd.SilenceUsage = true

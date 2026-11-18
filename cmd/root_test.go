@@ -38,9 +38,9 @@ func TestGetRootCmd_menu(t *testing.T) {
 		t.Fatalf("GetRootCmd: %v", err)
 	}
 
-	t.Run("runs a menu when invoked without a subcommand", func(t *testing.T) {
+	t.Run("runs the home screen when invoked without a subcommand", func(t *testing.T) {
 		if root.RunE == nil {
-			t.Fatal("root command has no RunE; expected the workflow menu")
+			t.Fatal("root command has no RunE; expected the home screen")
 		}
 	})
 
@@ -63,6 +63,20 @@ func TestGetRootCmd_menu(t *testing.T) {
 			if !slices.Contains(registered, sub) {
 				t.Errorf("menu entry %q is not a registered subcommand", sub.Name())
 			}
+		}
+	})
+
+	t.Run("every menu entry has a key of its own", func(t *testing.T) {
+		seen := map[string]string{}
+		for _, name := range rootMenu {
+			key := homeKeys[name]
+			if key == "" || slices.Contains([]string{"s", "r", "q"}, key) {
+				t.Errorf("%s: key %q, want one that is not the screen's s, r or q", name, key)
+			}
+			if other, dup := seen[key]; dup {
+				t.Errorf("%s and %s share the key %q", name, other, key)
+			}
+			seen[key] = name
 		}
 	})
 

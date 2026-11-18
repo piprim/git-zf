@@ -41,7 +41,7 @@ func (huhMenuPrompter) Select(ctx context.Context, title string, subs []*cobra.C
 	}
 
 	var picked string
-	if err := tui.NewForm(tui.MenuSelect(title, menuOptions(subs), &picked)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.MenuSelect(title, menuOptions(subs), &picked)).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("menu form: %w", err)
 	}
 
@@ -49,7 +49,8 @@ func (huhMenuPrompter) Select(ctx context.Context, title string, subs []*cobra.C
 }
 
 // RunMenu is the RunE body of a command group invoked with no subcommand: it
-// shows a menu of subs and runs the picked one.
+// shows a menu of subs, runs the picked one, and shows the menu again until
+// the user leaves it.
 //
 // The picked subcommand's RunE receives cmd — the parent, currently executing
 // command — rather than itself. cobra v1.1.3 offers no SetContext, and the
@@ -59,34 +60,45 @@ func (huhMenuPrompter) Select(ctx context.Context, title string, subs []*cobra.C
 // through StringFlag), so the subcommand runs on its interactive defaults.
 //
 // Esc / ctrl+c on the menu exits quietly; a non-interactive stdin prints the
-// group's help instead, so scripts keep the pre-menu behaviour.
+// group's help instead, so scripts keep the pre-menu behaviour. What an
+// action returns never ends the loop: see RunSub.
 func RunMenu(cmd *cobra.Command, title string, subs []*cobra.Command, p MenuPrompter) error {
-	picked, err := p.Select(cmd.Context(), title, subs)
+	for {
+		picked, err := p.Select(cmd.Context(), title, subs)
 
-	switch {
-	case errors.Is(err, ErrMenuUnavailable):
-		if err := cmd.Help(); err != nil {
-			return fmt.Errorf("print help: %w", err)
+		switch {
+		case errors.Is(err, ErrMenuUnavailable):
+			if err := cmd.Help(); err != nil {
+				return fmt.Errorf("print help: %w", err)
+			}
+
+			return nil
+		case errors.Is(err, huh.ErrUserAborted):
+			return nil
+		case err != nil:
+			return fmt.Errorf("action select: %w", err)
 		}
 
-		return nil
-	case errors.Is(err, huh.ErrUserAborted):
-		return nil
-	case err != nil:
-		return fmt.Errorf("action select: %w", err)
+		i := slices.IndexFunc(subs, func(s *cobra.Command) bool { return s.Name() == picked })
+		if i < 0 {
+			return fmt.Errorf("unknown action %q", picked)
+		}
+		if err := RunSub(cmd, subs[i]); err != nil {
+			return err
+		}
 	}
+}
 
-	i := slices.IndexFunc(subs, func(s *cobra.Command) bool { return s.Name() == picked })
-	if i < 0 {
-		return fmt.Errorf("unknown action %q", picked)
+// RunSub runs sub's RunE with cmd, the executing parent (see RunMenu), for a
+// menu that is shown again afterwards: a form left with esc is no error, and
+// any other failure is printed on cmd's stderr as "error: <name>: <err>". It
+// returns an error only for a sub that cannot run.
+func RunSub(cmd, sub *cobra.Command) error {
+	if sub.RunE == nil {
+		return fmt.Errorf("action %q has no RunE", sub.Name())
 	}
-
-	if subs[i].RunE == nil {
-		return fmt.Errorf("action %q has no RunE", picked)
-	}
-
-	if err := subs[i].RunE(cmd, nil); err != nil {
-		return fmt.Errorf("%s: %w", picked, err)
+	if err := sub.RunE(cmd, nil); err != nil && !errors.Is(err, huh.ErrUserAborted) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "error: %s: %v\n", sub.Name(), err)
 	}
 
 	return nil

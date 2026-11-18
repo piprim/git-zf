@@ -324,19 +324,47 @@ words the questions.
 
 ### Testing the menus
 
-`git zf` (no subcommand) and `git zf review` open an action menu built on
-`cmdutil.RunMenu` (`cmd/cmdutil/menu.go`): it takes the parent command, a
-title, the ordered subcommands to offer, and a `MenuPrompter`. The picked
-subcommand's `RunE` runs with the *parent* command (cobra v1.1.3 has no
-`SetContext`), so it sees its flags as unset and runs interactively. No TTY on
-stdin → the group's help is printed; Esc → quiet exit.
+`git zf` (no subcommand) opens the home screen (`runHome`, `cmd/home.go`): a
+header read from the repository, then the commands of `rootMenu` with a key
+each (`homeKeys`) and a hint. `gatherHome` (`cmd/home_data.go`) reads it on
+every display, with a fresh client, from one `git.Client.Status` (`git status
+--porcelain=v2 --branch`) and one `List` of each chain family: local work
+only, never the tracker, no `Load` or `branch.Find`. The screen is
+`tui.NewHomeModel` (`tui/home.go`), which ends with a `tui.HomePick`; the
+loop talks to it through `homePrompter`, scripted in the tests. `s` is a mode
+of the model (the files as `tui.StatusPanel` groups them), `r` is
+`refreshHome`: the quiet fetches (`git.Client.FetchQuiet`, `issue.FetchQuiet`,
+`branch.FetchQuiet`, `review.Fetch` silent) and one warning line when the
+remote is down. On the home menu Esc does nothing and q quits. No TTY on
+stdin → the help alone, checked before the repository; a TTY outside a
+repository → `not a git repository` on stderr, then the help.
+
+    mise exec -- go test ./git/... -run "TestParseBranchHeaders|TestStatus$|FetchQuiet" -v
+    mise exec -- go test ./tui/... -run "TestCountStatus|TestHomeModel" -v
+    mise exec -- go test ./cmd/ -run "^TestRunHome|TestGatherHome|TestHomeEntries|TestRefreshHome|^TestGetRootCmd_menu" -v
+    mise exec -- go test ./issue/... ./branch/... -run "FetchQuiet" -v
+
+Every command returns to the home screen: the issue table, the branch table
+and the log close on q, and on Esc once nothing is left to dismiss (an armed
+`a` / `D`, then an applied `/` filter: `updateEsc`, `tui/esc_test.go`).
+
+    mise exec -- go test ./tui/... -run "_Esc" -v
+
+`git zf review` opens an action menu built on `cmdutil.RunMenu`
+(`cmd/cmdutil/menu.go`): it takes the parent command, a title, the ordered
+subcommands to offer, and a `MenuPrompter`, and shows the menu again after
+each action until Esc. The picked subcommand's `RunE` runs with the *parent*
+command (cobra v1.1.3 has no `SetContext`), so it sees its flags as unset and
+runs interactively; `cmdutil.RunSub`, which the home screen shares, ignores a
+form left with Esc and prints any other error as `error: <name>: <err>`. No
+TTY on stdin → the group's help is printed.
 
     mise exec -- go test ./cmd/cmdutil/... -run "^TestRunMenu|^TestMenuOptions" -v
-    mise exec -- go test ./cmd/ -run "^TestGetRootCmd_menu" -v
     mise exec -- go test ./cmd/review/... -run "^TestReviewRootCmd" -v
 
-To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`) or
-`Review.menuSubs` (`cmd/review/review.go`), and extend the matching test.
+To add an entry, append the subcommand to `rootMenu` (`cmd/root.go`) with its
+key in `homeKeys`, or to `Review.menuSubs` (`cmd/review/review.go`), and
+extend the matching test.
 `git zf branch` has no menu either: it opens the branch table (see "Testing
 the branch table"). `git zf issue` has no
 menu: it runs `issue list` (`TestIssueRootCmd_ListsByDefault`), whose table

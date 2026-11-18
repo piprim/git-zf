@@ -157,6 +157,30 @@ func groupEntries(entries []git.StatusEntry, all, includeUntracked bool) []statu
 	return groups
 }
 
+// StatusCounts are the sizes of the sections the status panel shows for a
+// plain `git status` (no --all, no --include-untracked).
+type StatusCounts struct{ Staged, Modified, Untracked, Unmerged int }
+
+// CountStatus counts entries by the section StatusPanel puts them in: a file
+// staged and modified again counts in both.
+func CountStatus(entries []git.StatusEntry) StatusCounts {
+	var c StatusCounts
+	for _, g := range groupEntries(entries, false, false) {
+		switch g.Kind {
+		case kindStaged:
+			c.Staged = len(g.Lines)
+		case kindUnstaged:
+			c.Modified = len(g.Lines)
+		case kindUntracked:
+			c.Untracked = len(g.Lines)
+		case kindUnmerged:
+			c.Unmerged = len(g.Lines)
+		}
+	}
+
+	return c
+}
+
 // sectionMeta pairs a section's header label with its color.
 type sectionMeta struct {
 	header string

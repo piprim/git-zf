@@ -14,8 +14,12 @@ import (
 // scriptedMenuPrompter returns a canned pick (or error) instead of opening a
 // huh form, and records what it was asked to show.
 type scriptedMenuPrompter struct {
+	// pick is answered once, picks in order; after them the menu is left
+	// with esc. err, when set, is every answer.
 	pick  string
+	picks []string
 	err   error
+	calls int
 	title string
 	subs  []*cobra.Command
 }
@@ -23,8 +27,19 @@ type scriptedMenuPrompter struct {
 func (p *scriptedMenuPrompter) Select(_ context.Context, title string, subs []*cobra.Command) (string, error) {
 	p.title = title
 	p.subs = subs
+	p.calls++
+	if p.err != nil {
+		return "", p.err
+	}
+	picks := p.picks
+	if p.pick != "" {
+		picks = []string{p.pick}
+	}
+	if p.calls > len(picks) {
+		return "", huh.ErrUserAborted
+	}
 
-	return p.pick, p.err
+	return picks[p.calls-1], nil
 }
 
 // recordingSub builds a subcommand whose RunE records the *cobra.Command it
@@ -83,6 +98,9 @@ func TestRunMenu(t *testing.T) {
 		}
 		if gotIssue != parent {
 			t.Errorf("issue RunE received %v, want the parent command", gotIssue)
+		}
+		if p.calls != 2 {
+			t.Errorf("menu shown %d times, want 2: again after the action", p.calls)
 		}
 	})
 
@@ -191,20 +209,56 @@ func TestRunMenu(t *testing.T) {
 		}
 	})
 
-	t.Run("propagates the subcommand error, prefixed with the action name", func(t *testing.T) {
+	t.Run("prints the action's error and shows the menu again", func(t *testing.T) {
 		t.Parallel()
 
-		boom := errors.New("sub failed")
-		failing := &cobra.Command{Use: "commit", RunE: func(*cobra.Command, []string) error { return boom }}
-		parent, _ := newParent(t, failing)
+		failing := &cobra.Command{Use: "commit", RunE: func(*cobra.Command, []string) error { return errors.New("boom") }}
+		parent, out := newParent(t, failing)
 		p := &scriptedMenuPrompter{pick: "commit"}
 
-		err := RunMenu(parent, "git zf:", []*cobra.Command{failing}, p)
-		if !errors.Is(err, boom) {
-			t.Fatalf("err = %v, want sub failure", err)
+		if err := RunMenu(parent, "git zf:", []*cobra.Command{failing}, p); err != nil {
+			t.Fatalf("RunMenu: %v", err)
 		}
-		if !strings.HasPrefix(err.Error(), "commit: ") {
-			t.Errorf("err = %q, want it prefixed with the action name", err.Error())
+		if out.String() != "error: commit: boom\n" || p.calls != 2 {
+			t.Errorf("output = %q, menu shown %d times", out.String(), p.calls)
+		}
+	})
+
+	t.Run("an aborted action is not an error", func(t *testing.T) {
+		t.Parallel()
+
+		aborted := &cobra.Command{Use: "commit", RunE: func(*cobra.Command, []string) error { return huh.ErrUserAborted }}
+		parent, out := newParent(t, aborted)
+		p := &scriptedMenuPrompter{pick: "commit"}
+
+		if err := RunMenu(parent, "git zf:", []*cobra.Command{aborted}, p); err != nil {
+			t.Fatalf("RunMenu: %v", err)
+		}
+		if out.Len() != 0 || p.calls != 2 {
+			t.Errorf("output = %q, menu shown %d times", out.String(), p.calls)
+		}
+	})
+
+	t.Run("runs several actions in a row", func(t *testing.T) {
+		t.Parallel()
+
+		var ran []string
+		sub := func(name string) *cobra.Command {
+			return &cobra.Command{Use: name, RunE: func(*cobra.Command, []string) error {
+				ran = append(ran, name)
+
+				return nil
+			}}
+		}
+		a, b := sub("a"), sub("b")
+		parent, _ := newParent(t, a, b)
+		p := &scriptedMenuPrompter{picks: []string{"a", "b"}}
+
+		if err := RunMenu(parent, "git zf:", []*cobra.Command{a, b}, p); err != nil {
+			t.Fatalf("RunMenu: %v", err)
+		}
+		if strings.Join(ran, ",") != "a,b" {
+			t.Errorf("ran = %v, want a then b", ran)
 		}
 	})
 }
