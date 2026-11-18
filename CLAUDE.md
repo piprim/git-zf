@@ -345,7 +345,9 @@ prints to stdout when stdin is not a terminal. Enter opens a per-row menu
 keys `s`, `n`, `c` (the merge flow of `issue close <id>`), `a` (pressed
 twice: an abandon has no undo), `l` and `r` stay as shortcuts: the menu and
 the keys quit the table with a `tui.IssuePick` (`TestIssueTable_ActionKeys`),
-comment included (`tui.IssuePickComment`);
+comment and edit included (`tui.IssuePickComment`, `tui.IssuePickEdit`: `e`,
+also in the show dialog, which the table then reopens on:
+`IssueTableOptions.Show`);
 `listAction` (`cmd/issue/list.go`, `TestListAction`) runs the command behind
 the pick with the terminal free and the list loop reopens the table from
 `tui.IssueTableState`. To add a

@@ -13,6 +13,7 @@ import (
 	issuepkg "github.com/piprim/git-zf/issue"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
+	"github.com/piprim/git-zf/tui"
 )
 
 func TestBuildRows_RepoIssues(t *testing.T) {
@@ -193,22 +194,13 @@ func TestBuildRows_RepoIssues(t *testing.T) {
 		if _, err := renderIssue(ctx, infra, row.IssueSlug); err == nil {
 			t.Error("expected an error")
 		}
-		if _, err := editIssue(ctx, infra, row.IssueSlug, "Legacy", ""); err == nil {
-			t.Error("expected an error")
-		}
 	})
 
-	t.Run("the edit dialog with the same values changes nothing", func(t *testing.T) {
-		line, err := editIssue(ctx, infra, backlog.ShortID(), "Backlog", "")
-		if err != nil || !strings.Contains(line, "unchanged") {
-			t.Errorf("line = %q, err = %v", line, err)
-		}
-	})
-
-	t.Run("the edit dialog saves the title and description and the row follows", func(t *testing.T) {
-		line, err := editIssue(ctx, infra, backlog.ShortID(), " Backlog renamed ", "Now described")
-		if err != nil || !strings.Contains(line, "Edited issue "+backlog.ShortID()) {
-			t.Fatalf("line = %q, err = %v", line, err)
+	t.Run("the edit pick saves the title and description and the row follows", func(t *testing.T) {
+		p := &scriptedRecordPrompter{EditTitle: " Backlog renamed ", EditDescription: "Now described"}
+		row := bySlug(t, "")[backlog.ShortID()]
+		if reopen, err := New(rig.cfg).listAction(ctx, infra, p, nil, nil, tui.IssuePickEdit, &row); !reopen || err != nil {
+			t.Fatalf("reopen = %v, err = %v", reopen, err)
 		}
 		rec, err := issuepkg.Load(ctx, rig.client, backlog.ID)
 		if err != nil {

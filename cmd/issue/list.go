@@ -179,6 +179,8 @@ func (ir Issue) listAction(
 		err = runLabel(ctx, infra.client, p, []string{row.IssueSlug}, infra.mirror)
 	case tui.IssuePickComment:
 		err = runComment(ctx, infra.client, p, []string{row.IssueSlug}, "", infra.mirror)
+	case tui.IssuePickEdit:
+		err = runEdit(ctx, infra.client, p, []string{row.IssueSlug}, editFlags{}, infra.mirror)
 	case tui.IssuePickSync:
 		err = runSync(ctx, infra.client, infra.mirror)
 	case tui.IssuePickNone:
@@ -232,15 +234,7 @@ func runList(
 	}
 
 	actions := tui.IssueActions{
-		Show: func(slug string) (string, error) { return renderIssue(ctx, infra, slug) },
-		Load: func(slug string) (string, string, error) {
-			rec, err := resolveRow(ctx, infra.client, slug)
-
-			return rec.Title, rec.Description, err
-		},
-		Edit: func(slug, title, description string) (string, error) {
-			return editIssue(ctx, infra, slug, title, description)
-		},
+		Show:  func(slug string) (string, error) { return renderIssue(ctx, infra, slug) },
 		Start: true, // s starts the issue under the cursor
 	}
 	opts := tui.IssueTableOptions{Status: flags.status}
@@ -270,31 +264,20 @@ func runList(
 	return pick, &rows[i], nil
 }
 
-// resolveRow loads the issue of a table row; a row that is not an issue
-// stored in the repository is an error.
-func resolveRow(ctx context.Context, client *git.Client, slug string) (issuepkg.Record, error) {
-	rec, err := issuepkg.Resolve(ctx, client, slug)
-	if err != nil {
-		return issuepkg.Record{}, fmt.Errorf("resolve issue %s: %w", slug, err)
-	}
-
-	return rec, nil
-}
-
 // renderIssue renders the issue of a table row as `issue show` does, for the
 // list's dialog. A row with no issue in the repository is a tracker issue:
 // it is read from the tracker, with its comments.
 func renderIssue(ctx context.Context, infra issueListInfra, slug string) (string, error) {
 	var b strings.Builder
 
-	rec, err := resolveRow(ctx, infra.client, slug)
+	rec, err := issuepkg.Resolve(ctx, infra.client, slug)
 	if err == nil {
 		renderRecord(&b, &rec)
 
 		return b.String(), nil
 	}
 	if !errors.Is(err, git.ErrIssueNotFound) || infra.tracker == nil {
-		return "", err
+		return "", fmt.Errorf("resolve issue %s: %w", slug, err)
 	}
 
 	iss, err := infra.tracker.GetIssue(ctx, slug)
@@ -329,32 +312,6 @@ func renderTrackerIssue(w io.Writer, iss *tracker.Issue, comments []tracker.Comm
 	for _, c := range comments {
 		fmt.Fprintf(w, "\n--- %s  %s\n%s\n", c.CreatedAt.Local().Format(showTimeLayout), c.Author, c.Body)
 	}
-}
-
-// editIssue saves the edit dialog of a table row as `issue edit` does and
-// returns the line the table shows.
-func editIssue(ctx context.Context, infra issueListInfra, slug, title, description string) (string, error) {
-	rec, err := resolveRow(ctx, infra.client, slug)
-	if err != nil {
-		return "", err
-	}
-
-	// The table owns the terminal here: Err is hidden behind a plain writer,
-	// which makes every Spin under applyEdit a no-op.
-	cio := infra.client.IO()
-	errW := cio.Err
-	cio.Err = struct{ io.Writer }{errW}
-	defer func() { cio.Err = errW }()
-
-	changed, err := applyEdit(ctx, infra.client, &rec, title, description, infra.mirror)
-	if err != nil {
-		return "", err
-	}
-	if !changed {
-		return fmt.Sprintf("Issue %s unchanged", rec.DisplayID()), nil
-	}
-
-	return fmt.Sprintf("Edited issue %s: %s", rec.DisplayID(), strings.TrimSpace(title)), nil
 }
 
 // deps is the start flow's view of the list's infrastructure: the rows come

@@ -146,12 +146,8 @@ type IssueActions struct {
 	// Show renders the issue as `issue show` does; its error is shown in
 	// place of the issue.
 	Show func(slug string) (string, error)
-	// Load returns the title and description the edit form starts from.
-	Load func(slug string) (title, description string, err error)
-	// Edit saves the edit form and returns the line the table shows.
-	Edit func(slug, title, description string) (string, error)
 	// Pick is set when the table picks an issue: enter and s pick the row
-	// under the cursor and quit; n, c, l and r do nothing.
+	// under the cursor and quit; n, c, a, l, e and r do nothing.
 	Pick bool
 	// Start is set when a pick starts a branch (s in the list, the start
 	// flow's table): a closed issue is then refused with a notice. The
@@ -171,6 +167,7 @@ const (
 	IssuePickLabel                    // l or label from the menu: label the row's issue
 	IssuePickSync                     // r: sync the issues (list mode)
 	IssuePickComment                  // comment from the menu: comment on the row's issue
+	IssuePickEdit                     // e or edit from the menu: edit the row's issue
 )
 
 type issueMenuEntry string
@@ -226,10 +223,12 @@ type IssueTableOptions struct {
 	Filter  string // the / text at start
 	Mine    bool   // m on at start
 	Cursor  int    // the row under the cursor at start
+	Show    bool   // the show dialog is open on that row at start
 }
 
 // IssueTableState is the options that rebuild m as the user left it: its
-// filters and cursor. The list loop passes it to the next IssueTableModelWith.
+// filters and cursor, and the show dialog when e quit from it (the edit then
+// returns to the dialog). The list loop passes it to the next IssueTableModelWith.
 func IssueTableState(m tea.Model) IssueTableOptions {
 	t, ok := m.(*issueTableModel)
 	if !ok {
@@ -242,13 +241,14 @@ func IssueTableState(m tea.Model) IssueTableOptions {
 		Filter:  t.filter.Value(),
 		Mine:    t.mine,
 		Cursor:  t.table.Cursor(),
+		Show:    t.viewing,
 	}
 }
 
 // IssueTableModel is the issue table. In list mode enter opens the row's
-// action menu under the table, e opens its edit form (esc closes either), and
-// s, c, a, l, n and r quit with the action picked (start, close by merging,
-// abandon or label the row, a new issue, a sync: see PickedIssue); in pick
+// action menu under the table (esc closes it), and s, c, a, l, e, n and r
+// quit with the action picked (start, close by merging, abandon, label or
+// edit the row, a new issue, a sync: see PickedIssue); in pick
 // mode (actions.Pick) enter and s pick, n asks for a new issue.
 func IssueTableModel(rows []issue.Row, initialStatus string, actions IssueActions) (tea.Model, error) {
 	return IssueTableModelWith(rows, IssueTableOptions{Status: initialStatus}, actions)
@@ -309,6 +309,9 @@ func IssueTableModelWith(rows []issue.Row, opts IssueTableOptions, actions Issue
 			c = len(m.visible) - 1
 		}
 		m.table.SetCursor(c)
+	}
+	if opts.Show {
+		m.openDialog()
 	}
 
 	return m, nil
@@ -429,13 +432,12 @@ type issueTableModel struct {
 	// viewing is set while the show dialog replaces the table.
 	viewing bool
 	dialog  viewport.Model
-	// form is the active nested form ("edit" replaces the table, "menu" and
-	// "abandon" sit under it); the fields hold its values.
-	form                                 *huh.Form
-	formKind                             string
-	editSlug, editTitle, editDescription string
-	menuSlug, menuPicked                 string
-	abandonOK                            bool
+	// form is the active nested form ("menu" or "abandon"), under the table;
+	// the fields hold its values.
+	form                 *huh.Form
+	formKind             string
+	menuSlug, menuPicked string
+	abandonOK            bool
 	// notice is the line under the table until the next key.
 	notice string
 	// armAbandon is the slug a first a armed: a second a abandons it, any
@@ -495,7 +497,9 @@ func (m *issueTableModel) updateViewing(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			return m, nil
 		case "e":
-			return m, m.openEdit()
+			model, cmd, _ := m.pickRow(IssuePickEdit)
+
+			return model, cmd
 		case "ctrl+c":
 			return m, tea.Quit
 		}
@@ -526,8 +530,6 @@ func (m *issueTableModel) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		kind := m.formKind
 		m.form = nil
 		switch kind {
-		case "edit":
-			m.saveEdit()
 		case "menu":
 			return m.runMenuEntry(issueMenuEntry(m.menuPicked))
 		case "abandon":
@@ -558,9 +560,6 @@ func (m *issueTableModel) openMenu() tea.Cmd {
 		if e == issueEntryShow && m.actions.Show == nil {
 			continue
 		}
-		if e == issueEntryEdit && (m.actions.Load == nil || m.actions.Edit == nil) {
-			continue
-		}
 		opts = append(opts, MenuOption{Label: string(e), Value: string(e)})
 	}
 	if len(opts) == 0 {
@@ -582,7 +581,9 @@ func (m *issueTableModel) runMenuEntry(e issueMenuEntry) (tea.Model, tea.Cmd) {
 
 		return m, nil
 	case issueEntryEdit:
-		return m, m.openEdit()
+		model, cmd, _ := m.pickRow(IssuePickEdit)
+
+		return model, cmd
 	case issueEntryStart:
 		model, cmd, _ := m.pickRow(IssuePickRow)
 
@@ -608,45 +609,6 @@ func (m *issueTableModel) runMenuEntry(e issueMenuEntry) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
-}
-
-// openEdit replaces the table with the edit form of the issue under the
-// cursor; a load error is the notice instead.
-func (m *issueTableModel) openEdit() tea.Cmd {
-	c := m.table.Cursor()
-	if m.actions.Load == nil || m.actions.Edit == nil || c < 0 || c >= len(m.visible) {
-		return nil
-	}
-	m.viewing = false
-	slug := m.visible[c].IssueSlug
-	title, description, err := m.actions.Load(slug)
-	if err != nil {
-		m.notice = "Error: " + err.Error()
-
-		return nil
-	}
-	m.editSlug, m.editTitle, m.editDescription = slug, title, description
-	m.formKind = "edit"
-	m.form = NewForm(IssueEditForm(&m.editTitle, &m.editDescription)).WithWidth(m.dialog.Width)
-
-	return m.form.Init()
-}
-
-// saveEdit gives the form's values to Edit and shows the row's new title.
-func (m *issueTableModel) saveEdit() {
-	line, err := m.actions.Edit(m.editSlug, m.editTitle, m.editDescription)
-	if err != nil {
-		m.notice = "Error: " + err.Error()
-
-		return
-	}
-	m.notice = line
-	for i := range m.allRows {
-		if m.allRows[i].IssueSlug == m.editSlug {
-			m.allRows[i].Title = strings.TrimSpace(m.editTitle)
-		}
-	}
-	m.refreshRows()
 }
 
 // openDialog shows the issue under the cursor, or the error of loading it.
@@ -788,7 +750,11 @@ func (m *issueTableModel) updateNormal(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 
 		return m, tea.Quit, true
 	case "e":
-		return m, m.openEdit(), true
+		if m.actions.Pick {
+			return m, nil, true
+		}
+
+		return m.pickRow(IssuePickEdit)
 	case "m":
 		m.mine = !m.mine
 		m.refreshRows()
@@ -867,10 +833,6 @@ var dialogStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0
 
 func (m *issueTableModel) View() string {
 	if m.form != nil {
-		if m.formKind == "edit" {
-			return dialogStyle.Render(m.form.View()) + "\n\nenter: save · esc: cancel"
-		}
-
 		return m.table.View() + "\n\n" + m.form.View()
 	}
 	if m.viewing {

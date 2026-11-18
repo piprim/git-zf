@@ -731,6 +731,21 @@ func TestListAction(t *testing.T) {
 			t.Errorf("reopen = %v, err = %v, comments = %+v", reopen, err, after.Comments)
 		}
 	})
+	t.Run("the edit pick runs the edit form on the row's issue and reopens", func(t *testing.T) {
+		p := &scriptedRecordPrompter{EditTitle: "Keyed again", EditDescription: "From the table"}
+		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickEdit, row)
+		got, loadErr := issuepkg.Load(ctx, rig.client, rec.ID)
+		if !reopen || err != nil || loadErr != nil || got.Title != "Keyed again" || got.Description != "From the table" {
+			t.Errorf("reopen = %v, err = %v, record = %+v (%v)", reopen, err, got, loadErr)
+		}
+	})
+	t.Run("esc on the edit form reopens quietly", func(t *testing.T) {
+		reopen, err := New(rig.cfg).listAction(ctx, infra, &scriptedRecordPrompter{Err: huh.ErrUserAborted}, sp, &scriptedPrompter{}, tui.IssuePickEdit, row)
+		after, _ := issuepkg.Load(ctx, rig.client, rec.ID)
+		if !reopen || err != nil || after.Title != "Keyed again" {
+			t.Errorf("reopen = %v, err = %v, title = %q", reopen, err, after.Title)
+		}
+	})
 	t.Run("n creates an issue, declines start and reopens", func(t *testing.T) {
 		p := &scriptedRecordPrompter{New: issuepkg.NewIssue{Title: "From the table", BranchType: "fix"}, Start: false}
 		reopen, err := New(rig.cfg).listAction(ctx, infra, p, sp, &scriptedPrompter{}, tui.IssuePickNew, nil)
