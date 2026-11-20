@@ -30,12 +30,20 @@ const (
 	actionDelete     branchAction = "delete"
 )
 
-// menuEntriesFor is the menu of a row: RemoteOnly first, then Current, then
+// menuEntriesFor is the menu of a row: NoBranch (a record alone: nothing but
+// abandon applies), then RemoteOnly, then Current, then
 // the record. A plain branch named like an issue branch gets no merge entry
 // (branch merge refuses issue-looking names).
 func menuEntriesFor(row *branch.Row) []branchAction {
+	if row.NoBranch {
+		return []branchAction{actionAbandon}
+	}
 	if row.RemoteOnly {
-		return []branchAction{actionCheckout, actionLog}
+		if !row.Plain && row.Status == branch.StatusInProgress {
+			return []branchAction{actionCheckout, actionAbandon, actionLog, actionDelete}
+		}
+
+		return []branchAction{actionCheckout, actionLog, actionDelete}
 	}
 	var entries []branchAction
 	switch {
@@ -159,7 +167,7 @@ func runBranchTable(
 			return nil
 		}
 		if stdout {
-			tty.RenderBranchRows(d.stdout, localRows(rows), opts.Remote)
+			tty.RenderBranchRows(d.stdout, defaultRows(rows), opts.Remote)
 
 			return nil
 		}
@@ -191,7 +199,11 @@ func runBranchTable(
 // Both errors are the caller's to hand to afterAction: a menu left with esc
 // reopens the table quietly, a failed action is printed.
 func runMenu(ctx context.Context, d *tableDeps, p BranchMenuPrompter, row *branch.Row) (reopen bool, err error) {
-	a, err := p.PickAction(ctx, row.BranchName, offeredEntries(d, row))
+	title := row.BranchName
+	if row.NoBranch {
+		title += " — no branch here; started by " + row.Author + ", who may not have pushed it yet"
+	}
+	a, err := p.PickAction(ctx, title, offeredEntries(d, row))
 	if err != nil {
 		return true, fmt.Errorf("pick action: %w", err)
 	}
@@ -215,10 +227,12 @@ func afterAction(reopen bool, err error, stderr io.Writer) bool {
 	return reopen
 }
 
-func localRows(rows []branch.Row) []branch.Row {
+// defaultRows is what the table shows before R: the local branches and the
+// remote-only ones recorded in progress.
+func defaultRows(rows []branch.Row) []branch.Row {
 	out := make([]branch.Row, 0, len(rows))
 	for i := range rows {
-		if !rows[i].RemoteOnly {
+		if r := &rows[i]; !r.RemoteOnly || (!r.Plain && r.Status == branch.StatusInProgress) {
 			out = append(out, rows[i])
 		}
 	}
@@ -300,6 +314,10 @@ func checkoutBranch(ctx context.Context, c *git.Client, name string) error {
 // untouched: a local delete does not say whether a teammate still works on
 // the branch; prune checks the remote.
 func deleteBranch(ctx context.Context, c *git.Client, p BranchMenuPrompter, row *branch.Row) error {
+	if row.RemoteOnly {
+		return deleteRemoteBranch(ctx, c, p, row)
+	}
+
 	force, proceed, err := releaseWorktree(ctx, c, p, row.BranchName)
 	if err != nil || !proceed {
 		return err
@@ -319,11 +337,66 @@ func deleteBranch(ctx context.Context, c *git.Client, p BranchMenuPrompter, row 
 	fmt.Fprintf(c.IO().Out, "Branch %q deleted.", row.BranchName)
 	if !row.Plain && row.Status == branch.StatusInProgress {
 		fmt.Fprint(c.IO().Out, " Its record is still in progress: p (prune) records what happened to it"+
-			" (closed, or merged when its tip is in the base).")
+			" (closed, or merged when its tip is in the base) once it is gone from the remote; a abandons it now.")
 	}
 	fmt.Fprintln(c.IO().Out)
 
 	return nil
+}
+
+// deleteRemoteBranch deletes a branch that exists on the remote alone, after
+// a confirmation that says whether the base branch holds its tip: the delete is for
+// every clone. Nothing is fetched: the delete is leased on the tip this clone
+// knows, so a branch that moved on the remote is refused; one the remote no
+// longer has loses its stale remote-tracking ref here. A record in progress is then closed (runCloseBranch): nothing
+// is left to work on. Closed, never merged: see classifyPrune.
+func deleteRemoteBranch(ctx context.Context, c *git.Client, p BranchMenuPrompter, row *branch.Row) error {
+	remote, err := c.Remote()
+	if err != nil {
+		return fmt.Errorf("resolve remote: %w", err)
+	}
+	// The hash the question is asked about is the one the delete is leased on.
+	tip, err := c.ResolveRef("refs/remotes/" + remote + "/" + row.BranchName)
+	if err != nil {
+		return err //nolint:wrapcheck // ResolveRef names the ref
+	}
+	base, err := c.DefaultBaseBranch()
+	if err != nil {
+		return fmt.Errorf("detect base branch: %w", err)
+	}
+	// Merged on the forge and fetched, or merged here and not pushed: either
+	// base holds the tip. A clone may have no local base at all.
+	merged := false
+	for _, ref := range []string{"refs/heads/" + base, "refs/remotes/" + remote + "/" + base} {
+		if _, rerr := c.ResolveRef(ref); rerr != nil || merged {
+			continue
+		}
+		if merged, err = c.IsAncestor(ctx, string(tip), ref); err != nil {
+			return err //nolint:wrapcheck // IsAncestor names the command
+		}
+	}
+	ok, err := p.ConfirmDeleteRemote(ctx, row.BranchName, remote, base, merged)
+	if err != nil || !ok {
+		return err //nolint:wrapcheck // huh.ErrUserAborted must stay detectable
+	}
+
+	stop := c.IO().Spin("Deleting " + remote + "/" + row.BranchName)
+	gone, err := c.DeleteRemoteBranchAt(ctx, row.BranchName, tip)
+	stop()
+	if err != nil {
+		return err //nolint:wrapcheck // DeleteRemoteBranchAt names the branch
+	}
+	if gone {
+		fmt.Fprintf(c.IO().Out,
+			"Branch %q was already gone on %s: its stale local copy is removed.\n", row.BranchName, remote)
+	} else {
+		fmt.Fprintf(c.IO().Out, "Branch %q deleted on %s.\n", row.BranchName, remote)
+	}
+	if row.Plain || row.Status != branch.StatusInProgress {
+		return nil
+	}
+
+	return closeRecord(ctx, c, row.BranchName, "")
 }
 
 // releaseWorktree removes the linked worktree holding name, when there is

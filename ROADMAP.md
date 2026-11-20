@@ -3,7 +3,6 @@
 ## Bug
 
 ### WARN: sync issue, tracker issue not found
-
 On the repo `/home/pi/code/ovya/cpro`, closing an issue.
 
 ```
@@ -14,32 +13,6 @@ WARN: sync issue 1171164: read tracker issue 1171164: tracker: issue not found
 WARN: sync issue 1171145: read tracker issue 1171145: tracker: issue not found
 WARN: sync issue 1171144: read tracker issue 1171144: tracker: issue not found
 Dozens of warnings…
-```
-
-
-### Problem deleting branch
-- `git zf` says that 2 branch in progress
-```
->  git zf
-git-zf  master
-        1 untracked · ↑0 ↓0 origin
-
-  c  Commit
-> i  Issue      6 open
-  b  Branch     2 in progress
-  v  Review
-  l  Log
-```
-But issue display no branch/inssue in progress:
-```
->  git zf issue
- Issue ID    Title                         Branch                                  Local Status  Issue Status    Assigned  Created    
- 41          Ajouter un système d'anti-b…  ∅                                       ∅             open            rva       2026-11-16 
- 40          Generate Caddy files [Kind/…  ∅                                       ∅             open            PI        2026-11-16 
- 32          Gestion des vendeurs [Kind/…  ∅                                       ∅             open            rva       2026-11-05 
- 30          Mettre en place l'authentif…  ∅                                       ∅             open            rva       2026-11-05 
- 29          Agenda Google [Kind/Feature…  ∅                                       ∅             open                      2026-11-05 
- 21          Better management of intern…  ∅                                       ∅             open                      2026-10-14 
 ```
 
 ### Clean UX full screen

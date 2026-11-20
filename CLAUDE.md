@@ -395,7 +395,16 @@ never `cmd.Flags().GetString`: the parent command does not define them.
 `offersKey`, `runKey`, `TestBranchTable_ActionKeys`), and `runBranchAction`
 runs the entry with the terminal free, as `listAction` does for the issue
 table. The actions of other packages are injected through `tableDeps` funcs; a
-nil func removes its entry. `trackPlain` (`cmd/branch/track.go`) renames a
+nil func removes its entry. A record in
+progress whose branch is nowhere in the clone is a `NoBranch` row (marked
+`∅`, abandon alone): the table shows every branch the home screen counts. A remote-only row
+recorded in progress is listed without `R` and offers abandon; `D` on a
+remote-only row deletes the branch on the remote after
+`ConfirmDeleteRemote` and closes a record in progress (`deleteRemoteBranch`, `closeRecord`).
+`git.Client.Fetch` prunes (`git/merge.go`): the tracking ref of a branch deleted on
+the remote goes, and a negative refspec keeps `--prune` off the chains'
+tracking refs (`refs/remotes/<remote>/zf/*`, `TestFetchQuiet`).
+`trackPlain` (`cmd/branch/track.go`) renames a
 free-named branch to `<id>@<type>@<slug>` after the `branch new` form.
 
     mise exec -- go test ./branch/... -run "TestTableRows" -v

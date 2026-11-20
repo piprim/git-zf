@@ -189,7 +189,7 @@ func (c *Client) DeleteLocalBranch(ctx context.Context, name string, force bool)
 	return nil
 }
 
-// Fetch runs `git fetch <remote>`. Returns nil immediately when no remote is
+// Fetch runs `git fetch --prune <remote>`. Returns nil immediately when no remote is
 // configured (local-only repo). Returns a wrapped error when the remote is
 // unreachable or auth fails.
 func (c *Client) Fetch(ctx context.Context) error { return c.fetch(ctx, false) }
@@ -208,7 +208,13 @@ func (c *Client) fetch(ctx context.Context, silent bool) error {
 		return nil
 	}
 
-	if err := c.remoteCmd(ctx, silent, "fetch", remote); err != nil {
+	// --prune drops the tracking ref of a branch the remote deleted. The
+	// default refspec owns all of refs/remotes/<remote>/, the chains'
+	// tracking refs (zf/*) included, and no refs/heads/zf/* is on the remote:
+	// the negative refspec, added to the configured ones, keeps prune off them.
+	// ponytail: negative refspecs need git 2.29 (2020); an older git fails here.
+	spare := "remote." + remote + ".fetch=^refs/heads/zf/*"
+	if err := c.remoteCmd(ctx, silent, "-c", spare, "fetch", "--prune", remote); err != nil {
 		return fmt.Errorf("fetch %s: %w", remote, err)
 	}
 

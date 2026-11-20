@@ -208,9 +208,9 @@ type branchTableModel struct {
 	picked    *branch.Row
 	pickedKey string
 	opts      BranchTableOptions
-	allTypes []string // the T options
-	width    int
-	now      time.Time
+	allTypes  []string // the T options
+	width     int
+	now       time.Time
 }
 
 func (*branchTableModel) Init() tea.Cmd { return nil }
@@ -239,6 +239,9 @@ func (m *branchTableModel) cells(r *branch.Row) btable.Row {
 	if r.Current {
 		name = "* "
 	}
+	if r.NoBranch {
+		name = "∅ "
+	}
 	if r.RemoteOnly {
 		name += m.opts.Remote + "/"
 	}
@@ -256,7 +259,10 @@ func (m *branchTableModel) refreshRows() {
 	var tableRows []btable.Row
 	for i := range m.allRows {
 		r := &m.allRows[i]
-		if (r.RemoteOnly && !m.remotes) || !m.statuses[rowStatus(r)] || !m.types[rowType(r)] {
+		// A remote-only branch recorded in progress is always listed: the home
+		// screen counts it, and this is where it is abandoned.
+		hidden := r.RemoteOnly && !m.remotes && (r.Plain || r.Status != branch.StatusInProgress)
+		if hidden || !m.statuses[rowStatus(r)] || !m.types[rowType(r)] {
 			continue
 		}
 		cells := m.cells(r)
@@ -457,6 +463,11 @@ func (m *branchTableModel) pickActionKey(key, label string) (tea.Model, tea.Cmd,
 		if m.armKey != "a" || m.armBranch != row.BranchName {
 			m.armKey, m.armBranch = "a", row.BranchName
 			m.notice = "a again abandons " + row.BranchName + " (no undo)"
+			if row.NoBranch {
+				// The record is pushed at the start, the branch at its first push.
+				m.notice = "a again abandons " + row.BranchName + ", started by " + row.Author +
+					", who may not have pushed it yet (no undo)"
+			}
 
 			return m, nil, true
 		}
@@ -464,6 +475,9 @@ func (m *branchTableModel) pickActionKey(key, label string) (tea.Model, tea.Cmd,
 		if m.armKey != "D" || m.armBranch != row.BranchName {
 			m.armKey, m.armBranch = "D", row.BranchName
 			m.notice = "D again deletes " + row.BranchName
+			if row.RemoteOnly {
+				m.notice = "D again deletes " + m.opts.Remote + "/" + row.BranchName + " on the remote"
+			}
 
 			return m, nil, true
 		}

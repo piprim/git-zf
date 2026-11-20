@@ -37,6 +37,11 @@ To undo, check the branch out and run 'git zf branch track'.`,
 // runCloseBranch records branchName as closed on its chain and pushes it. A
 // branch that is already merged or closed is left as it is.
 func runCloseBranch(ctx context.Context, client *git.Client, branchName string) error {
+	return closeRecord(ctx, client, branchName, " The git branch itself is untouched.")
+}
+
+// closeRecord is runCloseBranch; note ends the line that says it is done.
+func closeRecord(ctx context.Context, client *git.Client, branchName, note string) error {
 	// Another clone may have merged or closed the branch already.
 	if err := branch.Fetch(ctx, client); err != nil {
 		fmt.Fprintf(client.IO().Err, "warning: fetch branch refs: %v\n", err)
@@ -64,8 +69,7 @@ func runCloseBranch(ctx context.Context, client *git.Client, branchName string) 
 	}
 
 	fmt.Fprintf(client.IO().Out,
-		"Branch %q recorded as closed (started by %s). The git branch itself is untouched.\n",
-		branchName, e.Author)
+		"Branch %q recorded as closed (started by %s).%s\n", branchName, e.Author, note)
 
 	return nil
 }

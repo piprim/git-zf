@@ -30,6 +30,27 @@ func TestFetchQuiet(t *testing.T) {
 		}
 	})
 
+	t.Run("drops the tracking ref of a branch deleted on the remote, not the chains'", func(t *testing.T) {
+		t.Parallel()
+
+		alice, aliceDir, originDir := newDiskRepoWithOrigin(t)
+		runGitInDir(t, aliceDir, "push", "-q", "origin", "HEAD:refs/heads/gone")
+		runGitInDir(t, originDir, "update-ref", "-d", "refs/heads/gone")
+		// A chain's tracking ref lives under refs/remotes/origin/ too, and no
+		// refs/heads/zf/* exists on the remote: a bare --prune would drop it.
+		runGitInDir(t, aliceDir, "update-ref", "refs/remotes/origin/zf/issues/abc", "HEAD")
+
+		if err := alice.FetchQuiet(t.Context()); err != nil {
+			t.Fatalf("FetchQuiet: %v", err)
+		}
+		if _, err := alice.ResolveRef("refs/remotes/origin/gone"); err == nil {
+			t.Error("refs/remotes/origin/gone is still there")
+		}
+		if _, err := alice.ResolveRef("refs/remotes/origin/zf/issues/abc"); err != nil {
+			t.Errorf("the chain's tracking ref was pruned: %v", err)
+		}
+	})
+
 	t.Run("prints nothing when the remote is down", func(t *testing.T) {
 		t.Parallel()
 

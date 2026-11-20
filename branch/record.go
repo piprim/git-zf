@@ -173,6 +173,7 @@ type Row struct {
 	Plain      bool      `json:"-"` // a git branch with no record
 	Current    bool      `json:"-"` // checked out in this working tree
 	RemoteOnly bool      `json:"-"` // exists on the remote, not locally
+	NoBranch   bool      `json:"-"` // a record in progress whose branch is nowhere in this clone
 	LastCommit time.Time `json:"-"` // committer date of the tip
 }
 

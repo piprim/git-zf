@@ -25,6 +25,10 @@ func TestTableRows(t *testing.T) {
 		t.Fatalf("SetStatus: %v", err)
 	}
 	mustStart(t, c, "77", Op{Branch: "77@feat@gone", BranchType: "feat"})
+	mustStart(t, c, "78", Op{Branch: "78@feat@done", BranchType: "feat"})
+	if err := SetStatus(ctx, c, "78", "78@feat@done", StatusClosed); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
 	runGit(t, dir, "push", "-q", "origin", "remote-thing", "spike")
 	runGit(t, dir, "branch", "-D", "remote-thing")
 
@@ -42,12 +46,12 @@ func TestTableRows(t *testing.T) {
 			t.Fatalf("TableRows: %v", err)
 		}
 	})
-	t.Run("one row per local branch in name order, then remote-only", func(t *testing.T) {
+	t.Run("one row per local branch in name order, then remote-only, then the records in progress without a branch", func(t *testing.T) {
 		var names []string
 		for _, r := range rows {
 			names = append(names, r.BranchName)
 		}
-		want := []string{"42@feat@assign", "51@fix@prune", "main", "spike", "remote-thing"}
+		want := []string{"42@feat@assign", "51@fix@prune", "main", "spike", "remote-thing", "77@feat@gone"}
 		if !slices.Equal(names, want) {
 			t.Errorf("names = %v, want %v", names, want)
 		}
@@ -69,9 +73,15 @@ func TestTableRows(t *testing.T) {
 			t.Errorf("main.Current=%v spike.Current=%v", row("main").Current, row("spike").Current)
 		}
 	})
-	t.Run("a record whose branch is gone everywhere has no row", func(t *testing.T) {
-		if slices.ContainsFunc(rows, func(r Row) bool { return r.BranchName == "77@feat@gone" }) {
-			t.Errorf("77@feat@gone has a row: %+v", rows)
+	t.Run("a record in progress whose branch is nowhere is a NoBranch row", func(t *testing.T) {
+		r := row("77@feat@gone")
+		if !r.NoBranch || r.Plain || r.RemoteOnly || r.IssueSlug != "77" || r.Status != StatusInProgress || !r.LastCommit.IsZero() {
+			t.Errorf("row = %+v", r)
+		}
+	})
+	t.Run("a closed record whose branch is nowhere has no row", func(t *testing.T) {
+		if slices.ContainsFunc(rows, func(r Row) bool { return r.BranchName == "78@feat@done" }) {
+			t.Errorf("78@feat@done has a row: %+v", rows)
 		}
 	})
 	t.Run("a branch both local and remote is one local row", func(t *testing.T) {
@@ -90,9 +100,9 @@ func TestTableRows(t *testing.T) {
 			t.Errorf("row = %+v", r)
 		}
 	})
-	t.Run("every row has a LastCommit", func(t *testing.T) {
+	t.Run("every row with a branch has a LastCommit", func(t *testing.T) {
 		for _, r := range rows {
-			if r.LastCommit.IsZero() {
+			if !r.NoBranch && r.LastCommit.IsZero() {
 				t.Errorf("%s has no LastCommit", r.BranchName)
 			}
 		}

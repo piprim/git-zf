@@ -19,7 +19,11 @@ func TestMenuEntriesFor(t *testing.T) {
 		want []branchAction
 	}{
 		{"remote-only", branch.Row{BranchName: "x", Plain: true, RemoteOnly: true},
-			[]branchAction{actionCheckout, actionLog}},
+			[]branchAction{actionCheckout, actionLog, actionDelete}},
+		{"remote-only in progress", branch.Row{BranchName: "42@feat@x", Status: branch.StatusInProgress, RemoteOnly: true},
+			[]branchAction{actionCheckout, actionAbandon, actionLog, actionDelete}},
+		{"record without a branch", branch.Row{BranchName: "42@feat@x", Status: branch.StatusInProgress, NoBranch: true},
+			[]branchAction{actionAbandon}},
 		{"plain", branch.Row{BranchName: "spike", Plain: true},
 			[]branchAction{actionCheckout, actionTrack, actionMerge, actionPR, actionLog, actionDelete}},
 		{"plain row with a parseable name omits merge", branch.Row{BranchName: "42@feat@untracked", Plain: true},

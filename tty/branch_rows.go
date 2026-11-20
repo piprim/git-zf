@@ -30,6 +30,9 @@ func RenderBranchRows(w io.Writer, rows []branch.Row, remote string) {
 		if r.Current {
 			name = "* "
 		}
+		if r.NoBranch {
+			name = "∅ "
+		}
 		if r.RemoteOnly {
 			name += remote + "/"
 		}

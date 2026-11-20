@@ -600,6 +600,42 @@ func (c *Client) DeleteRemoteBranch(ctx context.Context, branchName string) erro
 	return nil
 }
 
+// DeleteRemoteBranchAt deletes branchName on the configured remote, leased on
+// tip, the hash this clone last fetched for it: a branch someone pushed to
+// since is refused, not deleted with commits nobody here has seen. A branch
+// the remote no longer has is the lease's other refusal: the stale
+// remote-tracking ref is dropped then, and gone is true.
+func (c *Client) DeleteRemoteBranchAt(ctx context.Context, branchName string, tip Hash) (gone bool, err error) {
+	remote, err := c.Remote()
+	if err != nil {
+		return false, fmt.Errorf("resolve remote: %w", err)
+	}
+	ref := "refs/heads/" + branchName
+	lease := "--force-with-lease=" + ref + ":" + string(tip)
+	out, err := c.gitCmd(ctx, "push", "--quiet", lease, remote, ":"+ref).CombinedOutput()
+	if err == nil {
+		return false, nil
+	}
+	if onRemote, lerr := c.LsRemoteBranches(ctx); lerr == nil && !onRemote[branchName] {
+		tracking := "refs/remotes/" + remote + "/" + branchName
+		if _, uerr := c.output(ctx, "update-ref", "-d", tracking, string(tip)); uerr != nil {
+			return false, fmt.Errorf("drop stale %s: %w", tracking, uerr)
+		}
+
+		return true, nil
+	}
+
+	// "stale info" is git's word for a lease that no longer holds; any other
+	// failure (network, auth, a hook) is reported as it is.
+	hint := ""
+	if strings.Contains(string(out), "stale info") {
+		hint = fmt.Sprintf(" (it moved since the last fetch: run `git fetch %s` and look again)", remote)
+	}
+
+	return false, fmt.Errorf("delete %s on %s%s: %w: %s",
+		branchName, remote, hint, err, strings.TrimSpace(string(out)))
+}
+
 // RemoteBranchExists reports whether branchName exists on the configured remote.
 // Uses git ls-remote so no fetch is required. Returns false on any error or
 // when no remote is configured.

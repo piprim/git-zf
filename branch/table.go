@@ -10,8 +10,11 @@ import (
 
 // TableRows is one Row per local branch in name order, then one per branch
 // that exists only on remote (the name the caller got from c.Remote(); ""
-// skips them). A tracked branch carries its record, a plain one is Plain. A
-// record whose branch is nowhere gives no row. Nothing is fetched.
+// skips them). A tracked branch carries its record, a plain one is Plain.
+// Last come the records in progress whose branch is nowhere in this clone
+// (NoBranch), newest first: the home screen counts them, and they are
+// abandoned from here. A merged or closed one gives no row. Nothing is
+// fetched.
 func TableRows(ctx context.Context, c *git.Client, remote string) ([]Row, error) {
 	states, warnings, err := List(ctx, c)
 	if err != nil {
@@ -68,6 +71,16 @@ func TableRows(ctx context.Context, c *git.Client, remote string) ([]Row, error)
 		r.RemoteOnly = true
 		r.LastCommit = dates["refs/remotes/"+remote+"/"+name]
 		rows = append(rows, r)
+	}
+	inProgress := Rows(states, StatusInProgress)
+	for i := range inProgress {
+		r := &inProgress[i]
+		_, local := slices.BinarySearch(locals, r.BranchName)
+		_, onRemote := slices.BinarySearch(remotes, r.BranchName)
+		if !local && !onRemote {
+			r.NoBranch = true
+			rows = append(rows, *r)
+		}
 	}
 
 	return rows, nil

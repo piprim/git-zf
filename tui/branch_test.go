@@ -92,6 +92,22 @@ func TestBranchTable_Rows(t *testing.T) {
 			t.Errorf("view shows remote-thing:\n%s", v)
 		}
 	})
+	t.Run("a remote-only branch in progress is shown at start", func(t *testing.T) {
+		rows := append(branchTestRows(time.Now()), branch.Row{
+			BranchName: "15@fix@gone", IssueSlug: "15", Type: "fix", Status: branch.StatusInProgress, RemoteOnly: true,
+		})
+		if v := BranchTableModel(rows, opts).View(); !strings.Contains(v, "origin/15@fix@gone") {
+			t.Errorf("view lacks origin/15@fix@gone:\n%s", v)
+		}
+	})
+	t.Run("a record without a branch is shown at start, marked", func(t *testing.T) {
+		rows := append(branchTestRows(time.Now()), branch.Row{
+			BranchName: "77@feat@gone", IssueSlug: "77", Type: "feat", Status: branch.StatusInProgress, NoBranch: true,
+		})
+		if v := BranchTableModel(rows, opts).View(); !strings.Contains(v, "∅ 77@feat@gone") {
+			t.Errorf("view lacks \"∅ 77@feat@gone\":\n%s", v)
+		}
+	})
 	t.Run("R shows them with the remote prefix", func(t *testing.T) {
 		m, _ := BranchTableModel(rows, opts).Update(runeKey('R'))
 		if v := m.View(); !strings.Contains(v, "origin/remote-thing") {
@@ -300,6 +316,24 @@ func TestBranchTable_ActionKeys(t *testing.T) {
 	t.Run("D once arms and shows the notice", func(t *testing.T) {
 		m, cmd := BranchTableModel(rows, opts).Update(runeKey('D'))
 		if quitsCmd(cmd) || !strings.Contains(m.View(), "D again deletes master") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("a once on a record without a branch names who started it", func(t *testing.T) {
+		orphan := []branch.Row{{BranchName: "77@feat@gone", Status: branch.StatusInProgress, NoBranch: true, Author: "bob"}}
+		o := BranchTableOptions{Offers: func(branch.Row, string) bool { return true }}
+		m, cmd := BranchTableModel(orphan, o).Update(runeKey('a'))
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "started by bob, who may not have pushed it yet") {
+			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
+		}
+	})
+
+	t.Run("D once on a remote-only row names the remote", func(t *testing.T) {
+		remote := []branch.Row{{BranchName: "15@fix@gone", Status: branch.StatusInProgress, RemoteOnly: true}}
+		o := BranchTableOptions{Remote: "origin", Offers: func(branch.Row, string) bool { return true }}
+		m, cmd := BranchTableModel(remote, o).Update(runeKey('D'))
+		if quitsCmd(cmd) || !strings.Contains(m.View(), "D again deletes origin/15@fix@gone on the remote") {
 			t.Errorf("quits = %v, view = %q", quitsCmd(cmd), m.View())
 		}
 	})

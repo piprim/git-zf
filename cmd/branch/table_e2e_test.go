@@ -29,6 +29,18 @@ type scriptedBranchMenuPrompter struct {
 	// path it was asked about.
 	RemoveWorktree bool
 	WorktreeAsked  string
+	// DeleteRemote answers ConfirmDeleteRemote; RemoteAsked holds the branch
+	// it was asked about and RemoteMerged what it was told.
+	DeleteRemote bool
+	RemoteAsked  string
+	RemoteBase   string
+	RemoteMerged bool
+}
+
+func (p *scriptedBranchMenuPrompter) ConfirmDeleteRemote(_ context.Context, name, _, base string, merged bool) (bool, error) {
+	p.RemoteAsked, p.RemoteBase, p.RemoteMerged = name, base, merged
+
+	return p.DeleteRemote, nil
 }
 
 func (p *scriptedBranchMenuPrompter) ConfirmRemoveWorktree(_ context.Context, _, path string) (bool, error) {
@@ -85,6 +97,23 @@ func newTableRig(t *testing.T) *pruneTestRig {
 	gitIn(t, rig.dir, "branch", "-D", "remote-thing")
 
 	return rig
+}
+
+// remoteOnlyInProgress seeds a tracked branch in progress, with a commit of
+// its own, that exists on the remote alone, and returns its row.
+func (r *pruneTestRig) remoteOnlyInProgress(t *testing.T) branch.Row {
+	t.Helper()
+
+	const name = "60@feat@gone"
+	r.seedIssueAndBranch(t, "60", name, "feat")
+	gitIn(t, r.dir, "branch", name)
+	gitIn(t, r.dir, "checkout", "-q", name)
+	gitIn(t, r.dir, "commit", "-q", "--allow-empty", "-m", "work")
+	gitIn(t, r.dir, "push", "-q", "origin", name)
+	gitIn(t, r.dir, "checkout", "-q", "master")
+	gitIn(t, r.dir, "branch", "-D", name)
+
+	return branch.Row{BranchName: name, IssueSlug: "60", Type: "feat", Status: branch.StatusInProgress, RemoteOnly: true}
 }
 
 func (r *pruneTestRig) deps() *tableDeps {
@@ -153,6 +182,134 @@ func TestRunBranchAction(t *testing.T) {
 		}
 		if up := gitIn(t, rig.dir, "rev-parse", "--abbrev-ref", "remote-thing@{upstream}"); up != "origin/remote-thing" {
 			t.Errorf("upstream = %q", up)
+		}
+	})
+	t.Run("delete of a remote-only branch in progress deletes it on the remote and closes its record", func(t *testing.T) {
+		rig := newTableRig(t)
+		row := rig.remoteOnlyInProgress(t)
+		p := &scriptedBranchMenuPrompter{DeleteRemote: true}
+		reopen, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &row)
+		if err != nil || !reopen || p.RemoteAsked != row.BranchName || p.RemoteMerged {
+			t.Fatalf("err = %v, reopen = %v, asked = %q, merged = %v", err, reopen, p.RemoteAsked, p.RemoteMerged)
+		}
+		if rig.client.RemoteBranchExists(t.Context(), row.BranchName) {
+			t.Error("the branch is still on the remote")
+		}
+		if _, e, err := branch.Find(t.Context(), rig.client, row.BranchName); err != nil || e == nil || e.Status != branch.StatusClosed {
+			t.Errorf("record = %+v, err = %v, want closed", e, err)
+		}
+		if out := rig.stdout.String(); !strings.Contains(out, "recorded as closed") || strings.Contains(out, "untouched") {
+			t.Errorf("output must say the record is closed and not that the branch is untouched:\n%s", out)
+		}
+	})
+	t.Run("delete of a remote-only branch already gone from the remote drops the stale ref and closes its record", func(t *testing.T) {
+		rig := newTableRig(t)
+		row := rig.remoteOnlyInProgress(t)
+		// Deleted on the forge: this clone still holds the remote-tracking ref.
+		gitIn(t, gitIn(t, rig.dir, "remote", "get-url", "origin"), "update-ref", "-d", "refs/heads/"+row.BranchName)
+		p := &scriptedBranchMenuPrompter{DeleteRemote: true}
+		if _, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &row); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		if _, err := rig.client.ResolveRef("refs/remotes/origin/" + row.BranchName); err == nil {
+			t.Error("the stale remote-tracking ref is still there")
+		}
+		if got := rig.statusOf(t, row.BranchName); got != branch.StatusClosed {
+			t.Errorf("record = %q, want closed", got)
+		}
+		if out := rig.stdout.String(); !strings.Contains(out, "already gone") {
+			t.Errorf("output does not say the branch was already gone:\n%s", out)
+		}
+	})
+	t.Run("delete of a remote-only branch is refused when the remote moved since the last fetch", func(t *testing.T) {
+		rig := newTableRig(t)
+		row := rig.remoteOnlyInProgress(t)
+		// A teammate pushes: the remote's tip is no longer the one this clone fetched.
+		origin := gitIn(t, rig.dir, "remote", "get-url", "origin")
+		gitIn(t, origin, "update-ref", "refs/heads/"+row.BranchName, gitIn(t, rig.dir, "rev-parse", "origin/remote-thing"))
+		p := &scriptedBranchMenuPrompter{DeleteRemote: true}
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &row)
+		if err == nil || !strings.Contains(err.Error(), "fetch") {
+			t.Errorf("err = %v, want a refusal naming the fetch", err)
+		}
+		if !rig.client.RemoteBranchExists(t.Context(), row.BranchName) {
+			t.Error("the branch is gone from the remote")
+		}
+		if got := rig.statusOf(t, row.BranchName); got != branch.StatusInProgress {
+			t.Errorf("record = %q, want in progress", got)
+		}
+	})
+	t.Run("delete of a remote-only branch reads the base on the remote when there is no local one", func(t *testing.T) {
+		rig := newTableRig(t)
+		gitIn(t, rig.dir, "push", "-q", "origin", "master", "master:stale")
+		gitIn(t, rig.dir, "remote", "set-head", "origin", "master")
+		gitIn(t, rig.dir, "checkout", "-q", "--orphan", "elsewhere")
+		gitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "unrelated")
+		gitIn(t, rig.dir, "branch", "-D", "master")
+		row := branch.Row{BranchName: "stale", Plain: true, RemoteOnly: true}
+		p := &scriptedBranchMenuPrompter{DeleteRemote: true}
+		if _, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &row); err != nil || !p.RemoteMerged || p.RemoteBase != "master" {
+			t.Fatalf("err = %v, merged = %v, base = %q", err, p.RemoteMerged, p.RemoteBase)
+		}
+	})
+	t.Run("delete of a remote-only branch on a dead remote does not say the branch moved", func(t *testing.T) {
+		rig := newTableRig(t)
+		row := rig.remoteOnlyInProgress(t)
+		gitIn(t, rig.dir, "remote", "set-url", "origin", "/nonexistent/origin.git")
+		p := &scriptedBranchMenuPrompter{DeleteRemote: true}
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &row)
+		if err == nil || strings.Contains(err.Error(), "moved") {
+			t.Errorf("err = %v, want a failure that does not blame a moved branch", err)
+		}
+		if got := rig.statusOf(t, row.BranchName); got != branch.StatusInProgress {
+			t.Errorf("record = %q, want in progress", got)
+		}
+	})
+	t.Run("delete of a remote-only branch keeps the branch and its record on no", func(t *testing.T) {
+		rig := newTableRig(t)
+		row := rig.remoteOnlyInProgress(t)
+		p := &scriptedBranchMenuPrompter{}
+		if _, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &row); err != nil || p.RemoteAsked == "" {
+			t.Fatalf("err = %v, asked = %q", err, p.RemoteAsked)
+		}
+		if !rig.client.RemoteBranchExists(t.Context(), row.BranchName) {
+			t.Error("the branch is gone from the remote")
+		}
+		if _, e, err := branch.Find(t.Context(), rig.client, row.BranchName); err != nil || e == nil || e.Status != branch.StatusInProgress {
+			t.Errorf("record = %+v, err = %v, want in progress", e, err)
+		}
+	})
+	t.Run("delete of a plain remote-only branch whose tip is in the base says so and deletes it", func(t *testing.T) {
+		rig := newTableRig(t)
+		gitIn(t, rig.dir, "push", "-q", "origin", "master:stale")
+		// On another branch: the question is about the base, not HEAD.
+		gitIn(t, rig.dir, "checkout", "-q", "--orphan", "elsewhere")
+		gitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "unrelated")
+		row := branch.Row{BranchName: "stale", Plain: true, RemoteOnly: true}
+		p := &scriptedBranchMenuPrompter{DeleteRemote: true}
+		if _, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &row); err != nil || !p.RemoteMerged || p.RemoteBase != "master" {
+			t.Fatalf("err = %v, merged = %v, base = %q", err, p.RemoteMerged, p.RemoteBase)
+		}
+		if rig.client.RemoteBranchExists(t.Context(), "stale") {
+			t.Error("the branch is still on the remote")
+		}
+	})
+	t.Run("the menu of a record without a branch names who started it", func(t *testing.T) {
+		rig := newTableRig(t)
+		row := branch.Row{BranchName: "77@feat@nowhere", Status: branch.StatusInProgress, NoBranch: true, Author: "bob"}
+		p := &scriptedBranchMenuPrompter{}
+		_, _ = runMenu(t.Context(), rig.deps(), p, &row)
+		if len(p.Titles) != 1 || !strings.Contains(p.Titles[0], "started by bob") {
+			t.Errorf("titles = %q", p.Titles)
+		}
+	})
+	t.Run("abandon of a record without a branch closes it", func(t *testing.T) {
+		rig := newTableRig(t)
+		rig.seedIssueAndBranch(t, "77", "77@feat@nowhere", "feat")
+		row := branch.Row{BranchName: "77@feat@nowhere", IssueSlug: "77", Status: branch.StatusInProgress, NoBranch: true}
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "a", &row)
+		if err != nil || !reopen || rig.statusOf(t, row.BranchName) != branch.StatusClosed {
+			t.Errorf("err = %v, reopen = %v, status = %q", err, reopen, rig.statusOf(t, row.BranchName))
 		}
 	})
 	t.Run("delete removes a merged branch", func(t *testing.T) {
@@ -383,6 +540,8 @@ func TestRunBranchAction(t *testing.T) {
 
 func TestRunBranchTable_NoTTY(t *testing.T) {
 	rig := newTableRig(t)
+	gone := rig.remoteOnlyInProgress(t)
+	rig.seedIssueAndBranch(t, "77", "77@feat@nowhere", "feat")
 	err := runBranchTable(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, &tui.BranchTableOptions{Remote: "origin"}, true)
 	if err != nil {
 		t.Fatalf("runBranchTable: %v", err)
@@ -399,6 +558,16 @@ func TestRunBranchTable_NoTTY(t *testing.T) {
 	t.Run("does not print remote-only rows", func(t *testing.T) {
 		if strings.Contains(out, "remote-thing") {
 			t.Errorf("output shows remote-thing:\n%s", out)
+		}
+	})
+	t.Run("prints a record in progress without a branch, marked", func(t *testing.T) {
+		if want := "∅ 77@feat@nowhere"; !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	})
+	t.Run("prints a remote-only branch recorded in progress", func(t *testing.T) {
+		if want := "origin/" + gone.BranchName; !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	})
 	t.Run("a plain row has a blank Created cell", func(t *testing.T) {
