@@ -2,15 +2,22 @@
 
 ## Bug
 
-### Problem deleting branch
-In CPro2: /home/pi/code/ovya/cpro2
-List of branches :
-0. Branch                                  Issue       Type      Status        Title                         Created     Last comm… 
-   36@feat@gestion-des-secrets           36          feat      merged        Gestion des secrets           2026-11-10  6d ago     
-   f27-sessions-glissantes                                                                                             1w ago     
- * master                                                                                                              4h ago
+### WARN: sync issue, tracker issue not found
 
-- Deleting 36@feat@gestion-des-secrets and f27-sessions-glissantes  does not delete the branch
+On the repo `/home/pi/code/ovya/cpro`, closing an issue.
+
+```
+WARN: sync issue 1173941: read tracker issue 1173941: tracker: issue not found
+WARN: sync issue 1173940: read tracker issue 1173940: tracker: issue not found
+WARN: sync issue 1173916: read tracker issue 1173916: tracker: issue not found
+WARN: sync issue 1171164: read tracker issue 1171164: tracker: issue not found
+WARN: sync issue 1171145: read tracker issue 1171145: tracker: issue not found
+WARN: sync issue 1171144: read tracker issue 1171144: tracker: issue not found
+Dozens of warnings…
+```
+
+
+### Problem deleting branch
 - `git zf` says that 2 branch in progress
 ```
 >  git zf
@@ -103,6 +110,14 @@ Pressing `s` and `ESC` the menu is at the top of the screen ; baffling
 
 ## Enhancement
 
+### Do not use sudo to build
+
+No need to be root to build the project installing from source.
+Instead of doing `sudo make install`, `make install` should be sufficient.
+
+### List format in request
+Launching `git zf review start`, the list of issue is not well formatted.
+Add the Title of the issue.
 
 ### TAB in the lists
 In all list [TAB] go to next circularly. [Shift Tab] should go to previous.

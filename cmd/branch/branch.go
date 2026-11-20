@@ -197,7 +197,7 @@ func (b Branch) runTable(cmd *cobra.Command, statuses []string) error {
 		},
 	}
 
-	return runBranchTable(cmd.Context(), d, huhBranchMenuPrompter{}, opts, !term.IsTerminal(int(os.Stdin.Fd())))
+	return runBranchTable(cmd.Context(), &d, huhBranchMenuPrompter{}, &opts, !term.IsTerminal(int(os.Stdin.Fd())))
 }
 
 // runList prints the tracked branches: --json the rows, otherwise the table.

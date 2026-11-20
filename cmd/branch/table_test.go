@@ -40,7 +40,7 @@ func TestMenuEntriesFor(t *testing.T) {
 			[]branchAction{actionTrack, actionLog}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := menuEntriesFor(tc.row); !slices.Equal(got, tc.want) {
+			if got := menuEntriesFor(&tc.row); !slices.Equal(got, tc.want) {
 				t.Errorf("menuEntriesFor = %v, want %v", got, tc.want)
 			}
 		})
@@ -93,7 +93,7 @@ func TestKeyActions(t *testing.T) {
 }
 
 func TestOffersKey(t *testing.T) {
-	allWired := tableDeps{
+	allWired := &tableDeps{
 		merge:      func(context.Context, SourceBranch) error { return nil },
 		track:      func(context.Context, string) error { return nil },
 		closeIssue: func(context.Context, string, string) error { return nil },
@@ -114,10 +114,10 @@ func TestOffersKey(t *testing.T) {
 		{"current in progress", branch.Row{BranchName: "42@feat@x", Status: branch.StatusInProgress, Current: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			offered := offeredEntries(allWired, tc.row)
+			offered := offeredEntries(allWired, &tc.row)
 			for k, a := range keyActions {
 				want := slices.Contains(offered, a)
-				if got := offersKey(allWired, tc.row, k); got != want {
+				if got := offersKey(allWired, &tc.row, k); got != want {
 					t.Errorf("offersKey(%q) = %v, want %v", k, got, want)
 				}
 			}
@@ -125,15 +125,15 @@ func TestOffersKey(t *testing.T) {
 	}
 
 	t.Run("a nil func removes its key", func(t *testing.T) {
-		d := allWired
+		d := *allWired // a copy: the other subtests keep every func
 		d.merge = nil
-		if offersKey(d, branch.Row{BranchName: "spike", Plain: true}, "m") {
+		if offersKey(&d, &branch.Row{BranchName: "spike", Plain: true}, "m") {
 			t.Error("m offered with nil merge")
 		}
 	})
 
 	t.Run("an unknown key is not offered", func(t *testing.T) {
-		if offersKey(allWired, branch.Row{BranchName: "spike", Plain: true}, "?") {
+		if offersKey(allWired, &branch.Row{BranchName: "spike", Plain: true}, "?") {
 			t.Error("? offered")
 		}
 	})

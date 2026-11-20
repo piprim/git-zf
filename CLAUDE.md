@@ -400,7 +400,7 @@ free-named branch to `<id>@<type>@<slug>` after the `branch new` form.
 
     mise exec -- go test ./branch/... -run "TestTableRows" -v
     mise exec -- go test ./tui/... -run "TestBranchTable_|TestRelativeTime" -v
-    mise exec -- go test ./cmd/branch/... -run "^TestMenuEntriesFor|^TestKeyActions|^TestOffersKey|^TestRunBranchAction|^TestRunKey|^TestRunBranchTable_|^TestTrackPlain" -v
+    mise exec -- go test ./cmd/branch/... -run "^TestMenuEntriesFor|^TestKeyActions|^TestOffersKey|^TestRunBranchAction|^TestRunMenu|^TestRunKey|^TestRunBranchTable_|^TestTrackPlain" -v
     mise exec -- go test ./cmd/issue/... -run "^TestClose_ByBranchName" -v
     mise exec -- go test ./cmd/log/... -run "TestRunLog_Branch|TestWithoutAllRefs" -v
 

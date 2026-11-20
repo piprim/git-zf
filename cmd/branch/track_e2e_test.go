@@ -168,7 +168,7 @@ func TestTrackPlain(t *testing.T) {
 		p := &scriptedTrackPrompter{Issue: typed}
 		d := rig.deps()
 		d.cfg = trackCfg()
-		if err := trackBranch(t.Context(), d, p, "9@feat@thing"); err != nil {
+		if err := trackBranch(t.Context(), *d, p, "9@feat@thing"); err != nil {
 			t.Fatalf("trackBranch: %v", err)
 		}
 		if p.Opened || rig.statusOf(t, "9@feat@thing") != branch.StatusInProgress {

@@ -649,6 +649,7 @@ func (m *issueTableModel) openDialog() {
 // pickRow quits with the row under the cursor picked for pick; nothing
 // happens on an empty table, and a start (IssuePickRow with actions.Start)
 // refuses a closed issue (closed record, merged branch) with a notice.
+// IssuePickClose is refused the same way for a row the menu offers no close.
 func (m *issueTableModel) pickRow(pick IssuePick) (tea.Model, tea.Cmd, bool) {
 	c := m.table.Cursor()
 	if c < 0 || c >= len(m.visible) {
@@ -657,6 +658,12 @@ func (m *issueTableModel) pickRow(pick IssuePick) (tea.Model, tea.Cmd, bool) {
 	row := &m.visible[c]
 	if pick == IssuePickRow && m.actions.Start && !row.MatchesStatus(statusOpen) {
 		m.notice = row.IssueSlug + " is closed: not started"
+
+		return m, nil, true
+	}
+	// The c key follows the menu's rule: close merges a branch in progress.
+	if pick == IssuePickClose && !slices.Contains(issueMenuEntries(row), issueEntryClose) {
+		m.notice = row.IssueSlug + " has no branch in progress: nothing to merge (s starts one)"
 
 		return m, nil, true
 	}

@@ -1,8 +1,10 @@
 package branch
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
+	"github.com/piprim/git-zf/git"
+	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/tui"
 )
 
@@ -21,6 +25,16 @@ type scriptedBranchMenuPrompter struct {
 	Titles     []string
 	Offered    [][]branchAction
 	ForceAsked bool
+	// RemoveWorktree answers ConfirmRemoveWorktree; WorktreeAsked holds the
+	// path it was asked about.
+	RemoveWorktree bool
+	WorktreeAsked  string
+}
+
+func (p *scriptedBranchMenuPrompter) ConfirmRemoveWorktree(_ context.Context, _, path string) (bool, error) {
+	p.WorktreeAsked = path
+
+	return p.RemoveWorktree, nil
 }
 
 func (p *scriptedBranchMenuPrompter) PickAction(_ context.Context, title string, entries []branchAction) (branchAction, error) {
@@ -73,8 +87,8 @@ func newTableRig(t *testing.T) *pruneTestRig {
 	return rig
 }
 
-func (r *pruneTestRig) deps() tableDeps {
-	return tableDeps{client: r.client, stdout: r.stdout, stderr: r.stderr}
+func (r *pruneTestRig) deps() *tableDeps {
+	return &tableDeps{client: r.client, stdout: r.stdout, stderr: r.stderr}
 }
 
 func (r *pruneTestRig) hasBranch(t *testing.T, name string) bool {
@@ -88,6 +102,28 @@ func (r *pruneTestRig) hasBranch(t *testing.T, name string) bool {
 	return ok
 }
 
+func TestRunMenu(t *testing.T) {
+	plain := branch.Row{BranchName: "spike", Plain: true}
+
+	t.Run("the error of the picked action is printed and the table reopens", func(t *testing.T) {
+		rig := newTableRig(t)
+		gitIn(t, rig.dir, "worktree", "add", "-q", t.TempDir()+"/wt", "spike")
+		p := &scriptedBranchMenuPrompter{Actions: []branchAction{actionCheckout}}
+		reopen, err := runMenu(t.Context(), rig.deps(), p, &plain)
+		if err == nil || !afterAction(reopen, err, rig.stderr) || !strings.Contains(rig.stderr.String(), "error: ") {
+			t.Errorf("err = %v, reopen = %v, stderr:\n%s", err, reopen, rig.stderr.String())
+		}
+	})
+	t.Run("a picked action runs on the row", func(t *testing.T) {
+		rig := newTableRig(t)
+		p := &scriptedBranchMenuPrompter{Actions: []branchAction{actionDelete}, Force: true}
+		reopen, err := runMenu(t.Context(), rig.deps(), p, &plain)
+		if err != nil || !reopen || rig.hasBranch(t, "spike") || len(p.Titles) != 1 || p.Titles[0] != "spike" {
+			t.Errorf("err = %v, reopen = %v, exists = %v, titles = %v", err, reopen, rig.hasBranch(t, "spike"), p.Titles)
+		}
+	})
+}
+
 func TestRunBranchAction(t *testing.T) {
 	plain := branch.Row{BranchName: "spike", Plain: true}
 	inProgress := branch.Row{BranchName: "42@feat@assign", IssueSlug: "42", Status: branch.StatusInProgress}
@@ -95,7 +131,7 @@ func TestRunBranchAction(t *testing.T) {
 
 	t.Run("checkout switches to a plain branch and does not reopen", func(t *testing.T) {
 		rig := newTableRig(t)
-		reopen, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionCheckout, plain)
+		reopen, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionCheckout, &plain)
 		cur, _ := rig.client.CurrentBranch()
 		if err != nil || reopen || cur != "spike" {
 			t.Errorf("err = %v, reopen = %v, current = %q", err, reopen, cur)
@@ -104,7 +140,7 @@ func TestRunBranchAction(t *testing.T) {
 	t.Run("checkout refuses a branch held by a worktree", func(t *testing.T) {
 		rig := newTableRig(t)
 		gitIn(t, rig.dir, "worktree", "add", "-q", t.TempDir()+"/wt", "spike")
-		_, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionCheckout, plain)
+		_, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionCheckout, &plain)
 		if err == nil || !strings.Contains(err.Error(), "worktree") {
 			t.Errorf("err = %v, want a worktree refusal", err)
 		}
@@ -112,7 +148,7 @@ func TestRunBranchAction(t *testing.T) {
 	t.Run("checkout of a remote-only branch creates it with an upstream", func(t *testing.T) {
 		rig := newTableRig(t)
 		row := branch.Row{BranchName: "remote-thing", Plain: true, RemoteOnly: true}
-		if _, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionCheckout, row); err != nil {
+		if _, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionCheckout, &row); err != nil {
 			t.Fatalf("checkout: %v", err)
 		}
 		if up := gitIn(t, rig.dir, "rev-parse", "--abbrev-ref", "remote-thing@{upstream}"); up != "origin/remote-thing" {
@@ -122,7 +158,7 @@ func TestRunBranchAction(t *testing.T) {
 	t.Run("delete removes a merged branch", func(t *testing.T) {
 		rig := newTableRig(t)
 		p := &scriptedBranchMenuPrompter{}
-		reopen, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, merged)
+		reopen, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &merged)
 		if err != nil || !reopen || rig.hasBranch(t, "51@fix@prune") || p.ForceAsked {
 			t.Errorf("err = %v, reopen = %v, exists = %v, asked = %v", err, reopen, rig.hasBranch(t, "51@fix@prune"), p.ForceAsked)
 		}
@@ -130,7 +166,7 @@ func TestRunBranchAction(t *testing.T) {
 	t.Run("delete of an unmerged branch asks and force-deletes on yes", func(t *testing.T) {
 		rig := newTableRig(t)
 		p := &scriptedBranchMenuPrompter{Force: true}
-		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, plain)
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &plain)
 		if err != nil || !p.ForceAsked || rig.hasBranch(t, "spike") {
 			t.Errorf("err = %v, asked = %v, exists = %v", err, p.ForceAsked, rig.hasBranch(t, "spike"))
 		}
@@ -138,24 +174,106 @@ func TestRunBranchAction(t *testing.T) {
 	t.Run("delete of an unmerged branch keeps it on no", func(t *testing.T) {
 		rig := newTableRig(t)
 		p := &scriptedBranchMenuPrompter{Force: false}
-		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, plain)
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &plain)
 		if err != nil || !p.ForceAsked || !rig.hasBranch(t, "spike") {
 			t.Errorf("err = %v, asked = %v, exists = %v", err, p.ForceAsked, rig.hasBranch(t, "spike"))
 		}
 	})
-	t.Run("delete of a worktree-held branch does not ask", func(t *testing.T) {
+	t.Run("delete of a branch held by a clean worktree asks, then removes the worktree too", func(t *testing.T) {
 		rig := newTableRig(t)
-		gitIn(t, rig.dir, "worktree", "add", "-q", t.TempDir()+"/wt", "51@fix@prune")
+		wt := t.TempDir() + "/wt"
+		gitIn(t, rig.dir, "worktree", "add", "-q", wt, "51@fix@prune")
+		p := &scriptedBranchMenuPrompter{RemoveWorktree: true}
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &merged)
+		_, statErr := os.Stat(wt)
+		if err != nil || !git.SamePath(p.WorktreeAsked, wt) || p.ForceAsked || rig.hasBranch(t, "51@fix@prune") || !os.IsNotExist(statErr) {
+			t.Errorf("err = %v, asked about %q, force asked = %v, exists = %v, worktree stat = %v",
+				err, p.WorktreeAsked, p.ForceAsked, rig.hasBranch(t, "51@fix@prune"), statErr)
+		}
+	})
+	t.Run("delete of a worktree-held branch keeps both on no", func(t *testing.T) {
+		rig := newTableRig(t)
+		wt := t.TempDir() + "/wt"
+		gitIn(t, rig.dir, "worktree", "add", "-q", wt, "51@fix@prune")
 		p := &scriptedBranchMenuPrompter{Force: true}
-		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, merged)
-		if err == nil || p.ForceAsked || !rig.hasBranch(t, "51@fix@prune") {
-			t.Errorf("err = %v, asked = %v, exists = %v", err, p.ForceAsked, rig.hasBranch(t, "51@fix@prune"))
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &merged)
+		_, statErr := os.Stat(wt)
+		if err != nil || p.WorktreeAsked == "" || p.ForceAsked || !rig.hasBranch(t, "51@fix@prune") || statErr != nil ||
+			!strings.Contains(rig.stdout.String(), "kept") {
+			t.Errorf("err = %v, asked about %q, force asked = %v, exists = %v, worktree stat = %v",
+				err, p.WorktreeAsked, p.ForceAsked, rig.hasBranch(t, "51@fix@prune"), statErr)
+		}
+	})
+	t.Run("delete of a branch held by a dirty worktree keeps both", func(t *testing.T) {
+		rig := newTableRig(t)
+		wt := t.TempDir() + "/wt"
+		gitIn(t, rig.dir, "worktree", "add", "-q", wt, "51@fix@prune")
+		if err := os.WriteFile(wt+"/untracked", []byte("work\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := &scriptedBranchMenuPrompter{Force: true, RemoveWorktree: true}
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &merged)
+		_, statErr := os.Stat(wt)
+		if err == nil || p.ForceAsked || !rig.hasBranch(t, "51@fix@prune") || statErr != nil {
+			t.Errorf("err = %v, force asked = %v, exists = %v, worktree stat = %v", err, p.ForceAsked, rig.hasBranch(t, "51@fix@prune"), statErr)
+		}
+	})
+	t.Run("delete of an unmerged worktree-held branch asks to force first and keeps both on no", func(t *testing.T) {
+		rig := newTableRig(t)
+		wt := t.TempDir() + "/wt"
+		gitIn(t, rig.dir, "worktree", "add", "-q", wt, "spike")
+		p := &scriptedBranchMenuPrompter{Force: false, RemoveWorktree: true}
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &plain)
+		_, statErr := os.Stat(wt)
+		if err != nil || !p.ForceAsked || p.WorktreeAsked != "" || !rig.hasBranch(t, "spike") || statErr != nil {
+			t.Errorf("err = %v, force asked = %v, asked about %q, exists = %v, worktree stat = %v",
+				err, p.ForceAsked, p.WorktreeAsked, rig.hasBranch(t, "spike"), statErr)
+		}
+	})
+	t.Run("delete of an unmerged worktree-held branch removes both on two yeses", func(t *testing.T) {
+		rig := newTableRig(t)
+		wt := t.TempDir() + "/wt"
+		gitIn(t, rig.dir, "worktree", "add", "-q", wt, "spike")
+		p := &scriptedBranchMenuPrompter{Force: true, RemoveWorktree: true}
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &plain)
+		_, statErr := os.Stat(wt)
+		if err != nil || !p.ForceAsked || rig.hasBranch(t, "spike") || !os.IsNotExist(statErr) {
+			t.Errorf("err = %v, force asked = %v, exists = %v, worktree stat = %v", err, p.ForceAsked, rig.hasBranch(t, "spike"), statErr)
+		}
+	})
+	t.Run("delete from a linked worktree refuses the branch of the main tree without asking", func(t *testing.T) {
+		rig := newTableRig(t)
+		wt := t.TempDir() + "/wt"
+		gitIn(t, rig.dir, "worktree", "add", "-q", wt, "spike")
+		wtClient, err := git.NewClientAt(&pkg.IO{In: bytes.NewReader(nil), Out: rig.stdout, Err: rig.stderr}, wt)
+		if err != nil {
+			t.Fatalf("git.NewClientAt(worktree): %v", err)
+		}
+		d := rig.deps()
+		d.client = wtClient
+		p := &scriptedBranchMenuPrompter{Force: true, RemoveWorktree: true}
+		_, err = runBranchAction(t.Context(), d, p, actionDelete, &branch.Row{BranchName: "master", Plain: true})
+		if err == nil || !strings.Contains(err.Error(), "main working tree") || p.WorktreeAsked != "" || p.ForceAsked {
+			t.Errorf("err = %v, asked about %q, force asked = %v", err, p.WorktreeAsked, p.ForceAsked)
+		}
+	})
+	t.Run("delete of a branch held by a stale worktree entry names git worktree prune", func(t *testing.T) {
+		rig := newTableRig(t)
+		wt := t.TempDir() + "/wt"
+		gitIn(t, rig.dir, "worktree", "add", "-q", wt, "51@fix@prune")
+		if err := os.RemoveAll(wt); err != nil {
+			t.Fatal(err)
+		}
+		p := &scriptedBranchMenuPrompter{RemoveWorktree: true}
+		_, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &merged)
+		if err == nil || !strings.Contains(err.Error(), "git worktree prune") || p.WorktreeAsked != "" || !rig.hasBranch(t, "51@fix@prune") {
+			t.Errorf("err = %v, asked about %q, exists = %v", err, p.WorktreeAsked, rig.hasBranch(t, "51@fix@prune"))
 		}
 	})
 	t.Run("delete of an in-progress tracked branch keeps its record and names prune", func(t *testing.T) {
 		rig := newTableRig(t)
 		p := &scriptedBranchMenuPrompter{Force: true}
-		if _, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, inProgress); err != nil {
+		if _, err := runBranchAction(t.Context(), rig.deps(), p, actionDelete, &inProgress); err != nil {
 			t.Fatalf("delete: %v", err)
 		}
 		out := rig.stdout.String()
@@ -165,7 +283,7 @@ func TestRunBranchAction(t *testing.T) {
 	})
 	t.Run("delete of a plain branch prints no prune reminder", func(t *testing.T) {
 		rig := newTableRig(t)
-		if _, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{Force: true}, actionDelete, plain); err != nil {
+		if _, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{Force: true}, actionDelete, &plain); err != nil {
 			t.Fatalf("delete: %v", err)
 		}
 		if out := rig.stdout.String(); strings.Contains(out, "still in progress") || !strings.Contains(out, "deleted") {
@@ -174,7 +292,7 @@ func TestRunBranchAction(t *testing.T) {
 	})
 	t.Run("abandon records the row closed without merging", func(t *testing.T) {
 		rig := newTableRig(t)
-		reopen, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionAbandon, inProgress)
+		reopen, err := runBranchAction(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, actionAbandon, &inProgress)
 		if err != nil || !reopen || rig.statusOf(t, "42@feat@assign") != branch.StatusClosed || !rig.hasBranch(t, "42@feat@assign") {
 			t.Errorf("err = %v, reopen = %v, status = %q", err, reopen, rig.statusOf(t, "42@feat@assign"))
 		}
@@ -204,7 +322,7 @@ func TestRunBranchAction(t *testing.T) {
 		d := rig.deps()
 		var got string
 		d.pr = func(_ context.Context, name string) error { got = name; return nil }
-		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionPR, plain)
+		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionPR, &plain)
 		if err != nil || !reopen || got != "spike" {
 			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
 		}
@@ -214,7 +332,7 @@ func TestRunBranchAction(t *testing.T) {
 		d := rig.deps()
 		var got SourceBranch
 		d.merge = func(_ context.Context, src SourceBranch) error { got = src; return nil }
-		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionMerge, plain)
+		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionMerge, &plain)
 		if err != nil || !reopen || got != (SourceBranch{Name: "spike"}) {
 			t.Errorf("err = %v, reopen = %v, got = %+v", err, reopen, got)
 		}
@@ -224,7 +342,7 @@ func TestRunBranchAction(t *testing.T) {
 		d := rig.deps()
 		var gotSlug, gotName string
 		d.closeIssue = func(_ context.Context, slug, name string) error { gotSlug, gotName = slug, name; return nil }
-		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionIssueClose, inProgress)
+		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionIssueClose, &inProgress)
 		if err != nil || reopen || gotSlug != "42" || gotName != "42@feat@assign" {
 			t.Errorf("err = %v, reopen = %v, slug = %q, name = %q", err, reopen, gotSlug, gotName)
 		}
@@ -234,7 +352,7 @@ func TestRunBranchAction(t *testing.T) {
 		d := rig.deps()
 		var got string
 		d.log = func(_ context.Context, ref string) error { got = ref; return nil }
-		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionLog, plain)
+		reopen, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionLog, &plain)
 		if err != nil || !reopen || got != "refs/heads/spike" {
 			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
 		}
@@ -246,18 +364,18 @@ func TestRunBranchAction(t *testing.T) {
 		var got string
 		d.log = func(_ context.Context, ref string) error { got = ref; return nil }
 		row := branch.Row{BranchName: "remote-thing", Plain: true, RemoteOnly: true}
-		if _, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionLog, row); err != nil || got != "refs/remotes/origin/remote-thing" {
+		if _, err := runBranchAction(t.Context(), d, &scriptedBranchMenuPrompter{}, actionLog, &row); err != nil || got != "refs/remotes/origin/remote-thing" {
 			t.Errorf("err = %v, got = %q", err, got)
 		}
 	})
 	t.Run("an entry with no func is not offered", func(t *testing.T) {
 		rig := newTableRig(t)
 		d := rig.deps()
-		if got := offeredEntries(d, plain); slices.Contains(got, actionTrack) || slices.Contains(got, actionMerge) || !slices.Contains(got, actionDelete) {
+		if got := offeredEntries(d, &plain); slices.Contains(got, actionTrack) || slices.Contains(got, actionMerge) || !slices.Contains(got, actionDelete) {
 			t.Errorf("offered without funcs = %v", got)
 		}
 		d.track = func(context.Context, string) error { return nil }
-		if got := offeredEntries(d, plain); !slices.Contains(got, actionTrack) {
+		if got := offeredEntries(d, &plain); !slices.Contains(got, actionTrack) {
 			t.Errorf("offered with track = %v", got)
 		}
 	})
@@ -265,7 +383,7 @@ func TestRunBranchAction(t *testing.T) {
 
 func TestRunBranchTable_NoTTY(t *testing.T) {
 	rig := newTableRig(t)
-	err := runBranchTable(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, tui.BranchTableOptions{Remote: "origin"}, true)
+	err := runBranchTable(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, &tui.BranchTableOptions{Remote: "origin"}, true)
 	if err != nil {
 		t.Fatalf("runBranchTable: %v", err)
 	}
@@ -297,7 +415,7 @@ func TestRunKey(t *testing.T) {
 
 	t.Run("C checks out and does not reopen", func(t *testing.T) {
 		rig := newTableRig(t)
-		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "C", plain)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "C", &plain)
 		cur, _ := rig.client.CurrentBranch()
 		if err != nil || reopen || cur != "spike" {
 			t.Errorf("err = %v, reopen = %v, current = %q", err, reopen, cur)
@@ -308,7 +426,7 @@ func TestRunKey(t *testing.T) {
 		d := rig.deps()
 		var gotSlug, gotName string
 		d.closeIssue = func(_ context.Context, slug, name string) error { gotSlug, gotName = slug, name; return nil }
-		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "c", inProgress)
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "c", &inProgress)
 		if err != nil || reopen || gotSlug != "42" || gotName != "42@feat@assign" {
 			t.Errorf("err = %v, reopen = %v, slug = %q, name = %q", err, reopen, gotSlug, gotName)
 		}
@@ -318,7 +436,7 @@ func TestRunKey(t *testing.T) {
 		d := rig.deps()
 		var got SourceBranch
 		d.merge = func(_ context.Context, src SourceBranch) error { got = src; return nil }
-		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "m", plain)
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "m", &plain)
 		if err != nil || !reopen || got != (SourceBranch{Name: "spike"}) {
 			t.Errorf("err = %v, reopen = %v, got = %+v", err, reopen, got)
 		}
@@ -328,14 +446,14 @@ func TestRunKey(t *testing.T) {
 		d := rig.deps()
 		var got string
 		d.pr = func(_ context.Context, name string) error { got = name; return nil }
-		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "u", plain)
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "u", &plain)
 		if err != nil || !reopen || got != "spike" {
 			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
 		}
 	})
 	t.Run("a records the branch closed and reopens", func(t *testing.T) {
 		rig := newTableRig(t)
-		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "a", inProgress)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "a", &inProgress)
 		if err != nil || !reopen || rig.statusOf(t, "42@feat@assign") != branch.StatusClosed {
 			t.Errorf("err = %v, reopen = %v, status = %q", err, reopen, rig.statusOf(t, "42@feat@assign"))
 		}
@@ -345,7 +463,7 @@ func TestRunKey(t *testing.T) {
 		d := rig.deps()
 		var got string
 		d.track = func(_ context.Context, name string) error { got = name; return nil }
-		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "t", plain)
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "t", &plain)
 		if err != nil || !reopen || got != "spike" {
 			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
 		}
@@ -355,21 +473,21 @@ func TestRunKey(t *testing.T) {
 		d := rig.deps()
 		var got string
 		d.log = func(_ context.Context, ref string) error { got = ref; return nil }
-		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "l", plain)
+		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "l", &plain)
 		if err != nil || !reopen || got != "refs/heads/spike" {
 			t.Errorf("err = %v, reopen = %v, got = %q", err, reopen, got)
 		}
 	})
 	t.Run("D deletes the branch and reopens", func(t *testing.T) {
 		rig := newTableRig(t)
-		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "D", merged)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "D", &merged)
 		if err != nil || !reopen || rig.hasBranch(t, "51@fix@prune") {
 			t.Errorf("err = %v, reopen = %v, exists = %v", err, reopen, rig.hasBranch(t, "51@fix@prune"))
 		}
 	})
 	t.Run("a key the row does not offer runs nothing", func(t *testing.T) {
 		rig := newTableRig(t)
-		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "m", inProgress)
+		reopen, err := runKey(t.Context(), rig.deps(), &scriptedBranchMenuPrompter{}, "m", &inProgress)
 		if !reopen || err == nil || !strings.Contains(err.Error(), "m") {
 			t.Errorf("reopen = %v, err = %v", reopen, err)
 		}

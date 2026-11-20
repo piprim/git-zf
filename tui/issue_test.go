@@ -628,7 +628,11 @@ func TestIssueTable_PickRefusesAClosedRow(t *testing.T) {
 // action picked; the command runs it and reopens the table. The pickers
 // ignore c, a, l, e and r.
 func TestIssueTable_ActionKeys(t *testing.T) {
-	rows := []issue.Row{{IssueSlug: "A", Title: "A"}, {IssueSlug: "B", Title: "B"}}
+	// A has no branch, B has one in progress.
+	rows := []issue.Row{
+		{IssueSlug: "A", Title: "A"},
+		{IssueSlug: "B", Title: "B", Branch: &branch.Row{BranchName: "B@feat@b", Status: branch.StatusInProgress}},
+	}
 	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
 	quits := func(cmd tea.Cmd) bool {
 		if cmd == nil {
@@ -662,6 +666,14 @@ func TestIssueTable_ActionKeys(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("c on a row without a branch in progress stays in the table with a notice", func(t *testing.T) {
+		m := newTable(t, IssueActions{Start: true})
+		m, cmd := m.Update(runeKey('c'))
+		if pick, _ := PickedIssue(m); quits(cmd) || pick != IssuePickNone || !strings.Contains(m.View(), "A has no branch in progress") {
+			t.Errorf("quits = %v, pick = %v, view = %q", quits(cmd), pick, m.View())
+		}
+	})
 
 	t.Run("a arms with a notice, a second a abandons the row", func(t *testing.T) {
 		m := newTable(t, IssueActions{Start: true})
