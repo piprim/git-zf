@@ -581,22 +581,20 @@ func TestReconcile_AwkwardTrackerInput(t *testing.T) {
 		}
 	})
 
-	t.Run("a linked issue deleted from the tracker warns and writes nothing", func(t *testing.T) {
+	t.Run("a linked issue deleted from the tracker closes its open record", func(t *testing.T) {
 		t.Parallel()
 
 		c := newRepo(t, "alice", "")
 		ft := &fake.Tracker{ProjectIssues: []tracker.Issue{trackerIssue("42", "Doomed")}}
 		m := newTestMirror(ft)
 		mustReconcile(t, m, c)
-		rec := onlyRecord(t, c)
-		before := opCount(t, c, rec.ID)
 
 		ft.ProjectIssues = nil
 		ft.Unknown = map[string]bool{"42": true}
 		res := mustReconcile(t, m, c)
 
-		if len(res.Warnings) != 1 || opCount(t, c, rec.ID) != before || onlyRecord(t, c).State != StateOpen {
-			t.Errorf("res = %+v, ops %d → %d", res, before, opCount(t, c, rec.ID))
+		if len(res.Warnings) != 0 || res.Pulled != 1 || onlyRecord(t, c).State != StateClosed {
+			t.Errorf("res = %+v, record = %+v", res, onlyRecord(t, c))
 		}
 	})
 }
@@ -791,14 +789,29 @@ func TestReconcile_TrackerIssueGone(t *testing.T) {
 	t.Parallel()
 
 	c, ft, m, rec := importOne(t)
-	ft.CloseIssue("42")
+	ft.CloseIssue("42") // out of the open listing
 	ft.Unknown = map[string]bool{"42": true}
-	before := opCount(t, c, rec.ID)
 	res := mustReconcile(t, m, c)
+	got, _ := Load(t.Context(), c, rec.ID)
 
-	t.Run("a record whose tracker issue is gone is skipped with one warning", func(t *testing.T) {
-		if len(res.Warnings) != 1 || opCount(t, c, rec.ID) != before {
-			t.Errorf("warnings = %q, ops %d → %d", res.Warnings, before, opCount(t, c, rec.ID))
+	t.Run("a record whose tracker issue was deleted is closed, without a warning", func(t *testing.T) {
+		if len(res.Warnings) != 0 || got.State != StateClosed || got.TrackerStatus != "deleted" || res.Pulled != 1 {
+			t.Errorf("warnings = %q, record = %+v, res = %+v", res.Warnings, got, res)
+		}
+	})
+
+	before := opCount(t, c, rec.ID)
+	again := mustReconcile(t, m, c)
+
+	t.Run("the next run leaves it alone", func(t *testing.T) {
+		if len(again.Warnings) != 0 || again.Pulled != 0 || opCount(t, c, rec.ID) != before {
+			t.Errorf("res = %+v, ops %d → %d", again, before, opCount(t, c, rec.ID))
+		}
+	})
+
+	t.Run("SyncOne on it is not an error", func(t *testing.T) {
+		if _, err := m.SyncOne(t.Context(), c, rec.ID); err != nil {
+			t.Errorf("SyncOne: %v", err)
 		}
 	})
 }

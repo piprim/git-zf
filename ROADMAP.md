@@ -2,19 +2,6 @@
 
 ## Bug
 
-### WARN: sync issue, tracker issue not found
-On the repo `/home/pi/code/ovya/cpro`, closing an issue.
-
-```
-WARN: sync issue 1173941: read tracker issue 1173941: tracker: issue not found
-WARN: sync issue 1173940: read tracker issue 1173940: tracker: issue not found
-WARN: sync issue 1173916: read tracker issue 1173916: tracker: issue not found
-WARN: sync issue 1171164: read tracker issue 1171164: tracker: issue not found
-WARN: sync issue 1171145: read tracker issue 1171145: tracker: issue not found
-WARN: sync issue 1171144: read tracker issue 1171144: tracker: issue not found
-Dozens of warnings…
-```
-
 ### Clean UX full screen
 
 Git-zf is not full screen…

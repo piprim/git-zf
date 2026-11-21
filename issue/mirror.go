@@ -404,7 +404,7 @@ func (m *Mirror) SyncOne(ctx context.Context, c *git.Client, id string) (MirrorR
 	// Read here, not left to syncRecord: a record closed on both sides still
 	// gets its comments posted.
 	t, err := m.reread(ctx, &rec)
-	if err != nil {
+	if err != nil && !errors.Is(err, tracker.ErrIssueNotFound) {
 		return res, err
 	}
 	pulled, pushed, changed, err := m.syncRecord(ctx, c, &rec, t, &res)
@@ -431,6 +431,11 @@ func (m *Mirror) syncRecord(
 	ctx context.Context, c *git.Client, rec *Record, listed *tracker.Issue, res *MirrorResult,
 ) (pulled, pushed, changed bool, err error) {
 	t, err := m.trackerIssue(ctx, rec, listed)
+	if errors.Is(err, tracker.ErrIssueNotFound) {
+		changed, err = m.gone(ctx, c, rec)
+
+		return changed, false, changed, err
+	}
 	if err != nil || t == nil {
 		return false, false, false, err
 	}
@@ -476,6 +481,28 @@ func (m *Mirror) syncRecord(
 	}
 
 	return pulled, pushed, changed, nil
+}
+
+// gone closes a record whose tracker issue was deleted: nothing is left to
+// mirror, and an open record would be re-read, and warned about, on every run.
+// It reports whether an op was written.
+func (m *Mirror) gone(ctx context.Context, c *git.Client, rec *Record) (bool, error) {
+	var ops []*Op
+	if rec.State != StateClosed {
+		ops = append(ops, &Op{Type: OpSetState, Value: StateClosed})
+	}
+	if rec.TrackerState != StateClosed {
+		ops = append(ops, &Op{Type: OpTrackerState, Value: StateClosed, Status: "deleted"})
+	}
+	if len(ops) == 0 {
+		return false, nil
+	}
+	if err := appendAll(ctx, c, rec.ID, ops...); err != nil {
+		return false, err
+	}
+	rec.State, rec.TrackerState, rec.TrackerStatus = StateClosed, StateClosed, "deleted"
+
+	return true, nil
 }
 
 // adopt runs the pull half of the rule on t as re-read after a push, the
