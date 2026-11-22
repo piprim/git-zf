@@ -432,6 +432,8 @@ type issueTableModel struct {
 	// viewing is set while the show dialog replaces the table.
 	viewing bool
 	dialog  viewport.Model
+	// height is the screen height the model was told; 0 before any size.
+	height int
 	// form is the active nested form ("menu" or "abandon"), under the table;
 	// the fields hold its values.
 	form                 *huh.Form
@@ -460,8 +462,17 @@ func (m *issueTableModel) refreshRows() {
 }
 
 func (m *issueTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Whatever path returns: what is under the table changes with every state.
+	defer m.resize()
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.dialog.Width = size.Width - 4 // the border and its padding
+		m.height = size.Height
+		if m.form != nil {
+			// The form has what the table leaves, not the whole screen.
+			m.form = fitForm(m.form, m.dialog.Width, m.height)
+
+			return m, nil
+		}
 	}
 	if m.form != nil {
 		return m.updateForm(msg)
@@ -589,7 +600,7 @@ func (m *issueTableModel) openMenu() tea.Cmd {
 	m.menuPicked = opts[0].Value
 	m.formKind = "menu"
 	title := "Issue " + row.IssueSlug + ": " + row.Title
-	m.form = Form(MenuSelect(title, opts, &m.menuPicked)).WithWidth(m.dialog.Width)
+	m.form = fitForm(Form(MenuSelect(title, opts, &m.menuPicked)).WithWidth(m.dialog.Width), m.dialog.Width, m.height)
 
 	return m.form.Init()
 }
@@ -623,7 +634,9 @@ func (m *issueTableModel) runMenuEntry(e issueMenuEntry) (tea.Model, tea.Cmd) {
 	case issueEntryAbandon:
 		m.abandonOK = false
 		m.formKind = "abandon"
-		m.form = Form(IssueConfirm("Abandon "+m.menuSlug+"? There is no undo.", &m.abandonOK)).WithWidth(m.dialog.Width)
+		m.form = fitForm(
+			Form(IssueConfirm("Abandon "+m.menuSlug+"? There is no undo.", &m.abandonOK)).WithWidth(m.dialog.Width),
+			m.dialog.Width, m.height)
 
 		return m, m.form.Init()
 	}
@@ -841,15 +854,22 @@ func renderStatusTabs(current string) string {
 }
 
 // renderPicker is an inline list of options under title, the one at cursor
-// highlighted.
-func renderPicker(title string, cursor int, opts []string) string {
-	lines := make([]string, len(opts))
+// highlighted. maxLines, title included, is what the screen has for it:
+// with more options than that, a window of them follows the cursor. Zero is
+// no limit.
+func renderPicker(title string, cursor int, opts []string, maxLines int) string {
+	start, end := 0, len(opts)
+	if n := max(maxLines-1, 1); maxLines > 0 && n < len(opts) {
+		start = min(max(cursor-n/2, 0), len(opts)-n)
+		end = start + n
+	}
+	lines := make([]string, 0, end-start)
 
-	for i, o := range opts {
+	for i := start; i < end; i++ {
 		if i == cursor {
-			lines[i] = activeTabStyle.Render("> " + o)
+			lines = append(lines, activeTabStyle.Render("> "+opts[i]))
 		} else {
-			lines[i] = inactiveTabStyle.Render("  " + o)
+			lines = append(lines, inactiveTabStyle.Render("  "+opts[i]))
 		}
 	}
 
@@ -859,20 +879,31 @@ func renderPicker(title string, cursor int, opts []string) string {
 var dialogStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 
 func (m *issueTableModel) View() string {
-	if m.form != nil {
-		return m.table.View() + "\n\n" + m.form.View()
-	}
 	if m.viewing {
 		return dialogStyle.Render(m.dialog.View()) + "\n\n↑↓←→ scroll · e: edit · esc: back"
+	}
+
+	return m.table.View() + "\n\n" + m.below()
+}
+
+// below is what the table has under it, after a blank line, in the state
+// the model is in.
+func (m *issueTableModel) below() string {
+	if m.form != nil {
+		return m.form.View()
 	}
 
 	tabs := renderStatusTabs(m.statusFilter)
 
 	if m.picking {
-		return m.table.View() + "\n\n" + tabs + "\n\n" + renderPicker("Pick project", m.pickCursor, projectPickerOptions(m.projects))
+		budget := 0
+		if m.height > 0 {
+			budget = underTable(m.height) - 2
+		}
+
+		return tabs + "\n\n" + renderPicker("Pick project", m.pickCursor, projectPickerOptions(m.projects), budget)
 	}
 
-	hint := m.hint()
 	proj := ""
 
 	if len(m.projects) > 0 {
@@ -884,16 +915,26 @@ func (m *issueTableModel) View() string {
 		mine = "  " + activeTabStyle.Render("[ Mine ]")
 	}
 
-	filters := m.table.View() + "\n\n" + tabs + mine + proj + "    "
+	filters := tabs + mine + proj + "    "
 	if m.filtering {
 		return filters + "/" + m.filter.View() + "  (esc: clear  enter: confirm)"
 	}
-	view := filters + m.filterHint() + "\n" + hint
+	view := filters + m.filterHint() + "\n" + m.hint()
 	if m.notice != "" {
 		return view + "\n" + m.notice
 	}
 
 	return view
+}
+
+// resize fits the table and the dialog to the height the screen was told.
+// A screen that was told none keeps its twenty rows.
+func (m *issueTableModel) resize() {
+	if m.height <= 0 {
+		return
+	}
+	m.dialog.Height = max(1, m.height-dialogChrome)
+	m.table.SetHeight(max(minTableHeight, m.height-1-lipgloss.Height(m.below())))
 }
 
 // filterHint is the keys of the filters, on their line.

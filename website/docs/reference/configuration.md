@@ -172,3 +172,23 @@ like `commit-message.items`, so copy the entries you keep from the defaults.
 Names and keys must be unique, keys are 0 to 9, and `default-cmd` must name
 one of the entries (it falls back to the first when empty). The six built-in
 commands are listed on the [log](../workflows/log.md) page.
+
+## `[ui]`
+
+```toml
+[ui]
+split = true                     # false: every screen takes the whole terminal
+size = 50                        # percent of the rows for git-zf (20-80)
+```
+
+With `split = true`, git-zf keeps its screens (the home screen, the issue and
+branch tables, the log) in the top of the terminal, and the rest stays an
+ordinary terminal: what a commit, a push or a merge prints appears there, a
+git hook can ask a question and read the answer, and the forms open there.
+When you quit, git-zf's part goes away and that output is left at the top of
+the terminal.
+
+The screen is not split when either part would get fewer than 10 rows, or
+when stdin, stdout or stderr is not a terminal: each screen then takes the
+whole terminal, as with `split = false`, and an error waits for enter before
+the screen comes back over it.

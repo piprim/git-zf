@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/cmd/issueflow"
@@ -140,6 +139,7 @@ func (ir Issue) issueListRunE(cmd *cobra.Command, flags issueListFlags) error {
 		}
 		if err != nil {
 			fmt.Fprintln(infra.stderr, "error:", err)
+			tui.Pause(infra.stderr)
 		}
 	}
 }
@@ -245,7 +245,7 @@ func runList(
 	if err != nil {
 		return tui.IssuePickNone, nil, fmt.Errorf("failed to construct issue table: %w", err)
 	}
-	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	final, err := tui.RunScreen(ctx, m)
 	if err != nil {
 		return tui.IssuePickNone, nil, fmt.Errorf("run table: %w", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"os"
 	"slices"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/tui"
@@ -37,7 +36,7 @@ type teaHomePrompter struct{}
 func (teaHomePrompter) Pick(
 	ctx context.Context, data tui.HomeData, entries []tui.HomeEntry, cursor string,
 ) (tui.HomePick, error) {
-	final, err := tea.NewProgram(tui.NewHomeModel(data, entries, cursor), tea.WithContext(ctx)).Run()
+	final, err := tui.RunScreen(ctx, tui.NewHomeModel(data, entries, cursor))
 	if err != nil {
 		return tui.HomePick{}, fmt.Errorf("run the home screen: %w", err)
 	}

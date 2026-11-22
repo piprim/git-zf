@@ -13,7 +13,7 @@ $ git zf commit
 Opens a commitizen-style form: type, scope, subject, body, footer. Then an
 options page: stage all, amend, sign-off, hooks, push. Every option has a
 flag; if any commit flag is passed the options page is skipped and the flags
-are used directly.
+are used directly. `Esc` or `Ctrl+C` leaves the form without committing.
 
 | Flag | Does |
 |---|---|

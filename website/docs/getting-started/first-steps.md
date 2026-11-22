@@ -39,6 +39,13 @@ Leaving a command brings you back to the home screen, refreshed: `q`, or
 branch table and the log. `git zf review` opens a menu of its own that works
 the same way; `git zf issue` and `git zf branch` open their tables.
 
+The home screen and the tables stay in the top half of the terminal. The
+bottom half is an ordinary terminal: the forms open there, and what a
+commit, a push or a merge prints stays there, the questions of a git hook
+included. When you quit, git-zf's half goes away and that output is left at
+the top. The size of the two parts, and a full-screen mode instead, are set
+under [`[ui]`](../reference/configuration.md#ui).
+
 When stdin is not a terminal, in a script or in CI, the usual `--help` text
 is printed instead. Outside a git repository it is printed too, under a line
 saying so. The setup commands (`init`, `install`, `uninstall`, `config`,

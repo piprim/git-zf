@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/piprim/git-zf/cmd/cmdutil"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
@@ -121,7 +120,7 @@ func run(ctx context.Context, client *git.Client, cfg config.LogConfig, extra []
 	}
 
 	model := tui.LogModel(lines, cfg.Cmds, current, logActions(ctx, client, load))
-	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tui.RunScreen(ctx, model); err != nil {
 		return fmt.Errorf("run log: %w", err)
 	}
 

@@ -177,17 +177,28 @@ func TestHomeModel_Keys(t *testing.T) {
 		}
 	})
 
-	for _, key := range []rune{'v', 'r'} {
-		t.Run("the screen is wiped when "+string(key)+" leaves it", func(t *testing.T) {
+	for _, key := range []rune{'c', 'v', 'r'} {
+		t.Run("the last frame stays when "+string(key)+" leaves the screen", func(t *testing.T) {
 			t.Parallel()
 
-			// The program runs inline: a last frame left behind would stack
-			// under the command's output and the next home screen.
-			if m, _ := homeKeys(home(""), runeKey(key)); m.View() != "" {
-				t.Errorf("view after %c = %q, want nothing", key, m.View())
+			// The frame stays painted in git-zf's band while the command
+			// runs under it: an empty view would blank the band.
+			m, _ := homeKeys(home(""), runeKey(key))
+			if !strings.Contains(ansi.Strip(m.View()), "Commit") {
+				t.Errorf("view after %c = %q, want the entries", key, ansi.Strip(m.View()))
 			}
 		})
 	}
+
+	t.Run("the last frame fits the height", func(t *testing.T) {
+		t.Parallel()
+
+		m, _ := home("").Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+		m, _ = homeKeys(m, runeKey('c'))
+		if h := lipgloss.Height(m.View()); h > 10 {
+			t.Errorf("view is %d lines, want at most 10", h)
+		}
+	})
 
 	t.Run("a model that is not a home model picks a quit", func(t *testing.T) {
 		t.Parallel()

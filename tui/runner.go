@@ -129,7 +129,7 @@ func RunForm(form *huh.Form, entries []git.StatusEntry, classifyFn func() (bool,
 		classifyFn:   classifyFn,
 		reserveWidth: StatusPanelReserveWidth(entries),
 	}
-	_, err := tea.NewProgram(r, tea.WithOutput(os.Stderr)).Run()
+	_, err := tea.NewProgram(r, tea.WithOutput(os.Stderr), tea.WithFilter(clampHeight)).Run()
 
 	if errors.Is(err, tea.ErrInterrupted) {
 		return r, huh.ErrUserAborted

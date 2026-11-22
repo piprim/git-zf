@@ -198,10 +198,12 @@ type branchTableModel struct {
 	remotes   bool
 	// form is the S or T multi-select while it is open under the table;
 	// pending is its value, applied on completion.
-	form      *huh.Form
-	formKind  string
-	pending   []string
-	notice    string
+	form     *huh.Form
+	formKind string
+	pending  []string
+	notice   string
+	// height is the screen height the model was told; 0 before any size.
+	height    int
 	armKey    string
 	armBranch string
 	pick      BranchPick
@@ -281,6 +283,17 @@ func (m *branchTableModel) refreshRows() {
 }
 
 func (m *branchTableModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Whatever path returns: what is under the table changes with every state.
+	defer m.resize()
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.height, m.width = size.Height, size.Width
+		if m.form != nil {
+			// The form has what the table leaves, not the whole screen.
+			m.form = fitForm(m.form, m.width, m.height)
+
+			return m, nil
+		}
+	}
 	if m.form != nil {
 		return m.updateForm(msg)
 	}
@@ -370,7 +383,9 @@ func (m *branchTableModel) openForm(kind string) tea.Cmd {
 		}
 	}
 	m.formKind = kind
-	m.form = Form(huh.NewGroup(huh.NewMultiSelect[string]().Title(title).Value(&m.pending).Options(opts...))).WithWidth(m.width)
+	m.form = fitForm(
+		Form(huh.NewGroup(huh.NewMultiSelect[string]().Title(title).Value(&m.pending).Options(opts...))).WithWidth(m.width),
+		m.width, m.height)
 
 	return m.form.Init()
 }
@@ -505,8 +520,15 @@ func (m *branchTableModel) View() string {
 	if len(m.visible) == 0 {
 		body = "No branch matches."
 	}
+
+	return body + "\n\n" + m.below()
+}
+
+// below is what the table has under it, after a blank line, in the state
+// the model is in.
+func (m *branchTableModel) below() string {
 	if m.form != nil {
-		return body + "\n\n" + m.form.View()
+		return m.form.View()
 	}
 
 	var active []string
@@ -519,9 +541,9 @@ func (m *branchTableModel) View() string {
 	if m.remotes {
 		active = append(active, "remotes: on")
 	}
-	view := body + "\n\n"
+	view := ""
 	if len(active) > 0 {
-		view += activeTabStyle.Render(strings.Join(active, "  ")) + "\n"
+		view = activeTabStyle.Render(strings.Join(active, "  ")) + "\n"
 	}
 	if m.filtering {
 		return view + "/" + m.filter.View() + "  (esc: clear  enter: confirm)"
@@ -544,6 +566,14 @@ func (m *branchTableModel) View() string {
 	}
 
 	return out
+}
+
+// resize fits the table to the height the screen was told. A screen that
+// was told none keeps its twenty rows.
+func (m *branchTableModel) resize() {
+	if m.height > 0 {
+		m.table.SetHeight(max(minTableHeight, m.height-1-lipgloss.Height(m.below())))
+	}
 }
 
 // relativeTime is how long before now t is: "2h ago", "1d ago", "3w ago",

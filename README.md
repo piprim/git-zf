@@ -12,6 +12,12 @@ pre-filled from it, `git zf review request` locks the branch for a peer
 review, and `git zf issue close` merges it into the base with the strategy you
 pick. Every command is interactive by default, and every prompt has a flag.
 
+git-zf's screens stay in the top half of the terminal and the bottom half is
+an ordinary terminal: the forms open there, and what a commit, a push or a
+merge prints stays there, the questions of a git hook included. The `[ui]`
+section of the configuration sets the size of the two parts, or turns the
+split off.
+
 Everything git-zf records lives in the repository, under `refs/zf/`, as chains
 of commits: the issues when there is no tracker, the branches in progress and
 the reviews. There is no database and no server. A fresh clone sees the whole

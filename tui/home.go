@@ -175,11 +175,6 @@ func (m *homeModel) quitWith(pick HomePick) (tea.Model, tea.Cmd) {
 }
 
 func (m *homeModel) View() string {
-	// The program runs inline: the last frame would stay above the command's
-	// output and the next home screen. q keeps it, as a table does.
-	if m.pick.Kind != HomeQuit {
-		return ""
-	}
 	if m.viewing {
 		return m.fit(m.status.View() + "\n\n" + keyHints("↑/↓", "scroll", "esc", "back"))
 	}

@@ -83,25 +83,39 @@ func RunMenu(cmd *cobra.Command, title string, subs []*cobra.Command, p MenuProm
 		if i < 0 {
 			return fmt.Errorf("unknown action %q", picked)
 		}
-		if err := RunSub(cmd, subs[i]); err != nil {
+		// No pause here: the menu is drawn under the error, not over it.
+		if _, err := runAction(cmd, subs[i]); err != nil {
 			return err
 		}
 	}
 }
 
 // RunSub runs sub's RunE with cmd, the executing parent (see RunMenu), for a
-// menu that is shown again afterwards: a form left with esc is no error, and
-// any other failure is printed on cmd's stderr as "error: <name>: <err>". It
-// returns an error only for a sub that cannot run.
+// screen that is shown again afterwards: a form left with esc is no error,
+// and any other failure is printed on cmd's stderr as "error: <name>: <err>",
+// then held by tui.Pause when the screen would cover it. It returns an error
+// only for a sub that cannot run.
 func RunSub(cmd, sub *cobra.Command) error {
+	failed, err := runAction(cmd, sub)
+	if failed {
+		tui.Pause(cmd.ErrOrStderr())
+	}
+
+	return err
+}
+
+// runAction is RunSub without the pause; failed reports a printed failure.
+func runAction(cmd, sub *cobra.Command) (failed bool, err error) {
 	if sub.RunE == nil {
-		return fmt.Errorf("action %q has no RunE", sub.Name())
+		return false, fmt.Errorf("action %q has no RunE", sub.Name())
 	}
 	if err := sub.RunE(cmd, nil); err != nil && !errors.Is(err, huh.ErrUserAborted) {
 		fmt.Fprintf(cmd.ErrOrStderr(), "error: %s: %v\n", sub.Name(), err)
+
+		return true, nil
 	}
 
-	return nil
+	return false, nil
 }
 
 // menuOptions derives the menu entries from the subcommands themselves so

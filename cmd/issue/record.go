@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
@@ -71,7 +70,7 @@ func (huhRecordPrompter) PickRecord(ctx context.Context, records []issuepkg.Reco
 	if err != nil {
 		return "", fmt.Errorf("issue picker: %w", err)
 	}
-	final, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	final, err := tui.RunScreen(ctx, m)
 	if err != nil {
 		return "", fmt.Errorf("issue picker: %w", err)
 	}

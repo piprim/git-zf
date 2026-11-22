@@ -20,6 +20,7 @@ import (
 	_ "github.com/piprim/git-zf/tracker/forgejo" // registers forgejo + gitea adapters
 	_ "github.com/piprim/git-zf/tracker/github"  // registers github adapter
 	_ "github.com/piprim/git-zf/tracker/redmine" // registers redmine adapter
+	"github.com/piprim/git-zf/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -71,6 +72,13 @@ Leaving a command returns to the home screen, refreshed: q, or Esc once
 there is nothing left to dismiss, closes the issue table, the branch table
 and the log. git zf review opens a menu of its own that works the same way;
 git zf issue and git zf branch open their tables.
+
+These screens stay in the top half of the terminal. The bottom half is an
+ordinary terminal: the forms open there, and what a commit, a push or a
+merge prints stays there, the questions of a git hook included. On quit that
+output is left at the top. The [ui] section of the configuration sets the
+size of the two parts (size) or gives every screen the whole terminal
+(split = false).
 
 When stdin is not a terminal (a script, CI) this help is printed instead.
 Outside a git repository it is printed too, under a line saying so. The
@@ -156,6 +164,7 @@ func initConfig() error {
 	if err != nil {
 		return fmt.Errorf("failed to load app config: %w", err)
 	}
+	tui.Configure(appConfig.UI.Split, appConfig.UI.Size)
 
 	return nil
 }

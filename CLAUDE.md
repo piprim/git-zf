@@ -488,6 +488,54 @@ form or bubbletea program (they draw on the terminal directly), and never
 keep a writer read from `IO()` across a `Spin` or a `stop` — read
 `IO().Err` at each write (`writerFunc` in `cmd/issue/close.go`).
 
+### Testing the split screen
+
+With `[ui] split = true` (the default, `config/ui.go`) git-zf's screens stay
+in the top rows of the terminal and the rest is the terminal's scroll region,
+where commands, hooks and forms run on the real TTY. Every screen starts
+through `tui.RunScreen` (`tui/session.go`), never `tea.NewProgram`: split, the
+model is wrapped in a `band` (`tui/split.go`) and runs inline; otherwise it
+takes the alternate screen (`split = false`, a band under 10 rows, or stdin,
+stdout or stderr not a terminal). The band tells the screen its height and
+cuts or pads the view to exactly that many lines, the last being the
+separator: with a constant line count bubbletea never erases below the view.
+The escape sequences are the methods of `layout`, pinned by
+`TestLayout_Sequences`; `main` and `fatalError` call `tui.CloseScreen`, and
+`tui/session_unix.go` restores the terminal on SIGINT, SIGTERM, SIGQUIT, SIGHUP and Ctrl-Z
+between two screens.
+
+`session.kept` is the one question about a resize: the terminal still has
+the size the active layout was built for, and both bands their 10 rows
+(`layout.fits`). A band resized while its screen is open keeps its top and
+the next screen reuses it; a screen that ends on a layout that is not kept
+closes the split and writes no region (it could be invalid); a terminal
+resized during an action is laid out again by the next screen, and
+`tui.Pause` is silent only while the layout is kept. `OutputHeight` is
+never 0 while the terminal is split: 0 is how `clampHeight` reads "not
+split".
+
+    mise exec -- go test ./config/... -run "TestLoad_UI" -v
+    mise exec -- go test ./tui/... -run "TestNewLayout|TestLayout_Sequences|TestBand|TestSession|TestPause|TestClampHeight" -v
+
+A screen must render within the `tea.WindowSizeMsg.Height` it is told: the
+band cuts what exceeds it. The tables size their rows from what is under
+them (`below`, `resize`, called by a `defer` in `Update` because of its early
+returns), inline forms are fitted with `fitForm` (`tui/fit.go`), and
+`renderPicker` windows its options around the cursor. A model that was told
+no size keeps its 20 rows, which is what the tests of the tables rely on.
+
+    mise exec -- go test ./tui/... -run "FitsHeight|TestRenderPicker|TestHomeModel" -v
+
+A form run as its own program (`tui.NewForm`, `tui.Form`, `tui.RunForm`) gets
+`clampHeight` as a program filter: split, it is told the output band's height.
+`tui.Pause` (`[enter] to continue` after an error a full screen would cover)
+is silent while the terminal is split. The commit form, its history picker
+and its "no history" note are built with `tui.Form` (`commit/form.go`): Esc
+leaves them, back to the home screen. The E2E rigs have no terminal and
+never split. What only a terminal shows is checked by hand:
+
+    scripts/split-check.sh    # seeds a repo with a stdin-reading hook, lists the steps
+
 ## Architecture
 
 Main packages under `github.com/piprim/git-zf`:

@@ -308,3 +308,27 @@ func TestMenuOptions(t *testing.T) {
 		}
 	})
 }
+
+// The menu loop skips the pause RunSub adds: failed is what tells them apart.
+func TestRunSub_Failed(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err    error
+		failed bool
+	}{
+		"a failure is reported":  {errors.New("boom"), true},
+		"esc is not a failure":   {huh.ErrUserAborted, false},
+		"success is not failure": {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			sub := &cobra.Command{Use: "commit", RunE: func(*cobra.Command, []string) error { return tc.err }}
+			parent, _ := newParent(t, sub)
+			if failed, err := runAction(parent, sub); err != nil || failed != tc.failed {
+				t.Errorf("failed=%v err=%v, want failed=%v", failed, err, tc.failed)
+			}
+		})
+	}
+}

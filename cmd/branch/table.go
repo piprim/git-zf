@@ -7,7 +7,6 @@ import (
 	"io"
 	"slices"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/config"
@@ -172,7 +171,7 @@ func runBranchTable(
 			return nil
 		}
 
-		m, err := tea.NewProgram(tui.BranchTableModel(rows, opts), tea.WithContext(ctx)).Run()
+		m, err := tui.RunScreen(ctx, tui.BranchTableModel(rows, opts))
 		if err != nil {
 			return fmt.Errorf("run table: %w", err)
 		}
@@ -220,6 +219,7 @@ func afterAction(reopen bool, err error, stderr io.Writer) bool {
 		return true
 	case err != nil:
 		fmt.Fprintln(stderr, "error:", err)
+		tui.Pause(stderr)
 
 		return true
 	}

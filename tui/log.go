@@ -116,9 +116,11 @@ type logModel struct {
 	// loadErr replaces the list when the current command failed.
 	loadErr string
 	// visible are the lines matching the filter; the cursor indexes them.
-	visible   []string
-	cursor    int
-	list      viewport.Model
+	visible []string
+	cursor  int
+	list    viewport.Model
+	// height is the screen height the model was told; 0 before any size.
+	height    int
 	filter    textinput.Model
 	filtering bool
 	// picking is set while the command picker replaces the hint.
@@ -214,7 +216,10 @@ func (m *logModel) cmdWithKey(key int) int {
 }
 
 func (m *logModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Whatever path returns: the command picker opens and closes under the list.
+	defer m.fitList()
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.height = size.Height
 		m.list.Width, m.list.Height = size.Width, size.Height-logChrome
 		m.dialog.Width, m.dialog.Height = size.Width-4, size.Height-4 // the border, its padding and the hint
 		m.render()
@@ -480,12 +485,7 @@ func (m *logModel) View() string {
 	case m.filtering:
 		return head + "/" + m.filter.View() + "  (esc: clear  enter: confirm)"
 	case m.picking:
-		names := make([]string, len(m.cmds))
-		for i, c := range m.cmds {
-			names[i] = c.Name + describe(c)
-		}
-
-		return head + renderPicker("Pick command", m.pickCursor, names)
+		return head + m.picker()
 	case m.asking == askLinearize:
 		return head + m.plan.Confirm + "  (y: yes  n: no)"
 	case m.asking == askPush:
@@ -495,6 +495,38 @@ func (m *logModel) View() string {
 	}
 
 	return head + "↑↓←→ move · enter: show · /: filter · 1-9: command · c: pick · L: linearize · q: quit"
+}
+
+// picker is the command picker, cut to what the screen has under a list of
+// one line.
+func (m *logModel) picker() string {
+	names := make([]string, len(m.cmds))
+	for i, c := range m.cmds {
+		names[i] = c.Name + describe(c)
+	}
+	budget := 0
+	if m.height > 0 {
+		budget = max(m.height-logChrome, 2)
+	}
+
+	return renderPicker("Pick command", m.pickCursor, names, budget)
+}
+
+// fitList gives the list what the screen leaves it: everything but the
+// chrome, less the command picker while it is open. A screen that was told
+// no size keeps its default.
+func (m *logModel) fitList() {
+	if m.height <= 0 {
+		return
+	}
+	h := m.height - logChrome
+	if m.picking {
+		h -= lipgloss.Height(m.picker()) - 1 // the picker takes the hint's line and more
+	}
+	if h = max(1, h); h != m.list.Height {
+		m.list.Height = h
+		m.render() // keeps the cursor in a list that shrank
+	}
 }
 
 // describe is the description of c as a suffix of its name, empty without one.

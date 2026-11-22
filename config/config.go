@@ -184,6 +184,7 @@ type AppConfig struct {
 	Review        ReviewConfig        `json:"review"         toml:"review"`
 	IssueTracker  IssueTrackerConfig  `json:"issue-tracker"  toml:"issue-tracker"`
 	Log           LogConfig           `json:"log"            toml:"log"`
+	UI            UIConfig            `json:"ui"             toml:"ui"`
 }
 
 // Load parses the embedded default.toml, then overlays each existing file in
@@ -221,6 +222,9 @@ func Load(paths ...string) (*AppConfig, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := cfg.Log.normalize(); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := cfg.UI.normalize(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 
