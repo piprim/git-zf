@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 make                   # build ./bin/git-zf binary
-make install           # copy binary to $(git --exec-path)/git-zf
-./bin/git-zf install # alternative install without make
+make install           # go install into Go's bin directory, no root; warns if an older git-zf shadows it
+./bin/git-zf install   # copies the binary to $(git --exec-path), with sudo where that is root-owned
 ```
 
 The Makefile builds for the host platform (`go build` defaults). Version info is injected via ldflags from `git describe` and `git log`.

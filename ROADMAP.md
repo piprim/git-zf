@@ -4,11 +4,6 @@
 
 ## Enhancement
 
-### Do not use sudo to build
-
-No need to be root to build the project installing from source.
-Instead of doing `sudo make install`, `make install` should be sufficient.
-
 ### List format in request
 Launching `git zf review start`, the list of issue is not well formatted.
 Add the Title of the issue.

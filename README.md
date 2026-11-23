@@ -33,23 +33,25 @@ also opens and merges pull requests.
 
 Download a release archive from the
 [releases page](https://github.com/piprim/git-zf/releases), unpack it and run
-`sudo ./git-zf install`. Or with Go:
+`sudo ./git-zf install`, which copies the binary to `$(git --exec-path)`
+(omit `sudo` if that directory is user-writable, as with a Homebrew git on
+macOS). Or with Go, no root needed:
 
 ```bash
 go install github.com/piprim/git-zf@latest
-sudo git-zf install    # copies the binary to $(git --exec-path)
 ```
 
-Or from source:
+Or from source, no root needed either:
 
 ```bash
 git clone https://github.com/piprim/git-zf.git
 cd git-zf
-make
-sudo make install      # copies the binary to $(git --exec-path)
+make install           # go install, into Go's bin directory
 ```
 
-If `git --exec-path` is user-writable (a Homebrew git on macOS), omit `sudo`.
+Both put `git-zf` in Go's bin directory (`go env GOBIN`, else `GOPATH/bin`),
+which must be on your `PATH`. `make install` warns when an older `git-zf`
+would run instead. On Windows, run it from Git Bash.
 Check with `git zf version`. Then, once per repository, run `git zf init`
 from the main checkout to install the hooks.
 

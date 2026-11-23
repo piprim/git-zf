@@ -13,8 +13,8 @@ review flow relies on and shell completion for its commands.
 
 ## Install the binary
 
-Three ways. Each ends with the binary copied into git's exec path, so that
-git knows it as `git zf`.
+Three ways. git knows the binary as `git zf` once it is in git's exec path
+(the release archive) or anywhere on your `PATH` (the other two).
 
 ### A release archive
 
@@ -28,26 +28,33 @@ $ tar xzf git-zf_*_linux_amd64.tar.gz
 $ sudo ./git-zf install    # copies the binary to $(git --exec-path)
 ```
 
+If `git --exec-path` is writable by you, as with a Homebrew git on macOS,
+omit `sudo`. Remove the binary with `git zf uninstall`.
+
 ### `go install`
 
 ```
 $ go install github.com/piprim/git-zf@latest
-$ sudo git-zf install      # copies the binary to $(git --exec-path)
 ```
+
+The binary lands in Go's bin directory (`go env GOBIN`, else `GOPATH/bin`),
+which must be on your `PATH`. No root is needed. To remove it, delete
+`git-zf` from that directory.
 
 ### From source
 
 ```
 $ git clone https://github.com/piprim/git-zf.git
 $ cd git-zf
-$ make
-$ sudo make install        # copies the binary to $(git --exec-path)
+$ make install             # go install, into Go's bin directory
 ```
 
-If `git --exec-path` is writable by you, as with a Homebrew git on macOS,
-omit `sudo`.
+No root is needed either. `make install` prints where the binary went, and
+warns when an older `git-zf` would run instead: one left in git's exec path
+by an earlier install, or one earlier on your `PATH`. On Windows, run it
+from Git Bash. Remove the binary with `make uninstall`.
 
-Check with `git zf version`. Remove the binary with `git zf uninstall`.
+Whichever way you chose, check with `git zf version`.
 
 ## Initialize a repository
 
