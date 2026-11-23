@@ -532,6 +532,21 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 		}
 	})
 
+	t.Run("picker row has the title of a branch chain only the remote holds", func(t *testing.T) {
+		// `issue start` pushes the branch chain; the rig's seed does not.
+		if err := branch.Push(ctx, devRig.client, "77"); err != nil {
+			t.Fatalf("developer push branch chain: %v", err)
+		}
+
+		rows, err := inReviewBranches(ctx, reviewerDeps)
+		if err != nil {
+			t.Fatalf("inReviewBranches: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Title != "my feature" {
+			t.Errorf("rows = %+v, want one row titled %q", rows, "my feature")
+		}
+	})
+
 	t.Run("review start succeeds on empty store after fetch", func(t *testing.T) {
 		reviewerStdout.Reset()
 		reviewPrompter := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@review"}}
@@ -1569,6 +1584,44 @@ func TestTrackBranch(t *testing.T) {
 		rig := newReviewE2ERig(t)
 		if err := TrackBranch(t.Context(), rig.cfg, rig.client, "spike"); !errors.Is(err, ErrNotTrackable) {
 			t.Errorf("err = %v", err)
+		}
+	})
+}
+
+func TestInReviewBranches_Titles(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewE2ERig(t)
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "77@fix@second-branch"}, branch.StatusInProgress)
+	branchtest.Seed(t, rig.client, branch.Op{Branch: "88@fix@empty-title"}, branch.StatusInProgress)
+	for _, slug := range []string{"77", "88", "99"} {
+		reviewtest.Seed(t, rig.client, slug, reviewpkg.StatusInReview, 1, "HEAD")
+	}
+
+	rows, err := inReviewBranches(t.Context(), rig.deps())
+	if err != nil {
+		t.Fatalf("inReviewBranches: %v", err)
+	}
+	titles := map[string]string{}
+	for _, r := range rows {
+		titles[r.IssueSlug] = r.Title
+	}
+
+	for _, tc := range []struct{ name, slug, want string }{
+		{"title of the branch chain", "77", "my feature"},
+		{"title derived from the branch name", "88", "empty title"},
+		{"slug when the clone has no branch chain", "99", "99"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := titles[tc.slug]; got != tc.want {
+				t.Errorf("title of %s = %q, want %q", tc.slug, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("one row per review", func(t *testing.T) {
+		if len(rows) != 3 {
+			t.Errorf("got %d rows, want 3", len(rows))
 		}
 	})
 }

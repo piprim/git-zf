@@ -1,6 +1,7 @@
 package review
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -148,7 +149,43 @@ func reviewBranches(
 			Title:      st.Slug,
 		})
 	}
+	if len(result) == 0 {
+		return nil, nil
+	}
+
+	titles := issueTitles(ctx, deps)
+	for i := range result {
+		result[i].Title = cmp.Or(titles[result[i].IssueSlug], result[i].IssueSlug)
+	}
 	return result, nil
+}
+
+// issueTitles returns the title of every issue that has a branch chain, by
+// slug, after a best-effort fetch of the chains: the review chains hold no
+// title. An issue whose chain has none gets the one its first branch name
+// gives.
+func issueTitles(ctx context.Context, deps reviewDeps) map[string]string {
+	fetchBranchRefs(ctx, deps)
+
+	titles := map[string]string{}
+	states, warnings, err := branch.List(ctx, deps.client)
+	if err != nil {
+		fmt.Fprintf(deps.client.IO().Err, "warning: %v\n", err)
+		return titles
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(deps.client.IO().Err, w)
+	}
+
+	for i := range states {
+		st := &states[i]
+		title := st.Title
+		if title == "" && len(st.Entries) > 0 {
+			title = branch.TitleFromName(st.Entries[0].Name)
+		}
+		titles[st.Slug] = title
+	}
+	return titles
 }
 
 // reviewDecision is what recordReviewDecision resolved while recording.
