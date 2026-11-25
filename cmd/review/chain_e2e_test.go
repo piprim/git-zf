@@ -1,7 +1,6 @@
 package review
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +40,7 @@ func TestReviewRequest_ReplacesLegacyBlob(t *testing.T) {
 	rig := newReviewE2ERig(t)
 	writeLegacyBlob(t, rig.dir, "77")
 
-	err := runReviewRequest(ctx, rig.deps(), "77")
+	err := runReviewRequest(ctx, rig.deps(), "77", "77@feat@my-feature")
 
 	t.Run("request succeeds over a legacy blob", func(t *testing.T) {
 		if err != nil {
@@ -60,7 +59,7 @@ func TestReviewRequest_ReplacesLegacyBlob(t *testing.T) {
 	})
 }
 
-func TestReviewRequest_LegacyBlobKeepsReviewerCommits(t *testing.T) {
+func TestReviewRequest_LegacyBlobLeavesReviewBranchAlone(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
@@ -84,28 +83,19 @@ func TestReviewRequest_LegacyBlobKeepsReviewerCommits(t *testing.T) {
 		}
 	}
 
-	err := runReviewRequest(ctx, rig.deps(), "77")
+	err := runReviewRequest(ctx, rig.deps(), "77", "77@feat@my-feature")
 
-	t.Run("request is refused while reviewer commits are unincorporated", func(t *testing.T) {
-		if err == nil || !strings.Contains(err.Error(), "unincorporated") {
+	t.Run("the request replaces the legacy blob", func(t *testing.T) {
+		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-	})
-
-	t.Run("the message says to merge by hand, not to run review sync", func(t *testing.T) {
-		if err == nil {
-			t.Fatal("no error")
-		}
-		msg := err.Error()
-		if !strings.Contains(msg, "77@review") || !strings.Contains(msg, "by hand") || strings.Contains(msg, "git zf review sync") {
-			t.Errorf("message:\n%s", msg)
+		st, lErr := reviewpkg.Load(ctx, rig.client, "77")
+		if lErr != nil || st == nil || st.Status != reviewpkg.StatusInReview {
+			t.Fatalf("Load = %+v, %v", st, lErr)
 		}
 	})
 
-	t.Run("the legacy blob and the review branch are left alone", func(t *testing.T) {
-		if _, lErr := reviewpkg.Load(ctx, rig.client, "77"); !errors.Is(lErr, reviewpkg.ErrLegacyReview) {
-			t.Errorf("Load err = %v, want ErrLegacyReview", lErr)
-		}
+	t.Run("the leftover review branch is not deleted", func(t *testing.T) {
 		if exists, _ := rig.client.BranchExists("77@review"); !exists {
 			t.Error("77@review was deleted")
 		}
@@ -156,7 +146,7 @@ func TestReviewRequest_AfterClose_StartsNextRound(t *testing.T) {
 		t.Fatalf("append close: %v", err)
 	}
 
-	err := runReviewRequest(ctx, rig.deps(), "77")
+	err := runReviewRequest(ctx, rig.deps(), "77", "77@feat@my-feature")
 
 	t.Run("request on a closed review succeeds", func(t *testing.T) {
 		if err != nil {
@@ -248,64 +238,6 @@ func TestReviewStatus_ShowsSignatureState(t *testing.T) {
 	t.Run("the approval is listed as unsigned", func(t *testing.T) {
 		if !strings.Contains(out, "Round 1 approvals:") || !strings.Contains(out, reviewpkg.SigNone) {
 			t.Errorf("output:\n%s", out)
-		}
-	})
-}
-
-func TestReviewApprove_RecordsApprovedSHA(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-
-	t.Run("without a review branch the approval covers the submitted commit", func(t *testing.T) {
-		rig := newReviewE2ERig(t)
-		bringRigToInReview(t, rig)
-
-		if err := runReviewApprove(ctx, rig.deps(), "77"); err != nil {
-			t.Fatalf("runReviewApprove: %v", err)
-		}
-		st, err := reviewpkg.Load(ctx, rig.client, "77")
-		if err != nil || st == nil || len(st.Approvals) != 1 {
-			t.Fatalf("Load = %+v, %v", st, err)
-		}
-		if st.Approvals[0].ApprovedSHA != st.FeatureSHA || st.Approvals[0].HasCommits {
-			t.Errorf("approval = %+v, feature_sha = %s", st.Approvals[0], st.FeatureSHA)
-		}
-	})
-
-	t.Run("with reviewer commits the approval covers the review branch tip", func(t *testing.T) {
-		rig := newReviewE2ERig(t)
-		bringRigToInReview(t, rig)
-
-		if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-q", "-b", "77@review", "77@feat@my-feature"); err != nil {
-			t.Fatalf("checkout 77@review: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(rig.dir, "nit.txt"), []byte("nit\n"), 0o644); err != nil {
-			t.Fatalf("write nit.txt: %v", err)
-		}
-		for _, args := range [][]string{
-			{"add", "nit.txt"},
-			{"commit", "-q", "-m", "fix: reviewer nit"},
-			{"checkout", "-q", "main"},
-		} {
-			if err := rig.client.RunGitAt(ctx, rig.dir, args...); err != nil {
-				t.Fatalf("git %v: %v", args, err)
-			}
-		}
-		tip, err := rig.client.ResolveRef("refs/heads/77@review")
-		if err != nil {
-			t.Fatalf("resolve 77@review: %v", err)
-		}
-
-		if err := runReviewApprove(ctx, rig.deps(), "77"); err != nil {
-			t.Fatalf("runReviewApprove: %v", err)
-		}
-		st, err := reviewpkg.Load(ctx, rig.client, "77")
-		if err != nil || st == nil || len(st.Approvals) != 1 {
-			t.Fatalf("Load = %+v, %v", st, err)
-		}
-		if st.Approvals[0].ApprovedSHA != tip.String() || !st.Approvals[0].HasCommits {
-			t.Errorf("approval = %+v, review tip = %s", st.Approvals[0], tip)
 		}
 	})
 }
@@ -423,24 +355,6 @@ func TestReviewRequest_ApprovedReviewWithRequireSigned(t *testing.T) {
 			t.Errorf("state = %+v", st)
 		}
 	})
-
-	t.Run("flag off: the approved review is not offered", func(t *testing.T) {
-		rig, p := approvedRig(t)
-
-		if err := runReviewRequestInteractive(ctx, rig.deps(), p); err != nil {
-			t.Fatalf("runReviewRequestInteractive: %v", err)
-		}
-		if !strings.Contains(rig.stdout.String(), "No in-progress branches") {
-			t.Errorf("output:\n%s", rig.stdout)
-		}
-		st, err := reviewpkg.Load(ctx, rig.client, "77")
-		if err != nil || st == nil {
-			t.Fatalf("Load = %v, %v", st, err)
-		}
-		if st.Status != reviewpkg.StatusApproved || st.Round != 1 {
-			t.Errorf("state = %+v", st)
-		}
-	})
 }
 
 func TestReviewReject_RequireSignedDoesNotSign(t *testing.T) {
@@ -497,7 +411,7 @@ func TestReviewRequest_ReplacesLegacyBlobOnRemote(t *testing.T) {
 		t.Fatalf("push legacy blob: %v", err)
 	}
 
-	reqErr := runReviewRequest(ctx, rig.deps(), "77")
+	reqErr := runReviewRequest(ctx, rig.deps(), "77", "77@feat@my-feature")
 
 	t.Run("request succeeds", func(t *testing.T) {
 		if reqErr != nil {
@@ -581,7 +495,7 @@ func TestReviewRequest_LegacyRemoteDeleteRefusedHint(t *testing.T) {
 		t.Fatalf("write hook: %v", err)
 	}
 
-	reqErr := runReviewRequest(ctx, rig.deps(), "77")
+	reqErr := runReviewRequest(ctx, rig.deps(), "77", "77@feat@my-feature")
 
 	t.Run("request succeeds locally", func(t *testing.T) {
 		if reqErr != nil {
@@ -654,28 +568,6 @@ func TestReviewStart_WarnsWhenReviewerCannotBeRecorded(t *testing.T) {
 	})
 }
 
-func TestTrack_Reviewer_ClosedReviewIsNoOpenReview(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-	rig := newReviewE2ERig(t)
-	reviewtest.Seed(t, rig.client, "77", reviewpkg.StatusApproved, 1, "f1")
-	if err := reviewpkg.Append(ctx, rig.client, "77", &reviewpkg.Op{Type: reviewpkg.OpClose}, false); err != nil {
-		t.Fatalf("append close: %v", err)
-	}
-	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-q", "-b", "77@review"); err != nil {
-		t.Fatalf("checkout review branch: %v", err)
-	}
-
-	err := runTrack(ctx, rig.deps())
-
-	t.Run("track reports no open review", func(t *testing.T) {
-		if err == nil || !strings.Contains(err.Error(), "no open review") {
-			t.Errorf("err = %v", err)
-		}
-	})
-}
-
 // roundLine returns the "Round <n>" line of a `review status` history.
 func roundLine(out string, round string) string {
 	for line := range strings.SplitSeq(out, "\n") {
@@ -698,7 +590,7 @@ func TestReviewStatus_PrintsEveryRoundFromTheChain(t *testing.T) {
 	if _, err := runReviewReject(ctx, rig.deps(), "77", "fix the tests"); err != nil {
 		t.Fatalf("runReviewReject: %v", err)
 	}
-	if err := runReviewRequest(ctx, rig.deps(), "77"); err != nil {
+	if err := runReviewRequest(ctx, rig.deps(), "77", "77@feat@my-feature"); err != nil {
 		t.Fatalf("runReviewRequest round 2: %v", err)
 	}
 

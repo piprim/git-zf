@@ -75,7 +75,7 @@ func TestRunReviewSync_RefusesWhenTheParentRefIsALegacyBlob(t *testing.T) {
 	branchtest.Amend(t, rig.client, branch.Op{Branch: "77@feat@my-feature", Parent: "7"})
 	writeLegacyBranchBlob(t, rig.dir, "7", `{"issue_slug":"7","branch_name":"7@feat@parent"}`)
 
-	err := runReviewSync(t.Context(), rig.deps(), "77")
+	err := runReviewSync(t.Context(), rig.deps(), "77", "77@feat@my-feature")
 
 	t.Run("sync is refused with ErrLegacyBranch", func(t *testing.T) {
 		if !errors.Is(err, branch.ErrLegacyBranch) {

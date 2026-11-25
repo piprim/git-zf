@@ -59,7 +59,7 @@ git zf [flags]
 * [git zf commit](git_zf_commit.md)	 - Record changes to the repository
 * [git zf completion](git_zf_completion.md)	 - Generate completion script
 * [git zf config](git_zf_config.md)	 - Manage git zf configuration
-* [git zf init](git_zf_init.md)	 - Initialize git zf in the current repository (installs the pre-push and pre-commit hooks)
+* [git zf init](git_zf_init.md)	 - Initialize git zf in the current repository (fetch refspecs for refs/zf/)
 * [git zf install](git_zf_install.md)	 - Install this tool to git-core as zf
 * [git zf issue](git_zf_issue.md)	 - Manage issues
 * [git zf log](git_zf_log.md)	 - Browse the commit graph; enter shows a commit

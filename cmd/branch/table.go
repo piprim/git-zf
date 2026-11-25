@@ -22,6 +22,7 @@ const (
 	actionCheckout   branchAction = "checkout"
 	actionIssueClose branchAction = "issue close (merge)"
 	actionMerge      branchAction = "merge into current"
+	actionMergeInto  branchAction = "merge into…"
 	actionPR         branchAction = "pull request"
 	actionAbandon    branchAction = "abandon (record closed, no merge)"
 	actionTrack      branchAction = "track"
@@ -32,7 +33,8 @@ const (
 // menuEntriesFor is the menu of a row: NoBranch (a record alone: nothing but
 // abandon applies), then RemoteOnly, then Current, then
 // the record. A plain branch named like an issue branch gets no merge entry
-// (branch merge refuses issue-looking names).
+// (branch merge refuses issue-looking names). The current branch cannot be
+// merged into itself: its merge entry asks for the target instead.
 func menuEntriesFor(row *branch.Row) []branchAction {
 	if row.NoBranch {
 		return []branchAction{actionAbandon}
@@ -59,7 +61,10 @@ func menuEntriesFor(row *branch.Row) []branchAction {
 		entries = []branchAction{actionCheckout, actionLog, actionDelete}
 	}
 	if row.Current {
-		entries = without(entries, actionCheckout, actionMerge, actionDelete)
+		if i := slices.Index(entries, actionMerge); i >= 0 {
+			entries[i] = actionMergeInto
+		}
+		entries = without(entries, actionCheckout, actionDelete)
 	}
 
 	return entries
@@ -104,7 +109,8 @@ type tableDeps struct {
 // offeredEntries is menuEntriesFor without the entries whose func is nil.
 func offeredEntries(d *tableDeps, row *branch.Row) []branchAction {
 	wired := map[branchAction]bool{
-		actionMerge: d.merge != nil, actionTrack: d.track != nil, actionIssueClose: d.closeIssue != nil,
+		actionMerge: d.merge != nil, actionMergeInto: d.merge != nil,
+		actionTrack: d.track != nil, actionIssueClose: d.closeIssue != nil,
 		actionLog: d.log != nil, actionPR: d.pr != nil,
 		actionCheckout: true, actionAbandon: true, actionDelete: true,
 	}
@@ -129,8 +135,19 @@ var keyActions = map[string]branchAction{
 	"D": actionDelete,
 }
 
-func offersKey(d *tableDeps, row *branch.Row, key string) bool {
+// keyAction is the action of key on row: keyActions, but m on the current
+// branch asks for the target.
+func keyAction(row *branch.Row, key string) (branchAction, bool) {
 	a, ok := keyActions[key]
+	if a == actionMerge && row.Current {
+		a = actionMergeInto
+	}
+
+	return a, ok
+}
+
+func offersKey(d *tableDeps, row *branch.Row, key string) bool {
+	a, ok := keyAction(row, key)
 	if !ok {
 		return false
 	}
@@ -145,11 +162,13 @@ func runKey(
 		return true, fmt.Errorf("key %q is not offered for branch %q", key, row.BranchName)
 	}
 
-	return runBranchAction(ctx, d, p, keyActions[key], row)
+	a, _ := keyAction(row, key)
+
+	return runBranchAction(ctx, d, p, a, row)
 }
 
-// runBranchTable loops table → menu → action until the table quits or an
-// action that moves HEAD runs. stdout=true prints the rows (no TTY).
+// runBranchTable loops table → menu → action until the table quits or a
+// checkout, an issue close or a new branch runs. stdout=true prints the rows (no TTY).
 func runBranchTable(
 	ctx context.Context, d *tableDeps, p BranchMenuPrompter, initial *tui.BranchTableOptions, stdout bool,
 ) error {
@@ -188,6 +207,7 @@ func runBranchTable(
 		default:
 			reopen, err = runPick(ctx, d, pick)
 		}
+		tui.DiscardInput() // keys typed during the action are not for the table, nor for the pause
 		if !afterAction(reopen, err, d.stderr) {
 			return nil
 		}
@@ -212,7 +232,7 @@ func runMenu(ctx context.Context, d *tableDeps, p BranchMenuPrompter, row *branc
 
 // afterAction decides whether the table reopens after an action: an aborted
 // form (esc) reopens quietly, an error is printed and reopens, otherwise the
-// action says (checkout and issue close moved HEAD: no reopen).
+// action says (checkout and issue close do not reopen).
 func afterAction(reopen bool, err error, stderr io.Writer) bool {
 	switch {
 	case errors.Is(err, huh.ErrUserAborted):
@@ -256,7 +276,8 @@ func runPick(ctx context.Context, d *tableDeps, pick tui.BranchPick) (reopen boo
 }
 
 // runBranchAction runs one entry; reopen is false for checkout and issue
-// close, which leave the user on another branch.
+// close alone. merge into… leaves the user on another branch too, and
+// reopens: the table shows where the merge left them.
 func runBranchAction(
 	ctx context.Context, d *tableDeps, p BranchMenuPrompter, a branchAction, row *branch.Row,
 ) (reopen bool, err error) {
@@ -267,6 +288,8 @@ func runBranchAction(
 		return false, d.closeIssue(ctx, row.IssueSlug, row.BranchName)
 	case actionMerge:
 		return true, d.merge(ctx, SourceBranch{Name: row.BranchName, RemoteOnly: row.RemoteOnly})
+	case actionMergeInto:
+		return true, mergeInto(ctx, d, p, row.BranchName)
 	case actionPR:
 		return true, d.pr(ctx, row.BranchName)
 	case actionAbandon:
@@ -287,6 +310,45 @@ func runBranchAction(
 	}
 
 	return true, fmt.Errorf("unknown action %q", a)
+}
+
+// mergeInto merges source, the current branch, into a branch the user picks:
+// that branch is checked out, then the merge runs as on any other row. The
+// user is left on the target, whatever the merge does.
+func mergeInto(ctx context.Context, d *tableDeps, p BranchMenuPrompter, source string) error {
+	locals, err := d.client.LocalBranchNames()
+	if err != nil {
+		return fmt.Errorf("list local branches: %w", err)
+	}
+	base := ""
+	if d.cfg != nil {
+		base = d.cfg.Branch.Base
+	}
+	if base == "" { // the default config: auto-detect
+		base, _ = d.client.DefaultBaseBranch() // none found: no default, the list is still offered
+	}
+	var targets []string
+	for _, n := range locals {
+		switch n {
+		case source:
+		case base:
+			targets = slices.Insert(targets, 0, n) // the usual target first
+		default:
+			targets = append(targets, n)
+		}
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("no other local branch to merge %q into", source)
+	}
+	target, err := p.PickTarget(ctx, source, targets)
+	if err != nil {
+		return err //nolint:wrapcheck // huh.ErrUserAborted must stay detectable
+	}
+	if err := checkoutBranch(ctx, d.client, target); err != nil {
+		return err
+	}
+
+	return d.merge(ctx, SourceBranch{Name: source})
 }
 
 // checkoutBranch checks name out, a remote-only name included (git creates

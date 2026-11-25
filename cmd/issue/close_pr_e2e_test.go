@@ -3,15 +3,13 @@ package issue
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/piprim/git-zf/branch"
+	"github.com/piprim/git-zf/cmd/issueflow"
 	commitpkg "github.com/piprim/git-zf/commit"
 	reviewpkg "github.com/piprim/git-zf/review"
-	"github.com/piprim/git-zf/review/reviewtest"
 	"github.com/piprim/git-zf/tracker"
 	"github.com/piprim/git-zf/tracker/fake"
 )
@@ -134,19 +132,25 @@ func TestClose_PullRequest_UnpushedRefused(t *testing.T) {
 	})
 }
 
-func TestClose_PullRequest_BehindRefused(t *testing.T) {
+func TestClose_PullRequest_BehindAsks(t *testing.T) {
 	rig := newPrCloseRig(t)
 	mustRunGitAt(t, rig.dir, "switch", "ABC-1@feat@add-thing")
 	mustRunGitAt(t, rig.dir, "commit", "--allow-empty", "-m", "feat: more")
 	mustRunGitAt(t, rig.dir, "push", "-q", "origin", "ABC-1@feat@add-thing")
 	mustRunGitAt(t, rig.dir, "reset", "-q", "--hard", "HEAD~1")
 	mustRunGitAt(t, rig.dir, "switch", "main")
+	p := prPrompter(rig, commitpkg.MergeStrategySquash)
 
-	err := runClose(t.Context(), rig.deps(), prPrompter(rig, commitpkg.MergeStrategySquash))
+	err := runClose(t.Context(), rig.deps(), p)
 
-	t.Run("refused with a fetch hint", func(t *testing.T) {
-		if err == nil || !strings.Contains(err.Error(), "behind") || len(rig.tracker.RecordedMerges) != 0 {
-			t.Errorf("err %v, merges %+v", err, rig.tracker.RecordedMerges)
+	t.Run("the close asks about the remote and stops", func(t *testing.T) {
+		if !errors.Is(err, ErrRemoteMoved) || len(p.RemoteOffers) != 1 {
+			t.Errorf("err %v, offers %+v", err, p.RemoteOffers)
+		}
+	})
+	t.Run("before any forge call", func(t *testing.T) {
+		if len(rig.tracker.RecordedMerges) != 0 {
+			t.Errorf("merges %+v", rig.tracker.RecordedMerges)
 		}
 	})
 }
@@ -259,106 +263,43 @@ func TestClose_PullRequest_NoCapabilityMergesLocally(t *testing.T) {
 	})
 }
 
-// A branch reviewed with git-zf gets the reviewer's commits merged in by the
-// review preflight, which puts it ahead of the remote. With a pull request,
-// close pushes them itself before asking the forge: the forge must merge
-// the reviewed branch, and a "push it first" here would cost a second run.
-func TestClose_PullRequest_ReviewedBranchIsPushedFirst(t *testing.T) {
+// A reviewed branch whose tip is the approved commit is merged by the forge,
+// and its review is closed.
+func TestClose_PullRequest_ApprovedTipMergedByForge(t *testing.T) {
 	rig := newPrCloseRig(t)
-	// The reviewer fixed the branch on ABC-1@review and pushed it.
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "-b", "ABC-1@review", "ABC-1@feat@add-thing")
-	if err := os.WriteFile(filepath.Join(rig.dir, "feature.txt"), []byte("feature\nreviewer fix\n"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	mustRunGitAt(t, rig.dir, "add", "feature.txt")
-	mustRunGitAt(t, rig.dir, "commit", "-q", "-m", "fix: reviewer fix")
-	mustRunGitAt(t, rig.dir, "push", "-q", "origin", "ABC-1@review")
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "main")
-	featureSHA, _ := rig.client.ResolveRef("refs/heads/ABC-1@feat@add-thing")
-	reviewtest.Seed(t, rig.client, "ABC-1", reviewpkg.StatusApproved, 1, featureSHA.String())
-	p := prPrompter(rig, commitpkg.MergeStrategyClassic)
-	p.DeleteBranch = false // keep the remote branch to inspect it
+	forgeMerged(t, rig)
+	seedApproval(t, rig, "ABC-1", featureTip(t, rig), false)
 
-	err := runClose(t.Context(), rig.deps(), p)
+	err := runClose(t.Context(), rig.deps(), prPrompter(rig, commitpkg.MergeStrategySquash))
 
 	t.Run("no error", func(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runClose: %v", err)
 		}
 	})
-	t.Run("the reviewer's commit reached the remote branch before the forge merged", func(t *testing.T) {
-		mustRunGitAt(t, rig.dir, "fetch", "-q", "origin")
-		if got := rig.headSubject(t, "origin/ABC-1@feat@add-thing"); got != "fix: reviewer fix" {
-			t.Errorf("origin feature head = %q", got)
-		}
+	t.Run("the forge merged once", func(t *testing.T) {
 		if len(rig.tracker.RecordedMerges) != 1 {
 			t.Errorf("merges %+v", rig.tracker.RecordedMerges)
 		}
 	})
-}
-
-// A close declined at the confirm must leave the remote as it was: the push of
-// the reviewer commits is deferred to the engine, right before the merge.
-func TestClose_PullRequest_ReviewedBranchDeclinedLeavesOriginUntouched(t *testing.T) {
-	rig := newPrCloseRig(t)
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "-b", "ABC-1@review", "ABC-1@feat@add-thing")
-	if err := os.WriteFile(filepath.Join(rig.dir, "feature.txt"), []byte("feature\nreviewer fix\n"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	mustRunGitAt(t, rig.dir, "add", "feature.txt")
-	mustRunGitAt(t, rig.dir, "commit", "-q", "-m", "fix: reviewer fix")
-	mustRunGitAt(t, rig.dir, "push", "-q", "origin", "ABC-1@review")
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "main")
-	featureSHA, _ := rig.client.ResolveRef("refs/heads/ABC-1@feat@add-thing")
-	reviewtest.Seed(t, rig.client, "ABC-1", reviewpkg.StatusApproved, 1, featureSHA.String())
-	p := prPrompter(rig, commitpkg.MergeStrategyClassic)
-	p.Confirm = false
-
-	err := runClose(t.Context(), rig.deps(), p)
-
-	t.Run("no error", func(t *testing.T) {
-		if err != nil {
-			t.Fatalf("runClose: %v", err)
-		}
-	})
-	t.Run("the close says it aborted", func(t *testing.T) {
-		if !strings.Contains(rig.stdout.String(), "Aborted.") {
-			t.Errorf("stdout %q", rig.stdout.String())
-		}
-	})
-	t.Run("nothing merged", func(t *testing.T) {
-		if len(rig.tracker.RecordedMerges) != 0 {
-			t.Errorf("merges %+v", rig.tracker.RecordedMerges)
-		}
-	})
-	t.Run("the remote branch was not pushed", func(t *testing.T) {
-		mustRunGitAt(t, rig.dir, "fetch", "-q", "origin")
-		if got := rig.headSubject(t, "origin/ABC-1@feat@add-thing"); got != "feat: add thing" {
-			t.Errorf("origin feature head = %q", got)
+	t.Run("the review is marked closed", func(t *testing.T) {
+		if st, _ := reviewpkg.Load(t.Context(), rig.client, "ABC-1"); st == nil || !st.Closed {
+			t.Errorf("review = %+v", st)
 		}
 	})
 }
 
-func TestClose_PullRequest_ReviewedBranchWithUnpushedCommitRefused(t *testing.T) {
+// A commit made after the approval is refused by the review, before the forge
+// is asked anything.
+func TestClose_PullRequest_ApprovedWithUnpushedCommitRefused(t *testing.T) {
 	rig := newPrCloseRig(t)
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "-b", "ABC-1@review", "ABC-1@feat@add-thing")
-	if err := os.WriteFile(filepath.Join(rig.dir, "feature.txt"), []byte("feature\nreviewer fix\n"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	mustRunGitAt(t, rig.dir, "add", "feature.txt")
-	mustRunGitAt(t, rig.dir, "commit", "-q", "-m", "fix: reviewer fix")
-	mustRunGitAt(t, rig.dir, "push", "-q", "origin", "ABC-1@review")
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "main")
-	featureSHA, _ := rig.client.ResolveRef("refs/heads/ABC-1@feat@add-thing")
-	reviewtest.Seed(t, rig.client, "ABC-1", reviewpkg.StatusApproved, 1, featureSHA.String())
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "ABC-1@feat@add-thing")
-	mustRunGitAt(t, rig.dir, "commit", "--allow-empty", "-m", "feat: more")
-	mustRunGitAt(t, rig.dir, "checkout", "-q", "main")
+	seedApproval(t, rig, "ABC-1", featureTip(t, rig), false)
+	commitLocally(t, rig, "late.txt", "late\n")
 
 	err := runClose(t.Context(), rig.deps(), prPrompter(rig, commitpkg.MergeStrategyClassic))
 
-	t.Run("refused as unpushed", func(t *testing.T) {
-		if err == nil || !strings.Contains(err.Error(), "unpushed") {
+	t.Run("refused by the rule at close", func(t *testing.T) {
+		if !errors.Is(err, issueflow.ErrCommitsAfterApproval) {
 			t.Errorf("err = %v", err)
 		}
 	})

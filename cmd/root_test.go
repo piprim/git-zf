@@ -149,7 +149,6 @@ func TestGetRootCmd_help(t *testing.T) {
 			{[]string{"branch", "new"}, "files an issue in the repository"},
 			{[]string{"branch", "new"}, "never asks the tracker"},
 			{[]string{"commit"}, "pre-filled"},
-			{[]string{"commit"}, "review"},
 		} {
 			if got := find(tc.path...).Long; !strings.Contains(got, tc.want) {
 				t.Errorf("%v: Long lacks %q", tc.path, tc.want)

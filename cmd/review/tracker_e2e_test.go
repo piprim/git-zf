@@ -125,7 +125,7 @@ func TestReviewTracker_Approve_TrackerBornIssue(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewApproveInteractive(ctx, rig.deps(), p); err != nil {
@@ -147,7 +147,7 @@ func TestReviewTracker_Reject_TrackerBornIssue(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "", true); err != nil {
@@ -242,7 +242,7 @@ func TestReviewTracker_Reject_PostsReasonComment(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "Missing tests.", false); err != nil {
@@ -277,7 +277,7 @@ func TestReviewTracker_Reject_NoReasonNoComment(t *testing.T) {
 	bringToInReview(t, ctx, rig, fakeT)
 
 	p := &scriptedReviewPrompter{
-		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@review"},
+		Branch:        &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		TrackerStatus: "In Progress",
 	}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "", false); err != nil {
@@ -300,7 +300,7 @@ func TestReviewTracker_Reject_ManualIssueNoComment(t *testing.T) {
 	seedBranchRef(t, rig, "77", "77@feat@my-feature", "")
 	bringToInReview(t, ctx, rig, fakeT)
 
-	p := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@review"}}
+	p := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"}}
 	if err := runReviewRejectInteractive(ctx, rig.deps(), p, "Missing tests.", false); err != nil {
 		t.Fatalf("runReviewRejectInteractive: %v", err)
 	}

@@ -149,11 +149,11 @@ automatically to clear `MERGE_HEAD` / `MERGE_MSG` and restore the working tree.
 The operator is left on base in a clean state. Classic always runs in the main
 checkout.
 
-## Reviewer commits
+## The review
 
-When the issue has a decided review (`approved` or `changes_requested`) and
-`<ID>@review` carries commits not yet in the feature branch, `issue close`
-incorporates them before the strategy runs: a fast-forward when the feature
-branch has not moved, otherwise an automatic merge. If that merge conflicts the
-close refuses with a hint to run `git zf review sync`, resolve, and retry —
-close never leaves a merge in progress.
+The run of `issue close` that merges never changes the feature branch before
+the strategy runs. A
+reviewed branch is merged only when its local tip is the approved commit;
+any other tip is refused before the branch, the index or the working tree
+is touched. A rebase or a squash done by the strategy itself comes after
+that check. See [the review at close](../workflows/close-an-issue.md#the-review-at-close).

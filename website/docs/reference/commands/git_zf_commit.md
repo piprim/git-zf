@@ -18,11 +18,6 @@ On an issue branch the form is pre-filled from the branch name: the type,
 the issue ID as the scope, and the footer from ref-format. Every field stays
 editable.
 
-On a feature branch whose review left reviewer commits on &lt;ID&gt;@review
-that are not yet in the branch, the command offers to merge them in before
-opening the form; declining aborts with a hint to run git zf review sync.
---no-verify skips the guard, as it does the pre-commit hook.
-
 A push is proposed afterwards (--push / --no-push answer it), and after a
 push of a feature branch the forge may be offered a pull request.
 

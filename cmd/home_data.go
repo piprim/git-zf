@@ -105,25 +105,19 @@ func gatherHome(ctx context.Context, c *git.Client, prog string) (data tui.HomeD
 }
 
 // branchIssue returns the issue slug of the branch called head and the branch
-// chain of that slug (nil when there is none): the slug before @review on a
-// reviewer's branch, the chain that tracks head otherwise.
+// chain that tracks it; "" and nil for an untracked branch, whose name is no
+// slug.
 func branchIssue(head string, states []branchpkg.State) (slug string, state *branchpkg.State) {
 	if head == "" {
 		return "", nil
 	}
-	reviewSlug, isReview := branchpkg.CutReviewSuffix(head)
 	for i := range states {
-		st := &states[i]
-		if (isReview && st.Slug == reviewSlug) || (!isReview && st.Entry(head) != nil) {
+		if st := &states[i]; st.Entry(head) != nil {
 			return st.Slug, st
 		}
 	}
 
-	if !isReview {
-		return "", nil // an untracked branch: its name is no slug
-	}
-
-	return reviewSlug, nil
+	return "", nil
 }
 
 // issueLine is the header's "<id> <title>" of the issue behind slug: the

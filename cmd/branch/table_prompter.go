@@ -13,6 +13,9 @@ import (
 type BranchMenuPrompter interface {
 	// PickAction returns the picked entry, huh.ErrUserAborted on esc.
 	PickAction(ctx context.Context, title string, entries []branchAction) (branchAction, error)
+	// PickTarget returns the branch source, the current one, is merged
+	// into; huh.ErrUserAborted on esc.
+	PickTarget(ctx context.Context, source string, targets []string) (string, error)
 	ConfirmForceDelete(ctx context.Context, name string) (bool, error)
 	// ConfirmRemoveWorktree asks before the worktree holding a branch to
 	// delete is removed: git checks its modified and untracked files, not
@@ -36,6 +39,19 @@ func (huhBranchMenuPrompter) PickAction(ctx context.Context, title string, entri
 	}
 
 	return branchAction(picked), nil
+}
+
+func (huhBranchMenuPrompter) PickTarget(ctx context.Context, source string, targets []string) (string, error) {
+	opts := make([]tui.MenuOption, len(targets))
+	for i, n := range targets {
+		opts[i] = tui.MenuOption{Label: n, Value: n}
+	}
+	var picked string
+	if err := tui.Form(tui.MenuSelect("Merge "+source+" into", opts, &picked)).RunWithContext(ctx); err != nil {
+		return "", err //nolint:wrapcheck // huh.ErrUserAborted must stay detectable
+	}
+
+	return picked, nil
 }
 
 func (huhBranchMenuPrompter) ConfirmForceDelete(ctx context.Context, name string) (bool, error) {

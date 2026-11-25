@@ -44,62 +44,99 @@ func runInit(t *testing.T, dir string) string {
 	return out.String()
 }
 
-func TestInit_InstallsBothHooks(t *testing.T) {
-	dir := newInitRepo(t)
-	out := runInit(t, dir)
+// writeHook writes a hook file in dir and returns its path.
+func writeHook(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil { //nolint:gosec
+		t.Fatal(err)
+	}
 
-	t.Run("pre-push hook written", func(t *testing.T) {
-		if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "pre-push")); err != nil {
-			t.Fatalf("pre-push missing: %v", err)
-		}
-	})
-	t.Run("pre-commit hook written and calls guard-commit", func(t *testing.T) {
-		b, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-commit"))
-		if err != nil {
-			t.Fatalf("pre-commit missing: %v", err)
-		}
-		if !strings.Contains(string(b), "git zf review guard-commit") {
-			t.Fatalf("pre-commit does not call guard-commit:\n%s", b)
-		}
-	})
-	t.Run("reports both hooks", func(t *testing.T) {
-		if !strings.Contains(out, "pre-push") || !strings.Contains(out, "pre-commit") {
-			t.Fatalf("output missing hook names:\n%s", out)
-		}
-	})
+	return path
 }
 
-func TestInit_Idempotent(t *testing.T) {
+func TestInit_InstallsNoHook(t *testing.T) {
 	dir := newInitRepo(t)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	gitOut(t, dir, "init", "-q", "--bare", origin)
+	gitOut(t, dir, "remote", "add", "origin", origin)
+
 	runInit(t, dir)
-	out := runInit(t, dir)
-	t.Run("second run reports up to date", func(t *testing.T) {
-		if !strings.Contains(out, "already up to date") {
-			t.Fatalf("want up-to-date message, got:\n%s", out)
+
+	for _, name := range []string{"pre-push", "pre-commit", "pre-rebase"} {
+		t.Run("no "+name+" hook is written", func(t *testing.T) {
+			if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", name)); err == nil {
+				t.Fatalf("%s was installed", name)
+			}
+		})
+	}
+	t.Run("the fetch refspecs are configured", func(t *testing.T) {
+		specs := gitOut(t, dir, "config", "--get-all", "remote.origin.fetch")
+		if !strings.Contains(specs, "+refs/zf/reviews/*:refs/remotes/origin/zf/reviews/*") {
+			t.Fatalf("review refspec missing:\n%s", specs)
 		}
 	})
 }
 
-func TestInit_PreservesForeignPreCommit(t *testing.T) {
+func TestInit_DeletesRetiredHooks(t *testing.T) {
 	dir := newInitRepo(t)
-	hookPath := filepath.Join(dir, ".git", "hooks", "pre-commit")
-	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
-		t.Fatal(err)
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	for _, h := range retiredHooks {
+		writeHook(t, hooksDir, h.name, h.script)
 	}
-	foreign := "#!/bin/sh\necho custom\n"
-	if err := os.WriteFile(hookPath, []byte(foreign), 0o755); err != nil {
-		t.Fatal(err)
-	}
+
 	out := runInit(t, dir)
-	t.Run("foreign hook untouched", func(t *testing.T) {
-		b, _ := os.ReadFile(hookPath)
-		if string(b) != foreign {
-			t.Fatalf("foreign hook was overwritten:\n%s", b)
+
+	for _, h := range retiredHooks {
+		t.Run(h.name+" is deleted", func(t *testing.T) {
+			if _, err := os.Stat(filepath.Join(hooksDir, h.name)); err == nil {
+				t.Fatalf("%s survives", h.name)
+			}
+		})
+		t.Run(h.name+" is named on stdout", func(t *testing.T) {
+			if !strings.Contains(out, filepath.Join(hooksDir, h.name)) {
+				t.Fatalf("output does not name %s:\n%s", h.name, out)
+			}
+		})
+	}
+	t.Run("a second run says nothing about hooks", func(t *testing.T) {
+		if again := runInit(t, dir); strings.Contains(again, "hook") {
+			t.Fatalf("unexpected hook message:\n%s", again)
 		}
 	})
-	t.Run("warning with snippet printed", func(t *testing.T) {
-		if !strings.Contains(out, "WARNING") || !strings.Contains(out, "guard-commit") {
-			t.Fatalf("want warning + snippet, got:\n%s", out)
+}
+
+func TestInit_KeepsForeignHook(t *testing.T) {
+	t.Run("a hook that never called git zf is untouched and not mentioned", func(t *testing.T) {
+		dir := newInitRepo(t)
+		foreign := "#!/bin/sh\necho custom\n"
+		hookPath := writeHook(t, filepath.Join(dir, ".git", "hooks"), "pre-commit", foreign)
+
+		out := runInit(t, dir)
+
+		if b, _ := os.ReadFile(hookPath); string(b) != foreign {
+			t.Fatalf("foreign hook was changed:\n%s", b)
+		}
+		if strings.Contains(out, "pre-commit") {
+			t.Fatalf("unexpected message:\n%s", out)
+		}
+	})
+
+	t.Run("a hook that calls the guard is untouched, the call can be removed", func(t *testing.T) {
+		dir := newInitRepo(t)
+		foreign := "#!/bin/sh\necho custom\ngit zf review guard-commit || exit 1\n"
+		hookPath := writeHook(t, filepath.Join(dir, ".git", "hooks"), "pre-commit", foreign)
+
+		out := runInit(t, dir)
+
+		if b, _ := os.ReadFile(hookPath); string(b) != foreign {
+			t.Fatalf("foreign hook was changed:\n%s", b)
+		}
+		if !strings.Contains(out, hookPath) || !strings.Contains(out, "can be removed") {
+			t.Fatalf("want a note that the call can be removed, got:\n%s", out)
 		}
 	})
 }
@@ -228,33 +265,24 @@ func TestInit_MentionsTheUnusedDatabase(t *testing.T) {
 	})
 }
 
-func TestInit_LinkedWorktree_InstallsHooksInCommonDir(t *testing.T) {
+func TestInit_LinkedWorktree_DeletesRetiredHooksInCommonDir(t *testing.T) {
 	dir := newInitRepo(t)
 	wt := filepath.Join(t.TempDir(), "wt")
 	gitOut(t, dir, "commit", "-q", "--allow-empty", "-m", "root")
 	gitOut(t, dir, "worktree", "add", "-q", "-b", "feature", wt)
+	for _, h := range retiredHooks {
+		writeHook(t, filepath.Join(dir, ".git", "hooks"), h.name, h.script)
+	}
 
 	out := runInit(t, wt)
 
-	for _, name := range []string{"pre-push", "pre-commit"} {
-		t.Run(name+" written where git reads hooks", func(t *testing.T) {
-			if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", name)); err != nil {
-				t.Fatalf("%s missing from the common git dir: %v\n%s", name, err, out)
-			}
-		})
-		t.Run(name+" not written under the per-worktree git dir", func(t *testing.T) {
-			stray := filepath.Join(dir, ".git", "worktrees", "wt", "hooks", name)
-			if _, err := os.Stat(stray); err == nil {
-				t.Fatalf("%s written to %s, which git never reads", name, stray)
+	for _, h := range retiredHooks {
+		t.Run(h.name+" deleted from the common git dir", func(t *testing.T) {
+			if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", h.name)); err == nil {
+				t.Fatalf("%s survives in the common git dir\n%s", h.name, out)
 			}
 		})
 	}
-	t.Run("pre-commit sits in the hooks path git resolves for the worktree", func(t *testing.T) {
-		hooksDir := gitOut(t, wt, "rev-parse", "--path-format=absolute", "--git-path", "hooks")
-		if _, err := os.Stat(filepath.Join(hooksDir, "pre-commit")); err != nil {
-			t.Fatalf("pre-commit not in git's hooks path %s: %v", hooksDir, err)
-		}
-	})
 }
 
 func TestInit_HooksPath(t *testing.T) {
@@ -296,19 +324,24 @@ func TestInit_HooksPath(t *testing.T) {
 				gitOut(t, repo, "worktree", "add", "-q", "-b", "feature", wt)
 				from = wt
 			}
+			// The same script in .git/hooks, which git no longer reads: it
+			// is not init's to delete.
+			for _, h := range retiredHooks {
+				writeHook(t, tc.wantDir(repo, wt), h.name, h.script)
+				writeHook(t, filepath.Join(repo, ".git", "hooks"), h.name, h.script)
+			}
 
 			out := runInit(t, from)
 
-			for _, name := range []string{"pre-push", "pre-commit"} {
-				t.Run(name+" written in core.hooksPath", func(t *testing.T) {
-					if _, err := os.Stat(filepath.Join(tc.wantDir(repo, wt), name)); err != nil {
-						t.Fatalf("%s missing from core.hooksPath: %v\n%s", name, err, out)
+			for _, h := range retiredHooks {
+				t.Run(h.name+" deleted from core.hooksPath", func(t *testing.T) {
+					if _, err := os.Stat(filepath.Join(tc.wantDir(repo, wt), h.name)); err == nil {
+						t.Fatalf("%s survives in core.hooksPath\n%s", h.name, out)
 					}
 				})
-				t.Run(name+" not written in .git/hooks, which git no longer reads", func(t *testing.T) {
-					stray := filepath.Join(repo, ".git", "hooks", name)
-					if _, err := os.Stat(stray); err == nil {
-						t.Fatalf("%s written to %s", name, stray)
+				t.Run(h.name+" left in .git/hooks, which git no longer reads", func(t *testing.T) {
+					if _, err := os.Stat(filepath.Join(repo, ".git", "hooks", h.name)); err != nil {
+						t.Fatalf("%s deleted outside the hooks path: %v", h.name, err)
 					}
 				})
 			}

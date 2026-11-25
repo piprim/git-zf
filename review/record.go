@@ -4,8 +4,10 @@ package review
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
+	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/internal/chain"
 	"github.com/piprim/git-zf/internal/text"
 )
@@ -41,6 +43,7 @@ type Op struct {
 	Author string `json:"author,omitempty"`
 
 	FeatureSHA  string `json:"feature_sha,omitempty"`  // request
+	Branch      string `json:"branch,omitempty"`       // request: the branch submitted; absent in older ops
 	ApprovedSHA string `json:"approved_sha,omitempty"` // approve
 	HasCommits  bool   `json:"has_commits,omitempty"`  // approve, reject
 	Comment     string `json:"comment,omitempty"`      // reject
@@ -62,6 +65,7 @@ func DecodeOp(id string, parents []string, payload []byte) (op Op, ok bool) {
 
 	op.ID, op.Parents = id, parents
 	op.Author, op.Comment = text.Line(op.Author), text.Clean(op.Comment)
+	op.Branch = text.Line(op.Branch)
 
 	return op, true
 }
@@ -90,6 +94,7 @@ type State struct {
 	Status     string // "", in_review, approved, changes_requested
 	Round      int
 	FeatureSHA string
+	Branch     string // the branch the round's request names; "" when it names none
 	Reviewer   string
 	Comment    string       // reject comments of the round, joined by a blank line
 	HasCommits bool         // OR over the round's approve and reject ops
@@ -100,6 +105,21 @@ type State struct {
 
 	// Warnings lists the commits Load skipped as malformed.
 	Warnings []string
+}
+
+// reviewedBranch returns name when it is a branch of slug's issue, else "". The
+// name comes from another clone, is printed and is handed to git as a ref.
+func reviewedBranch(slug, name string) string {
+	if b, err := branch.Parse(name); err != nil || b.IssueID() != slug {
+		return ""
+	}
+	// Nothing git could read as an option or as a revision expression.
+	if strings.HasPrefix(name, "-") || strings.Contains(name, "..") || strings.Contains(name, "@{") ||
+		strings.ContainsFunc(name, func(r rune) bool { return r <= ' ' || r == 0x7f || strings.ContainsRune(`~^:?*[\`, r) }) {
+		return ""
+	}
+
+	return name
 }
 
 // Fold computes the State of slug's review from its ops. The order of ops in
@@ -156,6 +176,7 @@ func apply(st *State, op *Op) bool {
 		}
 		st.Round++
 		st.Status, st.FeatureSHA = StatusInReview, op.FeatureSHA
+		st.Branch = reviewedBranch(st.Slug, op.Branch)
 		st.Reviewer, st.Comment, st.HasCommits, st.Approvals, st.Closed = "", "", false, nil, false
 	case OpStart:
 		if st.Status != StatusInReview || st.Reviewer != "" {

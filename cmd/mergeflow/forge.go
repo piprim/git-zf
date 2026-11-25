@@ -16,11 +16,6 @@ import (
 type ForgeMerge struct {
 	Forge  tracker.PullRequests
 	Number string
-	// PushFirst pushes Source right before the merge: the caller merged
-	// reviewer commits into it after checking it against the remote. The
-	// push is deferred to here so that a close declined at the confirm, or
-	// stopped by a conflict or an open sub-task, leaves the remote untouched.
-	PushFirst bool
 	// Upstream is the URL of the project the pull request lives on when the
 	// remote is a fork of it (issueflow.ForkUpstream): Target is then
 	// fetched from there, since the fork does not hold the merge, and pushed
@@ -47,11 +42,6 @@ func methodOf(s commit.MergeStrategy) tracker.MergeMethod {
 // that cannot be fast-forwarded (local commits of its own) is a warning: the
 // forge merge is done.
 func (r *run) forge(ctx context.Context, f *ForgeMerge, s commit.MergeStrategy) error {
-	if f.PushFirst {
-		if err := r.client.PushBranch(ctx, r.source); err != nil {
-			return fmt.Errorf("push %q before the merge: %w", r.source, err)
-		}
-	}
 	head, err := r.client.ResolveRef("refs/heads/" + r.source)
 	if err != nil {
 		return fmt.Errorf("resolve %q: %w", r.source, err)

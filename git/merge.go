@@ -310,11 +310,6 @@ func parseConflictFiles(output string) []string {
 	return files
 }
 
-// ErrMergeConflicts marks a merge stopped by content conflicts. The merge is
-// intentionally left in progress (MERGE_HEAD present) so the user can resolve
-// the markers and conclude it. Detect with errors.Is.
-var ErrMergeConflicts = errors.New("merge conflicts")
-
 // MergeInProgress reports whether a merge is currently in progress, i.e.
 // MERGE_HEAD exists in the repository's git directory.
 func (c *Client) MergeInProgress() (bool, error) {
@@ -331,26 +326,3 @@ func (c *Client) MergeInProgress() (bool, error) {
 	return true, nil
 }
 
-// MergeLeaveConflicts checks out targetBranch and merges sourceBranch into it
-// with `git merge --no-edit`. Unlike MergeForward, a conflicted merge is left
-// in progress (no abort) and the returned error wraps ErrMergeConflicts, so
-// callers can tell "resolve and conclude" apart from a hard failure. Failure
-// classification never parses git's message text: non-zero exit with
-// MERGE_HEAD present is a conflict; without MERGE_HEAD the raw error passes
-// through.
-func (c *Client) MergeLeaveConflicts(ctx context.Context, sourceBranch, targetBranch string) error {
-	if err := c.Checkout(ctx, targetBranch); err != nil {
-		return fmt.Errorf("checkout %s: %w", targetBranch, err)
-	}
-
-	root := c.root
-
-	if err := c.runInteractive(ctx, root, "merge", "--no-edit", sourceBranch); err != nil {
-		if inProgress, mhErr := c.MergeInProgress(); mhErr == nil && inProgress {
-			return fmt.Errorf("merge %s into %s: %w", sourceBranch, targetBranch, ErrMergeConflicts)
-		}
-		return fmt.Errorf("merge --no-edit %s: %w", sourceBranch, err)
-	}
-
-	return nil
-}

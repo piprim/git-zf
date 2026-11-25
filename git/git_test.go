@@ -1767,3 +1767,78 @@ func TestRenameBranch(t *testing.T) {
 		}
 	})
 }
+
+func TestHasCommit(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t)
+	rev := func(name string) string {
+		t.Helper()
+
+		h, err := client.ResolveRef(name)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", name, err)
+		}
+
+		return h.String()
+	}
+
+	cases := []struct {
+		label string
+		sha   string
+		want  bool
+	}{
+		{"a commit", rev("HEAD"), true},
+		{"a tree", rev("HEAD^{tree}"), false},
+		{"empty", "", false},
+		{"garbage", "not-a-sha", false},
+		{"an option", "--batch", false},
+		{"a well-formed SHA no object has", "1234567890123456789012345678901234567890", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			if got := client.HasCommit(t.Context(), tc.sha); got != tc.want {
+				t.Errorf("HasCommit(%q) = %v, want %v", tc.sha, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRefLog(t *testing.T) {
+	t.Parallel()
+
+	client, dir := newTestClient(t)
+	first, err := client.ResolveRef("HEAD")
+	if err != nil {
+		t.Fatalf("resolve HEAD: %v", err)
+	}
+	cmd := exec.CommandContext(t.Context(), "git", "-C", dir,
+		"-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+		"commit", "-q", "--allow-empty", "-m", "second")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit: %v\n%s", err, out)
+	}
+	second, err := client.ResolveRef("HEAD")
+	if err != nil {
+		t.Fatalf("resolve HEAD: %v", err)
+	}
+
+	t.Run("the positions of a ref, newest first", func(t *testing.T) {
+		t.Parallel()
+
+		got := client.RefLog(t.Context(), "HEAD")
+		if len(got) < 2 || got[0] != second.String() || got[1] != first.String() {
+			t.Errorf("RefLog = %v, want [%s %s ...]", got, second, first)
+		}
+	})
+	t.Run("a ref without a reflog gives nil", func(t *testing.T) {
+		t.Parallel()
+
+		if got := client.RefLog(t.Context(), "refs/heads/no-such-branch"); got != nil {
+			t.Errorf("RefLog = %v, want nil", got)
+		}
+	})
+}

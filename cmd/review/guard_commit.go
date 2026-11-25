@@ -1,44 +1,16 @@
 package review
 
-import (
-	"context"
-	"fmt"
+import "github.com/spf13/cobra"
 
-	"github.com/piprim/git-zf/cmd/issueflow"
-	"github.com/spf13/cobra"
-)
-
-// getGuardCommitCmd returns the internal `review guard-commit` command used by
-// the pre-commit hook installed by `git zf init`. It exits non-zero when the
-// currently checked-out feature branch has unincorporated reviewer commits.
-// Hidden from help output. Fail-open on any setup error: a guard must never
-// brick committing.
+// getGuardCommitCmd returns the internal `review guard-commit` command. It
+// lets every commit through, and stays so that a pre-commit hook installed by
+// an older `git zf init` keeps working. Hidden from help output.
 func (r Review) getGuardCommitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "guard-commit",
-		Short:  "Internal: block commits while reviewer commits await incorporation (used by pre-commit hook)",
+		Short:  "Internal: does nothing (called by the pre-commit hook of an older git zf init)",
 		Hidden: true,
 		Args:   cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			deps, err := buildReviewDeps(ctx, cmd, r.appConfig)
-			if err != nil {
-				return nil // fail-open
-			}
-			return runReviewGuardCommit(ctx, deps)
-		},
+		RunE:   func(*cobra.Command, []string) error { return nil },
 	}
-}
-
-func runReviewGuardCommit(ctx context.Context, deps reviewDeps) error {
-	pending, branchName, err := issueflow.PendingReviewForHEAD(ctx, deps.client)
-	if err != nil || pending == nil {
-		return nil // fail-open
-	}
-
-	return fmt.Errorf(
-		"commit blocked: %s has %d reviewer commit(s) not in %q (status: %s).\n"+
-			"Run 'git zf review sync' to incorporate them first.\n"+
-			"To bypass (not recommended): git commit --no-verify",
-		pending.EffectiveRef, pending.Commits, branchName, pending.Status)
 }

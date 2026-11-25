@@ -42,8 +42,7 @@ possible.
 ## Working
 
 Everything works from inside the worktree: `git zf commit`, the review
-commands, `git zf issue close`. Run `git zf init` from the main checkout
-though, never from a worktree: git reads hooks from the common git dir.
+commands, `git zf issue close`.
 
 ## Closing
 

@@ -35,6 +35,8 @@ func TestMenuEntriesFor(t *testing.T) {
 		{"closed", branch.Row{BranchName: "42@feat@x", Status: branch.StatusClosed},
 			[]branchAction{actionCheckout, actionTrack, actionLog, actionDelete}},
 		{"current plain", branch.Row{BranchName: "spike", Plain: true, Current: true},
+			[]branchAction{actionTrack, actionMergeInto, actionPR, actionLog}},
+		{"current plain with a parseable name omits merge", branch.Row{BranchName: "42@feat@untracked", Plain: true, Current: true},
 			[]branchAction{actionTrack, actionPR, actionLog}},
 		{"current in progress", branch.Row{BranchName: "42@feat@x", Status: branch.StatusInProgress, Current: true},
 			[]branchAction{actionIssueClose, actionPR, actionAbandon, actionLog}},
@@ -119,7 +121,8 @@ func TestOffersKey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			offered := offeredEntries(allWired, &tc.row)
-			for k, a := range keyActions {
+			for k := range keyActions {
+				a, _ := keyAction(&tc.row, k)
 				want := slices.Contains(offered, a)
 				if got := offersKey(allWired, &tc.row, k); got != want {
 					t.Errorf("offersKey(%q) = %v, want %v", k, got, want)

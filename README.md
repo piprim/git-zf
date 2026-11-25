@@ -8,7 +8,7 @@
 
 git-zf is a git subcommand. `git zf` opens a home screen; `git zf issue start` names
 a branch after an issue, `git zf commit` composes a commitizen-style message
-pre-filled from it, `git zf review request` locks the branch for a peer
+pre-filled from it, `git zf review request` submits the branch for a peer
 review, and `git zf issue close` merges it into the base with the strategy you
 pick. Every command is interactive by default, and every prompt has a flag.
 
@@ -52,8 +52,8 @@ make install           # go install, into Go's bin directory
 Both put `git-zf` in Go's bin directory (`go env GOBIN`, else `GOPATH/bin`),
 which must be on your `PATH`. `make install` warns when an older `git-zf`
 would run instead. On Windows, run it from Git Bash.
-Check with `git zf version`. Then, once per repository, run `git zf init`
-from the main checkout to install the hooks.
+Check with `git zf version`. Then, once per repository, run `git zf init`:
+a plain `git fetch` then brings the issues, reviews and branch records.
 
 ## Documentation
 

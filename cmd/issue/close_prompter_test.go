@@ -31,6 +31,12 @@ type scriptedPrompter struct {
 	BaseErr            error
 	BaseCalled         bool
 
+	// TakeRemote and TakeRemoteErr answer ConfirmTakeRemote; RemoteOffers
+	// holds every offer it was shown.
+	TakeRemote    bool
+	TakeRemoteErr error
+	RemoteOffers  []RemoteOffer
+
 	RemoveWorktree      bool
 	RemoveWorktreeErr   error
 	RemoveWorktreeCalls int
@@ -132,4 +138,10 @@ func (s *scriptedPrompter) PickBaseBranch(_ context.Context, defaultBase string,
 	}
 
 	return s.Base, nil
+}
+
+func (s *scriptedPrompter) ConfirmTakeRemote(_ context.Context, offer RemoteOffer) (bool, error) {
+	s.RemoteOffers = append(s.RemoteOffers, offer)
+
+	return s.TakeRemote, s.TakeRemoteErr
 }

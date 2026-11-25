@@ -65,11 +65,13 @@ filters by text. A record in progress whose branch is neither here nor on
 the remote is listed last, marked ∅: abandon is its one action. Enter opens the actions of the
 branch under the cursor: checkout; issue close (merge) for an in-progress
 branch, the flow of git zf issue close; merge into current for a plain
-branch; pull request; abandon (record closed, no merge); track, which records
+branch (on the current branch: merge into…, which asks for the target and
+checks it out first); pull request; abandon (record closed, no merge); track, which records
 a plain branch after the branch new form and renames it <id>@<type>@<slug>;
 log, the commits of that branch alone; delete. Each action also has a key on
 the row: C checks out, c closes the issue by merging, m merges into the
-current branch, u opens a pull request, a twice abandons, t tracks, l shows
+current branch (the current branch itself: into the branch asked),
+u opens a pull request, a twice abandons, t tracks, l shows
 the log, D twice deletes (a branch that exists only on the remote is deleted
 there, after a confirmation, and its record in progress closed); a key that does not apply to the row says so. n
 creates a branch, p prunes, P prunes with the tracker, q quits. Without a

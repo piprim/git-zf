@@ -255,7 +255,7 @@ before the first seed.
 When adding a branch op type, add its constant and its case in `apply`
 (`branch/record.go`) with a table case in `TestFold`. Unknown types must keep
 being skipped. A command that offers a choice of in-progress branches calls
-`branch.Fetch` first; a hook or `commit` never does, and finds its branch with
+`branch.Fetch` first; `commit` never does, and finds its branch with
 `branch.Find`.
 
 ### Testing the review chains
@@ -271,13 +271,46 @@ of the issues (`git/chain_ref.go`, `git/chain_ref_sync.go`, parameterized by
   `refs/remotes/<remote>/zf/`, legacy blob refs.
 - `review/repo_test.go` — `Append`, `Load`, `List`, `Sync`, two clones
   approving offline.
-- `cmd/review/chain_e2e_test.go`, and `^TestClose_SignedGate` /
-  `^TestClose_ReviewPreflight` in `cmd/issue/close_e2e_test.go` — the commands
-  and the signing gate.
+- `cmd/review/*_e2e_test.go` — the commands (`request_e2e_test.go`,
+  `start_e2e_test.go`, `decision_e2e_test.go` for approve and reject,
+  `sync_e2e_test.go`, `chain_e2e_test.go`).
+- `cmd/issueflow/reviewed_test.go` and `cmd/issue/close_rule_a_e2e_test.go`,
+  `close_remote_e2e_test.go`, `^TestClose_SignedGate` /
+  `^TestClose_ReviewPreflight` in `close_e2e_test.go` — the review at close.
 
     mise exec -- go test ./internal/chain/... ./review/... -v
     mise exec -- go test ./git/... -run "TestChainRef|TestCommitSignature" -v
-    mise exec -- go test ./cmd/issue/... -run "^TestClose_SignedGate" -v
+    mise exec -- go test ./cmd/review/... -run "^TestReview(Request|Start|Approve|Reject|Sync)" -v
+    mise exec -- go test ./cmd/issueflow/... -run "TestReviewedBranch|TestApprovedCommit|TestCheckApprovedTip" -v
+    mise exec -- go test ./cmd/issue/... -run "^TestClose_(RuleA|Remote|SignedGate|ReviewPreflight|Variant_)" -v
+
+The review happens on the feature branch: there is no `<ID>@review` branch,
+no lock and no hook. `review request` records the branch and the commit
+submitted, `review start` checks the branch out and brings it to the remote
+one, `review approve` records the commit approved (`approved_sha`, the
+branch's tip, which must be on the remote). `issue close` then applies two
+checks before any merge (`cmd/issue/close.go`, `close_remote.go`):
+
+- `checkRemoteBranch`: after a fetch, a remote branch holding commits the
+  local one lacks stops the close with `ErrRemoteMoved`, whether the user
+  took them (fast-forward or merge) or not; the close is run again.
+  A diverged remote branch that was rewritten (`rewrittenRemote`, read from
+  the reflog of the tracking ref with `git.Client.RefLog`) is never merged:
+  the close stops without a question and prints the command to follow it
+  (`TestClose_Remote_Rewr`).
+- `reviewPreflight`: only for the branch the review names
+  (`issueflow.ReviewedBranch`; a variant is not gated). In review → refused;
+  approved → the local tip must be the approved commit
+  (`issueflow.ApprovedCommit`, `CheckApprovedTip` and their sentinels), and
+  with `require-signed` one approval of that commit must be verified.
+
+`review guard` and `review guard-commit` are hidden commands that do
+nothing: the hooks of an older `git zf init` still call them. `git zf init`
+installs no hook and deletes those three scripts when a hook file still
+holds one unchanged (`retiredHooks`, `cmd/init/init.go`).
+
+    mise exec -- go test ./cmd/init/... -v
+    mise exec -- go test ./cmd/review/... -run "^TestReviewGuard" -v
 
 Seed a review in another package's test with `reviewtest.Seed` (never by
 writing refs by hand). Tests that sign use `gittest.SSHSigner`, which skips
@@ -392,9 +425,13 @@ never `cmd.Flags().GetString`: the parent command does not define them.
 `tui.BranchTableModel`): S/T/R filter, enter opens a per-row menu
 (`menuEntriesFor`, `cmd/branch/table.go`), the keys `C`, `c`, `m`, `u`, `a`
 (twice), `t`, `l`, `D` (twice) act on the row directly (`keyActions`,
-`offersKey`, `runKey`, `TestBranchTable_ActionKeys`), and `runBranchAction`
+`offersKey`, `runKey`, `TestBranchTable_ActionKeys`; `m` on the current
+row is `actionMergeInto`: `mergeInto` asks the target with
+`BranchMenuPrompter.PickTarget`, checks it out, then merges), and `runBranchAction`
 runs the entry with the terminal free, as `listAction` does for the issue
-table. The actions of other packages are injected through `tableDeps` funcs; a
+table. After an action `runBranchTable` calls `tui.DiscardInput`
+(`tui/discard_linux.go`, `TestDiscardInput`): the keys typed while the action
+had the terminal are dropped before the table reopens. The actions of other packages are injected through `tableDeps` funcs; a
 nil func removes its entry. A record in
 progress whose branch is nowhere in the clone is a `NoBranch` row (marked
 `∅`, abandon alone): the table shows every branch the home screen counts. A remote-only row

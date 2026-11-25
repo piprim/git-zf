@@ -23,10 +23,6 @@ type ReviewPrompter interface {
 	// originating tracker, mirroring issue close.
 	PickTrackerStatus(ctx context.Context, issueID, trackerType string, statuses []string) (string, error)
 
-	// Confirm presents a yes/no confirmation with the given title. Used by the
-	// request flow to offer merging pending reviewer commits before re-requesting.
-	Confirm(ctx context.Context, title string) (bool, error)
-
 	// Text presents a free-form multi-line text field. An empty answer is
 	// valid. Used by the reject flow to collect the reason for requesting changes.
 	Text(ctx context.Context, title string) (string, error)
@@ -48,15 +44,6 @@ func (p *huhReviewPrompter) PickBranch(
 		return nil, fmt.Errorf("branch picker: %w", err)
 	}
 	return &picked, nil
-}
-
-func (p *huhReviewPrompter) Confirm(ctx context.Context, title string) (bool, error) {
-	confirmed := true
-	form := tui.NewForm(huh.NewGroup(huh.NewConfirm().Title(title).Value(&confirmed)))
-	if err := form.RunWithContext(ctx); err != nil {
-		return false, fmt.Errorf("confirm form: %w", err)
-	}
-	return confirmed, nil
 }
 
 func (p *huhReviewPrompter) Text(ctx context.Context, title string) (string, error) {

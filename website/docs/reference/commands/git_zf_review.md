@@ -17,19 +17,18 @@ never overwritten.
 
 A review round:
 
-  1. Developer:  git zf review request   locks the branch and asks for a
-                                         review
+  1. Developer:  git zf review request   records the branch and the commit
+                                         submitted
   2. Reviewer:   git fetch && git zf review start
-                                         creates &lt;ID&gt;@review from the
-                                         locked snapshot
-  3. Reviewer:   git zf review approve   the branch is ready to close
-             or  git zf review reject    changes requested, the branch is
-                                         unlocked
+                                         checks out that branch, brought to
+                                         the remote one
+  3. Reviewer:   git zf review approve   approves the commit the branch is on
+             or  git zf review reject    changes requested
   4. Developer:  pushes fixes and requests again: the round counter goes up
 
-While a branch is locked, the pre-push hook installed by git zf init rejects
-pushes to it. Reviewer commits left on &lt;ID&gt;@review are merged into the
-branch by git zf review sync, or by git zf issue close at the end.
+There is one branch and no lock: the reviewer commits and pushes on the
+feature branch like the developer. git zf issue close merges it only when its
+tip is exactly the commit approved; any later commit needs a new round.
 
 Without a subcommand a menu offers these actions.
 
@@ -55,10 +54,10 @@ git zf review [flags]
 * [git zf review approve](git_zf_review_approve.md)	 - Approve a review — signals the branch is ready to close
 * [git zf review fetch](git_zf_review_fetch.md)	 - Sync review refs with the remote: fetch, merge, and push the ones it lacks
 * [git zf review list](git_zf_review_list.md)	 - List all issues currently in review or approved
-* [git zf review reject](git_zf_review_reject.md)	 - Request changes on a review — unlocks the branch for the next iteration
-* [git zf review request](git_zf_review_request.md)	 - Submit an issue branch for code review (locks the branch)
-* [git zf review start](git_zf_review_start.md)	 - Begin reviewing an issue (creates &lt;ID&gt;@review branch from the locked snapshot)
+* [git zf review reject](git_zf_review_reject.md)	 - Request changes on a review, with a reason
+* [git zf review request](git_zf_review_request.md)	 - Submit an issue branch for code review
+* [git zf review start](git_zf_review_start.md)	 - Begin reviewing an issue (checks out its branch, brought to the remote one)
 * [git zf review status](git_zf_review_status.md)	 - Show the full review history for an issue
-* [git zf review sync](git_zf_review_sync.md)	 - Bring a branch up to date: merge pending reviewer commits, then parent drift
+* [git zf review sync](git_zf_review_sync.md)	 - Bring a sub-task branch up to date with its parent branch
 * [git zf review track](git_zf_review_track.md)	 - Track the current branch with git zf (for branches created with plain git checkout)
 

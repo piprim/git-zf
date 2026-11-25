@@ -39,10 +39,11 @@ have a tracker and want git to stay in step with it. You can use git-zf as:
   commitizen-style message pre-filled from that name, with the issue ID in
   the scope or the footer. See [start an issue](./workflows/start-an-issue.md)
   and [commit](./workflows/commit.md).
-- **A review tool.** `git zf review request` locks a branch for a peer,
-  who answers with `approve` or `reject`. The branch rejects pushes while
-  the review is open, the review itself is a chain of commits in the
-  repository, and approvals can be required to be signed. See [review a branch](./workflows/review.md).
+- **A review tool.** `git zf review request` submits a branch to a peer,
+  who answers with `approve` or `reject`. An approval names a commit, and
+  the branch is merged only at that commit. The review itself is a chain of
+  commits in the repository, and approvals can be required to be signed.
+  See [review a branch](./workflows/review.md).
 - **A merge assistant.** `git zf issue close` merges the branch into its
   base with the strategy you pick, rebase, squash or a classic merge, or
   through a pull request merged on the forge, then closes the issue and
@@ -70,7 +71,7 @@ requests and ticket updates.
 ```
 git zf issue start ABC-42        branch ABC-42@feat@add-oauth-login, ticket → In Progress
 git zf commit                    feat(ABC-42): add oauth login
-git zf review request            branch locked, a reviewer is asked
+git zf review request            the branch is submitted, a reviewer is asked
 git zf review approve            approval recorded in refs/zf/reviews/ABC-42
 git zf issue close               merge into main, ticket → Closed, branch marked merged
 ```
@@ -81,6 +82,6 @@ has one.
 
 ## Where to go next
 
-1. [Install](getting-started/install.md) the binary and the hooks.
+1. [Install](getting-started/install.md) the binary and initialize a repository.
 2. [First steps](getting-started/first-steps.md): the menu, a first commit, the configuration.
 3. Then the [workflows](./workflows/start-an-issue.md), one page per step.

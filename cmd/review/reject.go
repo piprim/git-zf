@@ -1,7 +1,6 @@
 package review
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -16,16 +15,14 @@ import (
 func (r Review) getRejectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "reject",
-		Short: "Request changes on a review — unlocks the branch for the next iteration",
+		Short: "Request changes on a review, with a reason",
 		Long: `Pick a review you started and request changes, with a reason (-m, or -F
-for a file). Its status becomes "changes_requested" and the branch is
-unlocked for the developer.
+for a file). Its status becomes "changes_requested": the developer fixes,
+pushes and runs git zf review request for the next round.
 
-An empty <ID>@review branch is deleted, locally and on the remote. One
-carrying your commits is kept for the developer to inspect (git log
-<feature>..<ID>@review); until git zf review sync merges them in, new
-commits on the feature branch are blocked by the pre-commit hook (bypass:
---no-verify).
+Commits you made on the reviewed branch stay on it: the command proposes to
+push the branch and prints the git log line that shows them. It needs no
+local copy of the branch.
 
 The review record is pushed (--push / --no-push skip the proposal), and when
 the issue came from a tracker a status update is proposed.`,
@@ -121,46 +118,24 @@ func runReviewReject(ctx context.Context, deps reviewDeps, issueSlug, reason str
 		return 0, err
 	}
 
-	reviewBranch, featureBranch, hasCommits := d.reviewBranch, d.featureBranch, d.hasCommits
-
-	// The rejection is recorded at this point whatever the branch cleanup or
-	// push proposal below does, so the reason is printed here rather than deferred.
+	// The rejection is recorded at this point whatever the push proposal
+	// below does, so the reason is printed here rather than deferred.
 	if reason != "" {
 		fmt.Fprintf(deps.client.IO().Out, "Reason:\n%s\n", indentLines(reason))
 	}
 
-	// Handle review branch: keep if reviewer pushed commits, delete if empty.
-	if d.branchExists && !hasCommits {
-		if err := deps.client.DeleteLocalBranchSafe(ctx, reviewBranch, deps.cfg.Branch.Base); err != nil {
-			fmt.Fprintf(deps.client.IO().Err, "warning: delete %s: %v\n", reviewBranch, err)
-		}
-		// Only push --delete when the branch actually exists on the remote.
-		if deps.client.RemoteBranchExists(ctx, reviewBranch) {
-			_ = deps.client.DeleteRemoteBranch(ctx, reviewBranch)
-		}
-	}
-
-	if hasCommits {
-		if err := proposeReviewPush(ctx, deps, reviewBranch); err != nil {
+	if d.hasCommits {
+		if err := proposeReviewPush(ctx, deps, d.featureBranch); err != nil {
 			return 0, err
 		}
 	}
 
-	// Use issueSlug as fallback when the issue has no tracked branch here.
-	branchLabel := cmp.Or(featureBranch, issueSlug)
+	fmt.Fprintf(deps.client.IO().Out, "Issue %q: changes requested (round %d).\n", issueSlug, d.round)
 
-	fmt.Fprintf(deps.client.IO().Out,
-		"Issue %q: changes requested (round %d). Feature branch %q unlocked.\n",
-		issueSlug, d.round, branchLabel)
-
-	if hasCommits {
-		n, _ := deps.client.CommitsAhead(ctx, reviewBranch, featureBranch)
+	if d.hasCommits {
 		fmt.Fprintf(deps.client.IO().Out,
-			"%s has %d reviewer commit(s). Inspect with:\n"+
-				"  git log %s..%s\n"+
-				"Cherry-pick, adapt, or discard as needed, then:\n"+
-				"  git zf review request\n",
-			reviewBranch, n, branchLabel, reviewBranch)
+			"Branch %q holds your commits. The developer sees them with:\n  git log %s..%s\n",
+			d.featureBranch, short(d.featureSHA), d.featureBranch)
 	}
 
 	return d.round, nil

@@ -64,7 +64,7 @@ commit flag is passed the options page is skipped and the flags are used
 directly.
 
 The [commit workflow](../workflows/commit.md) page covers what the form
-pre-fills on an issue branch and what the review guard does.
+pre-fills on an issue branch.
 
 ## Configuration
 

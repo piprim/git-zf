@@ -40,7 +40,9 @@ func (*HuhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, err
 			Hint:  "git merge --no-ff with commitizen message — preserves full history",
 		},
 	})
-	if err := tui.NewForm(form).RunWithContext(ctx); err != nil {
+	// Esc leaves the two forms that come before the merge; the ones after it
+	// (worktree, delete) keep ctrl+c alone: the merge is done by then.
+	if err := tui.Form(form).RunWithContext(ctx); err != nil {
 		return "", fmt.Errorf("strategy picker: %w", err)
 	}
 
@@ -49,7 +51,7 @@ func (*HuhPrompter) PickStrategy(ctx context.Context) (commit.MergeStrategy, err
 
 func (*HuhPrompter) ConfirmMerge(ctx context.Context, source, target string, s commit.MergeStrategy) (bool, error) {
 	var confirmed bool
-	if err := tui.NewForm(tui.IssueMergeConfirm(source, target, string(s), &confirmed)).RunWithContext(ctx); err != nil {
+	if err := tui.Form(tui.IssueMergeConfirm(source, target, string(s), &confirmed)).RunWithContext(ctx); err != nil {
 		return false, fmt.Errorf("confirm form: %w", err)
 	}
 

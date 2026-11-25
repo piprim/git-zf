@@ -18,7 +18,7 @@ func Cmd() *cobra.Command {
 		Short: "uninstall " + config.SubCommandName + " from git-core",
 		Long: `Remove the binary from git's exec path (git --exec-path), the one git zf
 install put there. Run it with sudo when that directory is not writable by
-you. The hooks installed by git zf init are left in place.`,
+you.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			path, err := uninstallSubCmd(cmd.Context())
 			if err != nil {

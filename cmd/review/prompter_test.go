@@ -9,11 +9,10 @@ import (
 // scriptedReviewPrompter is the canned-response prompter used by review E2E tests.
 type scriptedReviewPrompter struct {
 	Branch           *branch.Row
+	Offered          []branch.Row // the rows the last PickBranch was shown
 	TrackerStatus    string
 	BranchErr        error
 	TrackerStatusErr error
-	ConfirmAnswer    bool
-	ConfirmErr       error
 	TextAnswer       string
 	TextErr          error
 	TextCalls        int
@@ -21,7 +20,8 @@ type scriptedReviewPrompter struct {
 
 var _ ReviewPrompter = (*scriptedReviewPrompter)(nil)
 
-func (s *scriptedReviewPrompter) PickBranch(_ context.Context, _ string, _ []branch.Row, _ string) (*branch.Row, error) {
+func (s *scriptedReviewPrompter) PickBranch(_ context.Context, _ string, rows []branch.Row, _ string) (*branch.Row, error) {
+	s.Offered = rows
 	if s.BranchErr != nil {
 		return nil, s.BranchErr
 	}
@@ -33,13 +33,6 @@ func (s *scriptedReviewPrompter) PickTrackerStatus(_ context.Context, _, _ strin
 		return "", s.TrackerStatusErr
 	}
 	return s.TrackerStatus, nil
-}
-
-func (s *scriptedReviewPrompter) Confirm(_ context.Context, _ string) (bool, error) {
-	if s.ConfirmErr != nil {
-		return false, s.ConfirmErr
-	}
-	return s.ConfirmAnswer, nil
 }
 
 func (s *scriptedReviewPrompter) Text(_ context.Context, _ string) (string, error) {

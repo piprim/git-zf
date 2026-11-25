@@ -3,8 +3,8 @@ sidebar_position: 2
 title: Commit
 ---
 
-After this page you know what the commit form pre-fills on an issue branch,
-what the review guard does, and what the push proposal offers.
+After this page you know what the commit form pre-fills on an issue branch
+and what the push proposal offers.
 
 ```
 $ git zf commit
@@ -21,7 +21,7 @@ are used directly. `Esc` or `Ctrl+C` leaves the form without committing.
 | `-u`, `--include-untracked` | stage untracked files too |
 | `--amend` | replace the tip of the current branch |
 | `-s`, `--signoff` | add a `Signed-off-by` trailer |
-| `-n`, `--no-verify` | bypass the pre-commit and commit-msg hooks, and the review guard |
+| `-n`, `--no-verify` | bypass the pre-commit and commit-msg hooks |
 | `--push` / `--no-push` | push afterwards, or not, without asking |
 | `-y`, `--yes` | skip the options page and assume defaults |
 
@@ -41,14 +41,6 @@ from the branch name. The pre-fill is a hint; every field stays editable.
 | `footer` | `ref-format` applied to the issue ID (`Refs #ABC-42`), when the field exists; `issue close` uses `close-format` instead |
 | `subject` | `(ABC-42)`, only when neither `scope` nor `footer` exist |
 
-## The review guard
-
-On a feature branch whose review decision left reviewer commits on
-`<ID>@review` that are not yet in your branch, `git zf commit` offers
-to merge them in before opening the form. Declining aborts with a hint to
-run `git zf review sync`. `--no-verify` skips the guard, as it does the
-pre-commit hook. See [review a branch](review.md).
-
 ## After the commit
 
 A push is proposed. `--push` and `--no-push` answer it from the command
@@ -62,4 +54,3 @@ one more question offers to open a pull request. See
 ## Commands used
 
 - [`git zf commit`](../reference/commands/git_zf_commit.md)
-- [`git zf review sync`](../reference/commands/git_zf_review_sync.md)

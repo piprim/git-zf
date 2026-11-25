@@ -9,9 +9,14 @@ Approve a review — signals the branch is ready to close
 
 ### Synopsis
 
-Pick a review you started and approve it. Its status becomes "approved"
-and the developer can run git zf issue close, which incorporates any commit
-you left on &lt;ID&gt;@review before merging.
+Pick a review you started and approve it. What you approve is the tip of
+your local copy of the reviewed branch, your own commits included. Its status
+becomes "approved" and the developer can run git zf issue close, which merges
+that commit and no other.
+
+The command fetches first and refuses when you have no local copy holding the
+submitted commit (run git zf review start), or when the remote branch holds
+commits yours lacks: the approval would not cover them.
 
 With require-signed = true under [review] in the config, the approval is a
 signed commit, and git zf issue close refuses to merge without an approval

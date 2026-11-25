@@ -38,11 +38,6 @@ On an issue branch the form is pre-filled from the branch name: the type,
 the issue ID as the scope, and the footer from ref-format. Every field stays
 editable.
 
-On a feature branch whose review left reviewer commits on <ID>@review
-that are not yet in the branch, the command offers to merge them in before
-opening the form; declining aborts with a hint to run git zf review sync.
---no-verify skips the guard, as it does the pre-commit hook.
-
 A push is proposed afterwards (--push / --no-push answer it), and after a
 push of a feature branch the forge may be offered a pull request.`
 	cmd := &cobra.Command{
@@ -97,12 +92,6 @@ func (c Commit) runE(cmd *cobra.Command, flags tui.CommitOption) error {
 	history, err := commitpkg.OpenHistory(client)
 	if err != nil {
 		return fmt.Errorf("open commit history: %w", err)
-	}
-
-	if !flags.NoVerify {
-		if err := guardPendingReview(cmd.Context(), client, newHuhReviewConfirm()); err != nil {
-			return err
-		}
 	}
 
 	prefill := hint.Prefill(c.appConfig.CommitMessage)
@@ -181,7 +170,7 @@ func resolveCommitMergeParent(
 }
 
 // issueHintFromClient detects whether the current branch is an issue branch
-// (feature "<id>@<type>@<slug>" or review "<id>@review") and returns the
+// ("<id>@<type>@<slug>") and returns the
 // corresponding IssueHint, with the issue title its branch chain records. A
 // branch named after a repo issue's short hash refers, once the issue is
 // mirrored with the tracker, to the tracker's number: that is what the
@@ -216,13 +205,6 @@ func hintFromBranchName(c *git.Client) commitpkg.IssueHint {
 	name, err := c.CurrentBranch()
 	if err != nil {
 		return commitpkg.IssueHint{}
-	}
-
-	// Review branches ("<issueSlug>@review") are not feature-branch shaped, so
-	// branch.Parse rejects them. Recognise the suffix and prefill the issue ID
-	// from the slug; the reviewer chooses the commit type themselves.
-	if slug, ok := branch.CutReviewSuffix(name); ok {
-		return commitpkg.IssueHint{IssueID: slug}
 	}
 
 	b, err := branch.Parse(name)

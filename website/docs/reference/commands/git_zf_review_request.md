@@ -5,19 +5,18 @@ sidebar_label: "review request"
 
 ## git zf review request
 
-Submit an issue branch for code review (locks the branch)
+Submit an issue branch for code review
 
 ### Synopsis
 
 Pick an in-progress branch (the current one is pre-selected) and submit it
-for review. Its review ref becomes "in_review" and the branch is locked: the
-pre-push hook installed by git zf init rejects pushes to it until the
-reviewer decides (bypass: git push --no-verify).
+for review. Its review ref becomes "in_review" and records the branch and the
+commit submitted. The branch is not locked: the reviewer works on it too, and
+git zf issue close merges it only when its tip is the commit approved.
 
-On a branch that was already reviewed, this starts the next round: the round
-counter goes up and the stale &lt;ID&gt;@review branch is removed. If that
-branch still carries reviewer commits not yet in yours, the request refuses to
-delete them and offers to merge them in first.
+On a branch that was already reviewed, approved or not, this starts the next
+round: the round counter goes up. It is the way out when commits were made
+after an approval.
 
 The review record is pushed (--push / --no-push skip the proposal), and when
 the issue came from a tracker a status update is proposed.

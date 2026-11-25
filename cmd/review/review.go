@@ -33,19 +33,18 @@ never overwritten.
 
 A review round:
 
-  1. Developer:  git zf review request   locks the branch and asks for a
-                                         review
+  1. Developer:  git zf review request   records the branch and the commit
+                                         submitted
   2. Reviewer:   git fetch && git zf review start
-                                         creates <ID>@review from the
-                                         locked snapshot
-  3. Reviewer:   git zf review approve   the branch is ready to close
-             or  git zf review reject    changes requested, the branch is
-                                         unlocked
+                                         checks out that branch, brought to
+                                         the remote one
+  3. Reviewer:   git zf review approve   approves the commit the branch is on
+             or  git zf review reject    changes requested
   4. Developer:  pushes fixes and requests again: the round counter goes up
 
-While a branch is locked, the pre-push hook installed by git zf init rejects
-pushes to it. Reviewer commits left on <ID>@review are merged into the
-branch by git zf review sync, or by git zf issue close at the end.
+There is one branch and no lock: the reviewer commits and pushes on the
+feature branch like the developer. git zf issue close merges it only when its
+tip is exactly the commit approved; any later commit needs a new round.
 
 Without a subcommand a menu offers these actions.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {

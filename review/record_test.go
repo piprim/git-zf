@@ -2,6 +2,7 @@ package review
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -365,6 +366,49 @@ func TestFold(t *testing.T) {
 		}
 	})
 
+	for _, tc := range []struct {
+		name, branch, want string
+	}{
+		{"a request names the reviewed branch", "42@feat@thing", "42@feat@thing"},
+		{"a request without a branch names none", "", ""},
+		{"a branch of another issue is ignored", "43@feat@other", ""},
+		{"a name that is not a branch is ignored", "--upload-pack=x", ""},
+		{"a revision expression is ignored", "42@feat@thing^", ""},
+		{"a name with a space is ignored", "42@feat@a b", ""},
+		{"a name with a range is ignored", "42@feat@a..b", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := request("r1", t0, "f1")
+			r.Branch = tc.branch
+			if got := Fold("42", []Op{r}).Branch; got != tc.want {
+				t.Errorf("Branch = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("a name starting with a dash is ignored, even on an issue named so", func(t *testing.T) {
+		t.Parallel()
+
+		r := request("r1", t0, "f1")
+		r.Branch = "-x@feat@y"
+		if got := Fold("-x", []Op{r}).Branch; got != "" {
+			t.Errorf("Branch = %q, want none", got)
+		}
+	})
+
+	t.Run("the branch belongs to the round", func(t *testing.T) {
+		t.Parallel()
+
+		r1 := request("r1", t0, "f1")
+		r1.Branch = "42@feat@thing"
+		ops := []Op{r1, reject("x1", t1, "no", false, "r1"), request("r2", t2, "f2", "x1")}
+		if got := Fold("42", ops).Branch; got != "" {
+			t.Errorf("Branch = %q, want none", got)
+		}
+	})
+
 	t.Run("slice order does not matter", func(t *testing.T) {
 		t.Parallel()
 
@@ -388,6 +432,16 @@ func TestDecodeOp(t *testing.T) {
 		}
 		if got.ID != "c1" || !slices.Equal(got.Parents, []string{"p1"}) {
 			t.Errorf("identity = %q %v", got.ID, got.Parents)
+		}
+	})
+
+	t.Run("the branch is cleaned of control characters", func(t *testing.T) {
+		t.Parallel()
+
+		payload := []byte(`{"v":1,"type":"request","at":"2026-10-01T10:00:00Z","branch":"42@feat@a\u001b[31mb"}`)
+		got, ok := DecodeOp("c1", nil, payload)
+		if !ok || got.Branch == "" || strings.ContainsRune(got.Branch, 0x1b) {
+			t.Errorf("Branch = %q, ok = %v", got.Branch, ok)
 		}
 	})
 

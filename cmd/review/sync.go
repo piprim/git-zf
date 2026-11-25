@@ -7,25 +7,16 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
-	"github.com/piprim/git-zf/git"
-	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
 
 func (r Review) getSyncCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "sync",
-		Short: "Bring a branch up to date: merge pending reviewer commits, then parent drift",
-		Long: `Pick an in-progress branch (the current one is pre-selected) and bring it up
-to date in two steps.
-
-First, reviewer commits pending on <ID>@review are merged in. On a
-conflict the merge is left in progress for you to resolve, then git zf
-commit concludes it. A dirty working tree is refused for this step: git
-stash first.
-
-Then, for a sub-task branch only, the parent branch (<remote>/<parent>) is
-merged into it. A conflict there is aborted and reported.`,
+		Short: "Bring a sub-task branch up to date with its parent branch",
+		Long: `Pick an in-progress sub-task branch (the current one is pre-selected): the
+parent branch (<remote>/<parent>) is merged into it. A conflict is aborted
+and reported.`,
 		Args: cobra.NoArgs,
 		RunE: withDeps(r.appConfig, func(ctx context.Context, deps reviewDeps) error {
 			return runReviewSyncInteractive(ctx, deps, &huhReviewPrompter{})
@@ -38,11 +29,8 @@ func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter Rev
 	// chains are fetched: do it first so the picker never offers it.
 	fetchBranchRefs(ctx, deps)
 
-	// Freshen refs so pending-review detection and parent drift see the
-	// current remote state (best-effort; sync must work offline too).
-	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
-	}
+	// Freshen refs so the parent drift sees the current remote state
+	// (best-effort; sync must work offline too).
 	if remote, _ := deps.client.Remote(); remote != "" {
 		_ = deps.client.Fetch(ctx)
 	}
@@ -52,14 +40,10 @@ func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter Rev
 		return err //nolint:wrapcheck // already says what was listed
 	}
 
-	// Candidates are branches with something to sync: a parent to drift
-	// against, or reviewer commits pending incorporation.
+	// Candidates are the branches with a parent to drift against.
 	var candidates []branch.Row
 	for _, b := range all {
-		st, pErr := branch.Load(ctx, deps.client, b.IssueSlug)
-		hasParent := pErr == nil && st != nil && st.Parent != ""
-		pending, _ := issueflow.PendingReviewCommits(ctx, deps.client, b.IssueSlug, b.BranchName)
-		if hasParent || pending != nil {
+		if st, pErr := branch.Load(ctx, deps.client, b.IssueSlug); pErr == nil && st != nil && st.Parent != "" {
 			candidates = append(candidates, b)
 		}
 	}
@@ -77,31 +61,12 @@ func runReviewSyncInteractive(ctx context.Context, deps reviewDeps, prompter Rev
 		return nil
 	}
 
-	return runReviewSync(ctx, deps, picked.IssueSlug)
+	return runReviewSync(ctx, deps, picked.IssueSlug, picked.BranchName)
 }
 
-func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error {
-	childBranch, err := branchNameForIssue(ctx, deps.client, issueSlug)
-	if err != nil {
-		return err
-	}
-	if childBranch == "" {
-		return fmt.Errorf("no branch found for issue %q", issueSlug)
-	}
-
-	// Step 1 — incorporate reviewer commits from <slug>@review, if a decided
-	// review says they are pending.
-	pending, err := issueflow.PendingReviewCommits(ctx, deps.client, issueSlug, childBranch)
-	if err != nil {
-		return fmt.Errorf("detect pending review commits: %w", err)
-	}
-	if pending != nil {
-		if conflicted, mErr := mergeReviewerCommits(ctx, deps, pending, childBranch); mErr != nil || conflicted {
-			return mErr
-		}
-	}
-
-	// Step 2 — parent integration drift (sub-tasks only; unchanged semantics).
+// runReviewSync merges the parent branch of issueSlug into childBranch, the
+// branch of that issue the user picked.
+func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug, childBranch string) error {
 	parentSlug := ""
 	if st, err := branch.Load(ctx, deps.client, issueSlug); err != nil {
 		return fmt.Errorf("get parent issue: %w", err)
@@ -109,9 +74,7 @@ func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error
 		parentSlug = st.Parent
 	}
 	if parentSlug == "" {
-		if pending == nil {
-			fmt.Fprintln(deps.client.IO().Out, "Nothing to sync.")
-		}
+		fmt.Fprintln(deps.client.IO().Out, "Nothing to sync.")
 		return nil
 	}
 
@@ -123,7 +86,7 @@ func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error
 				"Check out its branch and run `git zf issue track`: %w", parentSlug, issueSlug, err)
 	}
 
-	parentBranch, err := branchNameForIssue(ctx, deps.client, parentSlug)
+	parentBranch, err := issueflow.BranchNameForIssue(ctx, deps.client, parentSlug)
 	if err != nil {
 		return err
 	}
@@ -160,39 +123,4 @@ func runReviewSync(ctx context.Context, deps reviewDeps, issueSlug string) error
 
 	fmt.Fprintf(deps.client.IO().Out, "Branch %q synced with %q.\n", childBranch, parentBranch)
 	return nil
-}
-
-// mergeReviewerCommits merges the pending reviewer commits into featureBranch.
-// conflicted reports that the merge stopped on conflicts and was left in
-// progress: the user was told how to conclude it, and the caller stops there.
-func mergeReviewerCommits(
-	ctx context.Context, deps reviewDeps, pending *issueflow.PendingReview, featureBranch string,
-) (conflicted bool, err error) {
-	dirty, err := deps.client.IsDirty(ctx)
-	if err != nil {
-		return false, fmt.Errorf("status check: %w", err)
-	}
-	if dirty {
-		return false, fmt.Errorf("working tree has uncommitted changes — cannot merge %s.\n"+
-			"Run 'git stash', then 'git zf review sync', then 'git stash pop'", pending.EffectiveRef)
-	}
-
-	fmt.Fprintf(deps.client.IO().Out, "Merging %d reviewer commit(s) from %s into %q...\n",
-		pending.Commits, pending.EffectiveRef, featureBranch)
-
-	if err := deps.client.MergeLeaveConflicts(ctx, pending.EffectiveRef, featureBranch); err != nil {
-		if errors.Is(err, git.ErrMergeConflicts) {
-			fmt.Fprintf(deps.client.IO().Out,
-				"Merge left in progress with conflicts.\n"+
-					"Resolve the conflict markers, then run 'git zf commit' to conclude the merge.\n")
-
-			return true, nil
-		}
-
-		return false, fmt.Errorf("merge %s: %w", pending.EffectiveRef, err)
-	}
-
-	fmt.Fprintf(deps.client.IO().Out, "Reviewer commits incorporated into %q.\n", featureBranch)
-
-	return false, nil
 }

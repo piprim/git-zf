@@ -107,13 +107,13 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 // source picker: the branch table calls it with the row under the cursor.
 func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, target string, source SourceBranch) (err error) {
 	// SAFETY: refuse issue-branch sources — merging one here would bypass the
-	// review incorporation, sub-task guard, and tracker update that issue close
+	// review check, sub-task guard, and tracker update that issue close
 	// runs. The gate is branch.Parse, so it also catches remote-only issue
 	// branches git-zf does not track here.
 	if parsed, perr := branchpkg.Parse(source.Name); perr == nil {
 		fmt.Fprintf(d.client.IO().Out,
 			"%q is an issue branch (%s). Use \"git zf issue close\" to merge it safely —\n"+
-				"that runs review incorporation, the sub-task guard, and the tracker update.\n",
+				"that runs the review check, the sub-task guard, and the tracker update.\n",
 			source.Name, parsed.IssueID())
 
 		return nil

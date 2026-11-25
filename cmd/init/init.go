@@ -4,20 +4,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/spf13/cobra"
 )
 
-// prePushHookScript is the shell script written as the pre-push hook.
-// It calls `git zf review guard` for each pushed branch so that pushes to
-// branches locked for code review are blocked at the client side.
-//
-// Requirements:
-//   - git zf must be installed in the git exec-path (run `git zf install` first).
-//   - The hook is per-repository; run `git zf init` in every repo (and in every
-//     git submodule) where the lock guard should be active.
+// The three scripts below are the hooks an older `git zf init` installed, kept
+// byte for byte: init deletes a hook file that still holds one of them. The
+// review no longer locks a branch nor has a branch of its own, so none of them
+// has anything to guard.
+
+// prePushHookScript called `git zf review guard` for each pushed branch.
 const prePushHookScript = `#!/bin/sh
 # git-zf review lock guard — installed by 'git zf init'
 # Requires: git zf install (binary in git exec-path)
@@ -30,9 +29,7 @@ done
 exit 0
 `
 
-// preCommitHookScript is the shell script written as the pre-commit hook.
-// It calls `git zf review guard-commit`, which blocks new commits on a feature
-// branch while reviewer commits on <slug>@review await incorporation.
+// preCommitHookScript called `git zf review guard-commit`.
 const preCommitHookScript = `#!/bin/sh
 # git-zf review commit guard — installed by 'git zf init'
 # Requires: git zf install (binary in git exec-path)
@@ -42,24 +39,30 @@ fi
 exit 0
 `
 
-// hookSpec describes one hook managed by `git zf init`.
+// preRebaseHookScript refused to rebase a <slug>@review branch.
+const preRebaseHookScript = `#!/bin/sh
+# git-zf review rebase guard — installed by 'git zf init'
+branch=${2:-$(git symbolic-ref --quiet --short HEAD)}
+case "$branch" in
+*@review)
+    echo "git-zf: $branch is a review branch: do not rebase it, 'git zf issue close' would refuse it." >&2
+    echo "Merge the base into it instead (bypass: git rebase --no-verify)." >&2
+    exit 1
+    ;;
+esac
+exit 0
+`
+
+// hookSpec is one hook an older `git zf init` installed.
 type hookSpec struct {
-	name    string // file name in the hooks directory
-	script  string // full managed script body
-	snippet string // line to suggest when a foreign hook already exists
+	name   string // file name in the hooks directory
+	script string // the exact script once installed
 }
 
-var managedHooks = []hookSpec{
-	{
-		name:    "pre-push",
-		script:  prePushHookScript,
-		snippet: `  git zf review guard "$(echo "$local_ref" | sed 's|^refs/heads/||')"`,
-	},
-	{
-		name:    "pre-commit",
-		script:  preCommitHookScript,
-		snippet: `  git zf review guard-commit || exit 1`,
-	},
+var retiredHooks = []hookSpec{
+	{name: "pre-push", script: prePushHookScript},
+	{name: "pre-commit", script: preCommitHookScript},
+	{name: "pre-rebase", script: preRebaseHookScript},
 }
 
 // Init is the `git zf init` command.
@@ -72,22 +75,17 @@ func New() Init { return Init{} }
 func (i Init) GetRootCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Initialize git-zf in the current repository (installs the pre-push and pre-commit hooks)",
-		Long: `Install the git-zf pre-push and pre-commit hooks into the current repository.
-
-The pre-push hook calls 'git zf review guard' before every push, blocking pushes to
-branches that are locked for code review. The pre-commit hook calls 'git zf review
-guard-commit', which blocks new commits on a feature branch while reviewer commits
-await incorporation.
-
-The hooks are written where git reads them (resolved via 'git rev-parse
---git-path hooks'): the directory named by core.hooksPath when it is set,
-otherwise the hooks directory shared by every worktree. In a git submodule that
-is the submodule's own git directory, not the parent repo's.
-
-It also adds two fetch refspecs to every remote, so that a plain 'git fetch'
-brings the reviews and issues stored under refs/zf/ and 'git fetch --prune'
+		Short: "Initialize git-zf in the current repository (fetch refspecs for refs/zf/)",
+		Long: `Add fetch refspecs to every remote, so that a plain 'git fetch' brings the
+reviews, issues and branch records stored under refs/zf/ and 'git fetch --prune'
 does not delete their tracking refs.
+
+git-zf installs no hook. An older 'git zf init' installed a pre-push, a
+pre-commit and a pre-rebase hook: a hook file that still holds one of those
+scripts unchanged is deleted, where git reads hooks (the directory named by
+core.hooksPath when it is set, otherwise the hooks directory shared by every
+worktree). A hook of your own is never touched; when it calls 'git zf review
+guard', init says that the call can be removed.
 
 Run 'git zf install' first to make the 'git zf' binary available in the git
 exec-path, then run 'git zf init' once per repository (and per submodule).`,
@@ -115,8 +113,8 @@ func (i Init) runE(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolve hooks dir: %w", err)
 	}
 
-	for _, h := range managedHooks {
-		if err := installHook(cmd, hooksDir, h); err != nil {
+	for _, h := range retiredHooks {
+		if err := retireHook(cmd, hooksDir, h); err != nil {
 			return err
 		}
 	}
@@ -144,40 +142,31 @@ func (i Init) runE(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// installHook writes one managed hook, preserving foreign hooks. Mirrors the
-// original single-hook logic: byte-identical → up-to-date no-op; foreign hook
-// → never overwrite, print the snippet to add manually; missing → write.
-func installHook(cmd *cobra.Command, hooksDir string, h hookSpec) error {
+// retireHook deletes a hook file that still holds the script an older init
+// installed. A hook with other content is the user's: it is left alone, with
+// a note when it still calls the guard, which does nothing now.
+func retireHook(cmd *cobra.Command, hooksDir string, h hookSpec) error {
 	hookPath := filepath.Join(hooksDir, h.name)
 
-	if info, err := os.Stat(hookPath); err == nil {
-		existing, readErr := os.ReadFile(hookPath) //nolint:gosec
-		if readErr == nil {
-			if string(existing) == h.script {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s hook already up to date at %s\n", h.name, hookPath)
-				return nil
-			}
-			if info.Mode()&0o111 == 0 {
-				_ = os.Chmod(hookPath, info.Mode()|0o755)
-			}
+	existing, err := os.ReadFile(hookPath) //nolint:gosec
+	if err != nil {
+		return nil //nolint:nilerr // no hook, or one we cannot read: nothing to retire
+	}
+
+	if string(existing) != h.script {
+		if strings.Contains(string(existing), "git zf review guard") {
 			fmt.Fprintf(cmd.OutOrStdout(),
-				"WARNING: a %s hook already exists at %s\n"+
-					"The git-zf guard was NOT installed to avoid overwriting your hook.\n"+
-					"To enable the guard, add this to your existing hook:\n\n%s\n",
-				h.name, hookPath, h.snippet)
-			return nil
+				"%s calls `git zf review guard`, which does nothing any more: the call can be removed\n",
+				hookPath)
 		}
+
+		return nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
-		return fmt.Errorf("create hooks dir: %w", err)
+	if err := os.Remove(hookPath); err != nil {
+		return fmt.Errorf("delete the %s hook: %w", h.name, err)
 	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s deleted: git-zf no longer uses a %s hook\n", hookPath, h.name)
 
-	//nolint:gosec // hook script is a compile-time constant
-	if err := os.WriteFile(hookPath, []byte(h.script), 0o755); err != nil {
-		return fmt.Errorf("write %s hook: %w", h.name, err)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "%s hook installed at %s\n", h.name, hookPath)
 	return nil
 }

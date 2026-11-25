@@ -13,8 +13,9 @@ Copy this binary into git's exec path (git --exec-path), so that git
 knows it as "git zf". Run it with sudo when that directory is not writable
 by you; a Homebrew git on macOS does not need it.
 
-Check with git zf version. Then run git zf init once per repository to
-install the hooks. git zf uninstall removes the binary.
+Check with git zf version. Then run git zf init once per repository, so
+that git fetch brings what git zf records there. git zf uninstall removes
+the binary.
 
 ```
 git zf install [flags]

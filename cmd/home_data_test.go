@@ -215,14 +215,26 @@ func TestGatherHome(t *testing.T) {
 		}
 	})
 
-	t.Run("a review branch", func(t *testing.T) {
+	t.Run("a branch named <id>@review is an ordinary branch", func(t *testing.T) {
+		t.Parallel()
+
+		r := newHomeRig(t, "")
+		branchtest.Seed(t, r.c, branchpkg.Op{Branch: "77@feat@x", Title: "Reviewed"}, branchpkg.StatusInProgress)
+		reviewtest.Seed(t, r.c, "77", reviewpkg.StatusInReview, 1, gitIn(t, r.dir, "rev-parse", "HEAD"))
+		gitIn(t, r.dir, "checkout", "-q", "-b", "77@review")
+		if d, _ := r.gather(); d.Issue != "" || d.Review != "" {
+			t.Errorf("issue = %q review = %q, want none", d.Issue, d.Review)
+		}
+	})
+
+	t.Run("a branch in review", func(t *testing.T) {
 		t.Parallel()
 
 		r := newHomeRig(t, "")
 		branchtest.Seed(t, r.c, branchpkg.Op{Branch: "77@feat@x", Title: "Reviewed"}, branchpkg.StatusInProgress)
 		sha := gitIn(t, r.dir, "rev-parse", "HEAD")
 		reviewtest.Seed(t, r.c, "77", reviewpkg.StatusInReview, 1, sha)
-		gitIn(t, r.dir, "checkout", "-q", "-b", "77@review")
+		gitIn(t, r.dir, "checkout", "-q", "-b", "77@feat@x")
 
 		t.Run("shows the issue and the review of its slug", func(t *testing.T) {
 			d, hints := r.gather()

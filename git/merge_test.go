@@ -2,7 +2,6 @@ package git
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1247,50 +1246,6 @@ func setupDivergedRepo(t *testing.T) (dir string, client *Client) {
 		t.Fatalf("NewClientAt: %v", err)
 	}
 	return dir, c
-}
-
-func TestMergeLeaveConflicts(t *testing.T) {
-	t.Run("conflict returns ErrMergeConflicts and leaves MERGE_HEAD", func(t *testing.T) {
-		_, client := setupDivergedRepo(t)
-		err := client.MergeLeaveConflicts(t.Context(), "source", "target")
-		if !errors.Is(err, ErrMergeConflicts) {
-			t.Fatalf("want ErrMergeConflicts, got %v", err)
-		}
-		inProgress, mhErr := client.MergeInProgress()
-		if mhErr != nil {
-			t.Fatalf("MergeInProgress: %v", mhErr)
-		}
-		if !inProgress {
-			t.Fatal("expected MERGE_HEAD to exist after conflicted merge")
-		}
-	})
-
-	t.Run("clean merge creates merge commit and returns nil", func(t *testing.T) {
-		dir, client := setupDivergedRepo(t)
-		// Make source non-conflicting: new branch off main touching another file.
-		run := func(args ...string) {
-			t.Helper()
-			cmd := exec.CommandContext(t.Context(), "git", args...)
-			cmd.Dir = dir
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("git %v: %v\n%s", args, err, out)
-			}
-		}
-		run("checkout", "main")
-		run("checkout", "-b", "clean-source")
-		if err := os.WriteFile(filepath.Join(dir, "other.txt"), []byte("x\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		run("add", "other.txt")
-		run("commit", "-m", "clean change")
-		if err := client.MergeLeaveConflicts(t.Context(), "clean-source", "target"); err != nil {
-			t.Fatalf("clean merge: %v", err)
-		}
-		inProgress, _ := client.MergeInProgress()
-		if inProgress {
-			t.Fatal("no MERGE_HEAD expected after clean merge")
-		}
-	})
 }
 
 func TestMergeInProgress(t *testing.T) {

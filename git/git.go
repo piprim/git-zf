@@ -245,6 +245,17 @@ func (c *Client) ResolveRef(name string) (Hash, error) {
 	return Hash(out), nil
 }
 
+// HasCommit reports whether sha names a commit of this clone. A value that is
+// not an object name, an approved_sha read from a ref included, is false.
+func (c *Client) HasCommit(ctx context.Context, sha string) bool {
+	if sha == "" || strings.HasPrefix(sha, "-") {
+		return false
+	}
+	ok, _ := c.succeeds(ctx, "cat-file", "-e", sha+"^{commit}")
+
+	return ok
+}
+
 // ResolveBranchRef resolves a branch short name to its commit hash. It tries
 // refs/heads/<name> first, then falls back to refs/remotes/<remote>/<name> so
 // that sub-task closes work when the parent integration branch was never
@@ -874,4 +885,16 @@ func (c *Client) CreateLocalBranch(ctx context.Context, name, startPoint string)
 	}
 
 	return nil
+}
+
+// RefLog returns the commits ref pointed to, newest first, as its reflog
+// records them: nil when the ref has no reflog. Only a ref of this clone has
+// one, and its entries expire (gc.reflogExpire).
+func (c *Client) RefLog(ctx context.Context, ref string) []string {
+	out, err := c.output(ctx, "log", "-g", "--format=%H", ref, "--")
+	if err != nil || out == "" {
+		return nil
+	}
+
+	return strings.Split(out, "\n")
 }

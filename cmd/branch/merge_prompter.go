@@ -57,7 +57,7 @@ func (p *huhMergePrompter) PickSource(ctx context.Context, sources []SourceBranc
 	}
 
 	var picked string
-	form := tui.NewForm(huh.NewGroup(
+	form := tui.Form(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("Branch to merge into current:").
 			Options(opts...).

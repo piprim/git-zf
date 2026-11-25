@@ -3,8 +3,8 @@ sidebar_position: 1
 title: Install
 ---
 
-After this page, `git zf` runs in your repository, with the hooks that the
-review flow relies on and shell completion for its commands.
+After this page, `git zf` runs in your repository, a plain `git fetch`
+brings what it records there, and your shell completes its commands.
 
 ## Prerequisites
 
@@ -58,33 +58,25 @@ Whichever way you chose, check with `git zf version`.
 
 ## Initialize a repository
 
-Once per repository, and per submodule, run from the main checkout:
+Once per repository, and per submodule, run:
 
 ```
 $ git zf init
 ```
 
-It installs two hooks:
+It configures every remote so that a plain `git fetch` brings the reviews,
+issues and branch records that git-zf stores under `refs/zf/`, and so that
+`git fetch --prune` does not delete their tracking refs.
 
-- **pre-push** blocks pushes to a branch locked for review. It runs
-  `git zf review guard`. Bypass with `git push --no-verify`.
-- **pre-commit** blocks commits on a feature branch while reviewer commits
-  await incorporation. It runs `git zf review guard-commit`. Bypass with
-  `git commit --no-verify`.
+git-zf installs no hook. Earlier versions installed a pre-push, a
+pre-commit and a pre-rebase hook for the review: `git zf init` deletes a
+hook file that still holds one of those scripts unchanged, where git reads
+hooks (the directory named by `core.hooksPath` when it is set, otherwise the
+hooks directory shared by every worktree). A hook you wrote yourself is
+never touched; when it calls `git zf review guard`, `init` says that the
+call can be removed.
 
-It also configures every remote so that a plain `git fetch` brings the
-reviews, issues and branch records that git-zf stores under `refs/zf/`, and
-so that `git fetch --prune` does not delete their tracking refs.
-
-The hooks go where git reads them: the directory named by `core.hooksPath`
-when it is set, otherwise the hooks directory shared by every worktree. In a
-submodule that is the submodule's own git directory, not the parent's. Run
-it from the main checkout, not from a linked worktree: git reads hooks from
-the common git dir, and inside a worktree they would be written where git
-never looks.
-
-Re-running `git zf init` is safe. A hook you wrote yourself is never
-overwritten: a warning prints the snippet to add to it instead.
+Re-running `git zf init` is safe.
 
 ## Shell completion
 

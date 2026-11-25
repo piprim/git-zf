@@ -12,6 +12,7 @@ import (
 
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/branch/branchtest"
+	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/internal/pkg"
 	"github.com/piprim/git-zf/tui"
@@ -35,6 +36,15 @@ type scriptedBranchMenuPrompter struct {
 	RemoteAsked  string
 	RemoteBase   string
 	RemoteMerged bool
+	// Target answers PickTarget; TargetsOffered holds what it was offered.
+	Target         string
+	TargetsOffered []string
+}
+
+func (p *scriptedBranchMenuPrompter) PickTarget(_ context.Context, _ string, targets []string) (string, error) {
+	p.TargetsOffered = targets
+
+	return p.Target, nil
 }
 
 func (p *scriptedBranchMenuPrompter) ConfirmDeleteRemote(_ context.Context, name, _, base string, merged bool) (bool, error) {
@@ -608,6 +618,29 @@ func TestRunKey(t *testing.T) {
 		reopen, err := runKey(t.Context(), d, &scriptedBranchMenuPrompter{}, "m", &plain)
 		if err != nil || !reopen || got != (SourceBranch{Name: "spike"}) {
 			t.Errorf("err = %v, reopen = %v, got = %+v", err, reopen, got)
+		}
+	})
+	t.Run("m on the current row asks the target, checks it out and merges the row into it", func(t *testing.T) {
+		rig := newTableRig(t)
+		gitIn(t, rig.dir, "checkout", "-q", "spike")
+		d := rig.deps()
+		d.cfg = &config.AppConfig{} // no [branch] base, as in the default config: detected
+		var got SourceBranch
+		var target string
+		d.merge = func(_ context.Context, src SourceBranch) error {
+			got = src
+			target, _ = rig.client.CurrentBranch()
+
+			return nil
+		}
+		p := &scriptedBranchMenuPrompter{Target: "master"}
+		current := branch.Row{BranchName: "spike", Plain: true, Current: true}
+		reopen, err := runKey(t.Context(), d, p, "m", &current)
+		if err != nil || !reopen || got != (SourceBranch{Name: "spike"}) || target != "master" {
+			t.Errorf("err = %v, reopen = %v, got = %+v, merged into %q", err, reopen, got, target)
+		}
+		if len(p.TargetsOffered) == 0 || p.TargetsOffered[0] != "master" || slices.Contains(p.TargetsOffered, "spike") {
+			t.Errorf("targets offered = %v, want master first and no spike", p.TargetsOffered)
 		}
 	})
 	t.Run("u calls pr and reopens", func(t *testing.T) {

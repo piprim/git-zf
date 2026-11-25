@@ -11,7 +11,7 @@ uninstall zf from git-core
 
 Remove the binary from git's exec path (git --exec-path), the one git zf
 install put there. Run it with sudo when that directory is not writable by
-you. The hooks installed by git zf init are left in place.
+you.
 
 ```
 git zf uninstall [flags]

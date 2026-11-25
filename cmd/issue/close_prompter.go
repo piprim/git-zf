@@ -2,8 +2,11 @@ package issue
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 
+	"github.com/charmbracelet/huh"
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/cmd/issueflow"
 	"github.com/piprim/git-zf/cmd/mergeflow"
@@ -11,6 +14,7 @@ import (
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
 	"github.com/piprim/git-zf/tui"
+	"golang.org/x/term"
 )
 
 // ClosePrompter resolves every user-facing decision in the close flow. The
@@ -55,7 +59,27 @@ type ClosePrompter interface {
 	// only when no --base override was given AND more than one candidate branch
 	// exists. defaultBase is pre-selected; branches is the candidate list.
 	PickBaseBranch(ctx context.Context, defaultBase string, branches []string) (string, error)
+
+	// ConfirmTakeRemote is called when the remote branch holds commits the
+	// local one lacks. It returns ErrCannotAsk when there is no terminal to
+	// ask on, which runClose treats as a no. Whatever the answer, the close
+	// stops after it.
+	ConfirmTakeRemote(ctx context.Context, offer RemoteOffer) (take bool, err error)
 }
+
+// RemoteOffer is what the close asks before taking the remote's commits.
+type RemoteOffer struct {
+	Branch, RemoteRef   string
+	LocalTip, RemoteTip string // short SHAs
+	Commits             int    // commits the remote holds and the local branch lacks
+	Merge               bool   // true: a merge (diverged), default answer no; false: a fast-forward
+}
+
+// ErrCannotAsk is returned by ConfirmTakeRemote when stdin is not a terminal.
+var ErrCannotAsk = errors.New("no terminal to ask on")
+
+// ErrRemoteMoved is returned by runClose when it stopped at the remote check.
+var ErrRemoteMoved = errors.New("the remote branch moved, the issue is not closed")
 
 // Compile-time check.
 var _ ClosePrompter = (*huhPrompter)(nil)
@@ -75,6 +99,32 @@ func newHuhPrompter(client *git.Client, cfg *config.AppConfig) *huhPrompter {
 	return &huhPrompter{
 		HuhPrompter: mergeflow.HuhPrompter{Client: client, Cfg: cfg},
 	}
+}
+
+func (p *huhPrompter) ConfirmTakeRemote(ctx context.Context, o RemoteOffer) (bool, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, ErrCannotAsk
+	}
+
+	title := fmt.Sprintf("Fast-forward %q to %s?", o.Branch, o.RemoteRef)
+	desc := fmt.Sprintf("%s holds %d commit(s) your branch lacks (yours: %s, remote: %s).\n"+
+		"The close stops after this, for you to look at what came in.", o.RemoteRef, o.Commits, o.LocalTip, o.RemoteTip)
+	// A merge is right for work done in two places, wrong for a branch
+	// rewritten on the remote: git cannot tell, so the default is no.
+	take := !o.Merge
+	if o.Merge {
+		title = fmt.Sprintf("Merge %s into %q?", o.RemoteRef, o.Branch)
+		desc = fmt.Sprintf("Your branch (%s) and %s (%s) have diverged: the remote holds %d commit(s) yours lacks.\n"+
+			"If the remote branch was rebased, a merge brings back what the rebase dropped: say no and reset instead.\n"+
+			"The close stops after this, for the merge to be looked at.", o.LocalTip, o.RemoteRef, o.RemoteTip, o.Commits)
+	}
+
+	group := huh.NewGroup(huh.NewConfirm().Title(title).Description(desc).Value(&take))
+	if err := tui.NewForm(group).RunWithContext(ctx); err != nil {
+		return false, fmt.Errorf("confirm form: %w", err)
+	}
+
+	return take, nil
 }
 
 func (p *huhPrompter) PickBranch(ctx context.Context, branches []branch.Row, current string) (*branch.Row, error) {

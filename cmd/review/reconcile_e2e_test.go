@@ -25,8 +25,6 @@ func (c *captureReviewPrompter) PickBranch(ctx context.Context, title string, br
 	return c.scriptedReviewPrompter.PickBranch(ctx, title, branches, current)
 }
 
-func (c *captureReviewPrompter) Confirm(_ context.Context, _ string) (bool, error) { return true, nil }
-
 // seedLocalBranch creates the local branch op.Branch off main and tracks it in
 // the given status.
 func seedLocalBranch(t *testing.T, rig *reviewE2ERig, op branch.Op, status string) {

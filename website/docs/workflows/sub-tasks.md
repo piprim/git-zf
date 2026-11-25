@@ -20,8 +20,8 @@ A sub-task then:
 
 - branches from and closes into the parent branch instead of the configured
   base;
-- gets parent drift merged in by `git zf review sync`: after the reviewer
-  commits, it merges `<remote>/<parent>` into the sub-task, and aborts and
+- gets parent drift merged in by `git zf review sync`: it merges
+  `<remote>/<parent>` into the sub-task branch you pick, and aborts and
   reports a conflict there;
 - must be closed before its parent can be closed: `issue close` refuses a
   parent with open sub-tasks.

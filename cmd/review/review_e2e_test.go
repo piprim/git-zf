@@ -549,17 +549,13 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 
 	t.Run("review start succeeds on empty store after fetch", func(t *testing.T) {
 		reviewerStdout.Reset()
-		reviewPrompter := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@review"}}
+		reviewPrompter := &scriptedReviewPrompter{Branch: &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"}}
 		if err := runReviewStartInteractive(ctx, reviewerDeps, reviewPrompter); err != nil {
 			t.Fatalf("runReviewStartInteractive on empty store: %v", err)
 		}
-		// Verify the review branch was created.
-		exists, brErr := reviewerClient.BranchExists("77@review")
-		if brErr != nil {
-			t.Fatalf("BranchExists: %v", brErr)
-		}
-		if !exists {
-			t.Error("77@review branch was not created on reviewer's machine")
+		// The reviewed branch was created from the remote one and checked out.
+		if got, _ := reviewerClient.CurrentBranch(); got != "77@feat@my-feature" {
+			t.Errorf("current branch = %q, want 77@feat@my-feature", got)
 		}
 	})
 }
@@ -572,11 +568,10 @@ func TestReviewList_And_Start_WorkOnEmptyReviewerStore(t *testing.T) {
 //  2. Developer adds a new commit, resubmits for round 2.
 //  3. Reviewer fetches only review refs — NOT the branch objects.
 //  4. Reviewer runs review start → must fetch branch objects automatically and
-//     create the review branch at the new commit SHA.
+//     check out the feature branch at the new commit SHA.
 //
-// Without the "git fetch <remote>" inside runReviewStart this test fails with
-// "fatal: unable to read tree" because the new commit is not in the reviewer's
-// object store.
+// Without the "git fetch <remote>" inside runReviewStart the start refuses:
+// the remote branch the reviewer's clone knows lacks the submitted commit.
 func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 	t.Parallel()
 
@@ -637,7 +632,7 @@ func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 	run(devRig.dir, "push", "origin", "77@feat@my-feature")
 
 	// Developer submits round 2.
-	if err := runReviewRequest(ctx, devRig.deps(), "77"); err != nil {
+	if err := runReviewRequest(ctx, devRig.deps(), "77", "77@feat@my-feature"); err != nil {
 		t.Fatalf("round 2 review request: %v", err)
 	}
 
@@ -672,15 +667,9 @@ func TestReviewStart_FetchesCommitObjects(t *testing.T) {
 		}
 	})
 
-	t.Run("review branch tip matches round-2 feature SHA", func(t *testing.T) {
-		gotOut, err := exec.CommandContext(ctx, "git", "-C", reviewerDir,
-			"rev-parse", "77@review").Output()
-		if err != nil {
-			t.Fatalf("rev-parse 77@review: %v", err)
-		}
-		got := strings.TrimSpace(string(gotOut))
-		if got != wantSHA {
-			t.Errorf("77@review tip = %s, want %s (round-2 fix commit)", got, wantSHA)
+	t.Run("the checked-out branch is at the round-2 feature SHA", func(t *testing.T) {
+		if got := tipOf(t, reviewerDir, "HEAD"); got != wantSHA {
+			t.Errorf("HEAD = %s, want %s (round-2 fix commit)", got, wantSHA)
 		}
 	})
 }
@@ -755,7 +744,7 @@ func TestReviewApproveReject_WorkOnEmptyReviewerStore(t *testing.T) {
 
 	t.Run("review reject works on empty store after fetch", func(t *testing.T) {
 		rejectPrompter := &scriptedReviewPrompter{
-			Branch: &branch.Row{IssueSlug: "77", BranchName: "77@review"},
+			Branch: &branch.Row{IssueSlug: "77", BranchName: "77@feat@my-feature"},
 		}
 		if err := runReviewRejectInteractive(ctx, reviewerDeps, rejectPrompter, "", true); err != nil {
 			t.Fatalf("runReviewRejectInteractive on empty store: %v", err)
@@ -877,7 +866,7 @@ func TestReviewSync_UsesRemoteParentBase(t *testing.T) {
 
 	// ----- Before fix: sync would say "already up to date" -----
 	// After fix: sync detects origin/X@feat@big is ahead and merges forward.
-	if err := runReviewSync(ctx, aliceDeps, "X.1"); err != nil {
+	if err := runReviewSync(ctx, aliceDeps, "X.1", "X.1@feat@one"); err != nil {
 		t.Fatalf("runReviewSync: %v", err)
 	}
 
@@ -990,79 +979,6 @@ func TestTrack_Developer_ErrorOnUnrecognizedBranch(t *testing.T) {
 	t.Run("error mentions naming convention", func(t *testing.T) {
 		if !strings.Contains(err.Error(), "naming convention") {
 			t.Errorf("error = %v, want mention of naming convention", err)
-		}
-	})
-}
-
-func TestTrack_Reviewer_RegistersReviewBranch(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	rig := newReviewE2ERig(t)
-
-	// Simulate the developer having submitted for review: seed an in_review chain.
-	featureSHA, shaErr := rig.client.ResolveRef("refs/heads/77@feat@my-feature")
-	if shaErr != nil {
-		t.Fatalf("ResolveRef: %v", shaErr)
-	}
-	reviewtest.Seed(t, rig.client, "77", reviewpkg.StatusInReview, 1, featureSHA.String())
-
-	// Reviewer creates branch manually (no git zf review start).
-	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-b", "77@review"); err != nil {
-		t.Fatalf("checkout review branch: %v", err)
-	}
-
-	err := runTrack(ctx, rig.deps())
-
-	t.Run("no error", func(t *testing.T) {
-		if err != nil {
-			t.Fatalf("runTrack reviewer path: %v", err)
-		}
-	})
-
-	t.Run("reviewer identity recorded on the chain", func(t *testing.T) {
-		latest, loadErr := reviewpkg.Load(ctx, rig.client, "77")
-		if loadErr != nil || latest == nil {
-			t.Fatalf("Load: %v (state=%v)", loadErr, latest)
-		}
-		if !strings.Contains(latest.Reviewer, "Test User") {
-			t.Errorf("Reviewer = %q, want the clone's user", latest.Reviewer)
-		}
-	})
-
-	t.Run("tracking again is a no-op that still succeeds", func(t *testing.T) {
-		if err := runTrack(ctx, rig.deps()); err != nil {
-			t.Fatalf("second runTrack: %v", err)
-		}
-		st, _ := reviewpkg.Load(ctx, rig.client, "77")
-		if st == nil || !strings.Contains(st.Reviewer, "Test User") {
-			t.Errorf("state after second track = %+v", st)
-		}
-	})
-
-	t.Run("output mentions registered", func(t *testing.T) {
-		if out := rig.stdout.String(); !strings.Contains(out, "registered") {
-			t.Errorf("stdout = %q, want 'registered'", out)
-		}
-	})
-}
-
-func TestTrack_Reviewer_ErrorWhenNoRefExists(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	rig := newReviewE2ERig(t)
-
-	// Checkout a review branch manually — but no review ref exists.
-	if err := rig.client.RunGitAt(ctx, rig.dir, "checkout", "-b", "77@review"); err != nil {
-		t.Fatalf("checkout: %v", err)
-	}
-
-	err := runTrack(ctx, rig.deps())
-
-	t.Run("returns error", func(t *testing.T) {
-		if err == nil {
-			t.Fatal("expected error when no review ref exists, got nil")
 		}
 	})
 }
@@ -1231,13 +1147,13 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	// ── PHASE 2: submit for review ────────────────────────────────────────────
 
 	run(aliceDir, "checkout", "X.1@feat@part-one")
-	if err := runReviewRequest(ctx, aliceDeps, "X.1"); err != nil {
+	if err := runReviewRequest(ctx, aliceDeps, "X.1", "X.1@feat@part-one"); err != nil {
 		t.Fatalf("alice runReviewRequest X.1: %v", err)
 	}
 	run(aliceDir, "checkout", "main")
 
 	run(bobDir, "checkout", "X.2@feat@part-two")
-	if err := runReviewRequest(ctx, bobDeps, "X.2"); err != nil {
+	if err := runReviewRequest(ctx, bobDeps, "X.2", "X.2@feat@part-two"); err != nil {
 		t.Fatalf("bob runReviewRequest X.2: %v", err)
 	}
 
@@ -1268,19 +1184,17 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	if err := runReviewStart(ctx, danDeps, "X.2"); err != nil {
 		t.Fatalf("dan runReviewStart X.2: %v", err)
 	}
-	// Dan commits a fix to X.2@review and pushes it.
-	run(danDir, "checkout", "X.2@review")
+	// Dan commits a fix on the reviewed branch, where start left him, and pushes it.
 	if err := os.WriteFile(filepath.Join(danDir, "part-two.txt"), []byte("part two impl\nreviewer fix from Dan\n"), 0o644); err != nil {
 		t.Fatalf("write part-two.txt dan: %v", err)
 	}
 	run(danDir, "add", "part-two.txt")
 	run(danDir, "commit", "-m", "fix(X.2): reviewer fix from Dan")
-	run(danDir, "push", "origin", "X.2@review")
+	run(danDir, "push", "origin", "X.2@feat@part-two")
 
 	// ── PHASE 4: decisions ────────────────────────────────────────────────────
 
 	// Carol rejects X.1 round 1 (no reviewer commits).
-	run(carolDir, "checkout", "X.1@review")
 	if _, err := runReviewReject(ctx, carolDeps, "X.1", ""); err != nil {
 		t.Fatalf("carol runReviewReject X.1: %v", err)
 	}
@@ -1300,7 +1214,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	run(aliceDir, "add", "part-one.txt")
 	run(aliceDir, "commit", "-m", "fix(X.1): address review feedback")
 	run(aliceDir, "push", "origin", "X.1@feat@part-one")
-	if err := runReviewRequest(ctx, aliceDeps, "X.1"); err != nil {
+	if err := runReviewRequest(ctx, aliceDeps, "X.1", "X.1@feat@part-one"); err != nil {
 		t.Fatalf("alice runReviewRequest X.1 round 2: %v", err)
 	}
 
@@ -1329,20 +1243,11 @@ func TestFullParallelReviewScenario(t *testing.T) {
 		t.Fatalf("bob Fetch reviews: %v", err)
 	}
 
-	// Fetch Dan's review branch (it only exists on origin as a remote branch).
-	bobRoot := bobDeps.client.WorkingTreeRoot()
-	if err := bobDeps.client.RunGitAt(ctx, bobRoot, "fetch", "origin", "X.2@review:X.2@review"); err != nil {
-		t.Fatalf("bob fetch X.2@review: %v", err)
-	}
-
 	// Fast-forward X.2@feat@part-two to include Dan's reviewer commit.
-	if err := bobDeps.client.FastForwardOnly(ctx, "X.2@review", "X.2@feat@part-two"); err != nil {
-		t.Fatalf("bob FF X.2@feat@part-two to X.2@review: %v", err)
+	bobRoot := bobDeps.client.WorkingTreeRoot()
+	if err := bobDeps.client.FastForwardOnly(ctx, "origin/X.2@feat@part-two", "X.2@feat@part-two"); err != nil {
+		t.Fatalf("bob FF X.2@feat@part-two to origin: %v", err)
 	}
-	if err := bobDeps.client.DeleteLocalBranch(ctx, "X.2@review", true); err != nil {
-		t.Fatalf("bob delete X.2@review: %v", err)
-	}
-	run(bobDir, "push", "origin", "--delete", "X.2@review")
 	closeReview(bobDeps, "X.2")
 
 	// Squash merge X.2@feat@part-two into X@feat@big-feature.
@@ -1376,7 +1281,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 	}
 	run(aliceDir, "checkout", "main")
 
-	if err := runReviewSync(ctx, aliceDeps, "X.1"); err != nil {
+	if err := runReviewSync(ctx, aliceDeps, "X.1", "X.1@feat@part-one"); err != nil {
 		t.Fatalf("alice runReviewSync X.1: %v", err)
 	}
 	run(aliceDir, "push", "origin", "X.1@feat@part-one")
@@ -1401,7 +1306,7 @@ func TestFullParallelReviewScenario(t *testing.T) {
 
 	// Alice requests review on the parent integration branch.
 	run(aliceDir, "checkout", "X@feat@big-feature")
-	if err := runReviewRequest(ctx, aliceDeps, "X"); err != nil {
+	if err := runReviewRequest(ctx, aliceDeps, "X", "X@feat@big-feature"); err != nil {
 		t.Fatalf("alice runReviewRequest X: %v", err)
 	}
 
@@ -1560,13 +1465,6 @@ func TestReviewRequest_ProposesFeatureBranchPush(t *testing.T) {
 func TestTrackBranch(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a review name without a review is the reviewer error", func(t *testing.T) {
-		rig := newReviewE2ERig(t)
-		err := TrackBranch(t.Context(), rig.cfg, rig.client, "X.9@review")
-		if err == nil || !strings.Contains(err.Error(), "no review found") {
-			t.Errorf("err = %v", err)
-		}
-	})
 	t.Run("a parseable name is recorded in progress", func(t *testing.T) {
 		rig := newReviewE2ERig(t)
 		if err := rig.client.RunGitAt(t.Context(), rig.dir, "branch", "X.2@feat@part-two"); err != nil {
@@ -1624,4 +1522,32 @@ func TestInReviewBranches_Titles(t *testing.T) {
 			t.Errorf("got %d rows, want 3", len(rows))
 		}
 	})
+}
+
+func TestReviewTrack_ReviewBranchNameRefused(t *testing.T) {
+	t.Parallel()
+
+	rig := newReviewE2ERig(t)
+	err := TrackBranch(t.Context(), rig.cfg, rig.client, "42@review")
+
+	t.Run("a review branch name is not trackable", func(t *testing.T) {
+		if !errors.Is(err, ErrNotTrackable) {
+			t.Fatalf("err = %v, want ErrNotTrackable", err)
+		}
+	})
+	t.Run("the message no longer offers the review form", func(t *testing.T) {
+		if strings.Contains(err.Error(), "@review") {
+			t.Errorf("err = %v", err)
+		}
+	})
+}
+
+// mustRunGit runs a git command in the given directory, failing the test on error.
+func mustRunGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
 }

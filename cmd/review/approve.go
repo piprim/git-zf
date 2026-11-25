@@ -13,9 +13,14 @@ func (r Review) getApproveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "approve",
 		Short: "Approve a review — signals the branch is ready to close",
-		Long: `Pick a review you started and approve it. Its status becomes "approved"
-and the developer can run git zf issue close, which incorporates any commit
-you left on <ID>@review before merging.
+		Long: `Pick a review you started and approve it. What you approve is the tip of
+your local copy of the reviewed branch, your own commits included. Its status
+becomes "approved" and the developer can run git zf issue close, which merges
+that commit and no other.
+
+The command fetches first and refuses when you have no local copy holding the
+submitted commit (run git zf review start), or when the remote branch holds
+commits yours lacks: the approval would not cover them.
 
 With require-signed = true under [review] in the config, the approval is a
 signed commit, and git zf issue close refuses to merge without an approval
@@ -65,13 +70,13 @@ func runReviewApprove(ctx context.Context, deps reviewDeps, issueSlug string) er
 
 	msg := fmt.Sprintf("Issue %q approved (round %d).", issueSlug, d.round)
 	if d.hasCommits {
-		msg += fmt.Sprintf(" Reviewer pushed commits to %s — they will be incorporated on close.", d.reviewBranch)
+		msg += fmt.Sprintf(" Your commits on %s are part of the approval.", d.featureBranch)
 	}
 	fmt.Fprintln(deps.client.IO().Out, msg)
 	fmt.Fprintf(deps.client.IO().Out, "Issue %q is ready to close. Developer can now run: git zf issue close\n", issueSlug)
 
 	if d.hasCommits {
-		if err := proposeReviewPush(ctx, deps, d.reviewBranch); err != nil {
+		if err := proposeReviewPush(ctx, deps, d.featureBranch); err != nil {
 			return err
 		}
 	}

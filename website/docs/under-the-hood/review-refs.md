@@ -35,15 +35,19 @@ the previous action. Author and committer are the user's git identity.
 
 | `type` | Fields | Written by | Effect |
 |---|---|---|---|
-| `request` | `feature_sha` | `git zf review request` | Starts a round: the branch is locked. First commit of the chain on round 1. |
+| `request` | `feature_sha`, `branch` | `git zf review request` | Starts a round. First commit of the chain on round 1. |
 | `start` | `round` | `git zf review start` | Records the reviewer. |
 | `approve` | `approved_sha`, `has_commits`, `round` | `git zf review approve` | Approves the commit `approved_sha`. |
-| `reject` | `comment`, `has_commits`, `round` | `git zf review reject` | Requests changes: the branch is unlocked. |
+| `reject` | `comment`, `has_commits`, `round` | `git zf review reject` | Requests changes. |
 | `close` | none | `git zf issue close` | The issue was merged. |
 | `merge` | none | sync | Two-parent commit joining actions made on two clones. |
 
 `v` is the format version, currently 1. `at` is RFC 3339, UTC. `round` is the
 round the op was written for; an op without it applies to the current round.
+
+`branch` is the name of the branch submitted. It is optional: an older git-zf
+does not write it and ignores it. A name that is not a branch of the issue
+(`<ID>@<type>@<slug>`) is read as absent.
 
 ## Reading a review
 

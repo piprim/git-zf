@@ -10,8 +10,8 @@ import (
 )
 
 // TestMergeTargetCandidates pins the merge-target candidate rules: defaultBase
-// leads the list (even when remote-only), the branch being closed and @review
-// branches are never offered, duplicates and empty names are dropped.
+// leads the list (even when remote-only), the branch being closed is never
+// offered, duplicates and empty names are dropped.
 func TestMergeTargetCandidates(t *testing.T) {
 	t.Parallel()
 
@@ -35,13 +35,6 @@ func TestMergeTargetCandidates(t *testing.T) {
 			closing:     "ABC-1@feat@x",
 			defaultBase: "main",
 			want:        []string{"main"},
-		},
-		{
-			name:        "review branches excluded",
-			locals:      []string{"main", "ABC-1@review", "other"},
-			closing:     "ABC-1@feat@x",
-			defaultBase: "main",
-			want:        []string{"main", "other"},
 		},
 		{
 			name:        "remote-only default base included when absent from locals",

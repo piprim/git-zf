@@ -5,25 +5,20 @@ sidebar_label: "init"
 
 ## git zf init
 
-Initialize git zf in the current repository (installs the pre-push and pre-commit hooks)
+Initialize git zf in the current repository (fetch refspecs for refs/zf/)
 
 ### Synopsis
 
-Install the git zf pre-push and pre-commit hooks into the current repository.
-
-The pre-push hook calls 'git zf review guard' before every push, blocking pushes to
-branches that are locked for code review. The pre-commit hook calls 'git zf review
-guard-commit', which blocks new commits on a feature branch while reviewer commits
-await incorporation.
-
-The hooks are written where git reads them (resolved via 'git rev-parse
---git-path hooks'): the directory named by core.hooksPath when it is set,
-otherwise the hooks directory shared by every worktree. In a git submodule that
-is the submodule's own git directory, not the parent repo's.
-
-It also adds two fetch refspecs to every remote, so that a plain 'git fetch'
-brings the reviews and issues stored under refs/zf/ and 'git fetch --prune'
+Add fetch refspecs to every remote, so that a plain 'git fetch' brings the
+reviews, issues and branch records stored under refs/zf/ and 'git fetch --prune'
 does not delete their tracking refs.
+
+git zf installs no hook. An older 'git zf init' installed a pre-push, a
+pre-commit and a pre-rebase hook: a hook file that still holds one of those
+scripts unchanged is deleted, where git reads hooks (the directory named by
+core.hooksPath when it is set, otherwise the hooks directory shared by every
+worktree). A hook of your own is never touched; when it calls 'git zf review
+guard', init says that the call can be removed.
 
 Run 'git zf install' first to make the 'git zf' binary available in the git
 exec-path, then run 'git zf init' once per repository (and per submodule).

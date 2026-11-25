@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/piprim/git-zf/branch"
 	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
@@ -33,17 +32,6 @@ func runReviewStatusInteractive(ctx context.Context, deps reviewDeps, prompter R
 	if len(withHistory) == 0 {
 		fmt.Fprintln(deps.client.IO().Out, "No review history found.")
 		return nil
-	}
-
-	// Show the issue's own branch and title when its branch is tracked.
-	for i := range withHistory {
-		st, err := branch.Load(ctx, deps.client, withHistory[i].IssueSlug)
-		if err != nil || st == nil {
-			continue
-		}
-		if rows := branch.Rows([]branch.State{*st}, branch.StatusAll); len(rows) > 0 {
-			withHistory[i] = rows[0]
-		}
 	}
 
 	picked, err := prompter.PickBranch(ctx, "Select issue to view review history:", withHistory, currentIssueSlug(deps.client))

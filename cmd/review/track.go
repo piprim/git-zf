@@ -8,7 +8,6 @@ import (
 	"github.com/piprim/git-zf/branch"
 	"github.com/piprim/git-zf/config"
 	"github.com/piprim/git-zf/git"
-	reviewpkg "github.com/piprim/git-zf/review"
 	"github.com/spf13/cobra"
 )
 
@@ -19,19 +18,15 @@ func TrackCmd(appConfig *config.AppConfig) *cobra.Command {
 	return &cobra.Command{
 		Use:   "track",
 		Short: "Track the current branch with git-zf (for branches created with plain git checkout)",
-		Long: `Register the current branch without creating a new branch: a feature branch
-is recorded as in progress, a review branch records you as the reviewer.
+		Long: `Register the current branch without creating a new branch: it is recorded
+as in progress for its issue.
 
 Use this when you checked out a branch with plain 'git checkout' instead of
-'git zf issue start' or 'git zf review start'.
+'git zf issue start'.
 
-  Developer (feature branch):  git checkout -b X.2@feat@part-two origin/X.2@feat@part-two
-                                git zf review track
-                                git zf review request
-
-  Reviewer (review branch):    git checkout -b X.1@review <sha>
-                                git zf review track
-                                git zf review approve`,
+  git checkout -b X.2@feat@part-two origin/X.2@feat@part-two
+  git zf review track
+  git zf review request`,
 		Args: cobra.NoArgs,
 		RunE: withDeps(appConfig, runTrack),
 	}
@@ -45,8 +40,8 @@ func runTrack(ctx context.Context, deps reviewDeps) error {
 
 	if err := trackBranch(ctx, deps, currentBranch); errors.Is(err, ErrNotTrackable) {
 		return fmt.Errorf(
-			"current branch %q does not match a git-zf naming convention\n"+
-				"(expected <ID>@<type>@<slug> or <ID>@review)",
+			"current branch %q does not match the git-zf naming convention\n"+
+				"(expected <ID>@<type>@<slug>)",
 			currentBranch)
 	} else if err != nil {
 		return err
@@ -55,21 +50,18 @@ func runTrack(ctx context.Context, deps reviewDeps) error {
 	return nil
 }
 
-// ErrNotTrackable is TrackBranch's answer for a name that is neither
-// <id>@<type>@<slug> nor <slug>@review.
-var ErrNotTrackable = errors.New("branch name is not <id>@<type>@<slug> or <slug>@review")
+// ErrNotTrackable is TrackBranch's answer for a name that is not
+// <id>@<type>@<slug>.
+var ErrNotTrackable = errors.New("branch name is not <id>@<type>@<slug>")
 
 // TrackBranch records name as review track does for the current branch: a
-// review branch records the reviewer, a feature branch is recorded in
-// progress (a closed one reopened), any other name is ErrNotTrackable.
+// feature branch is recorded in progress (a closed one reopened), any other
+// name is ErrNotTrackable.
 func TrackBranch(ctx context.Context, cfg *config.AppConfig, client *git.Client, name string) error {
 	return trackBranch(ctx, newReviewDeps(client, cfg), name)
 }
 
 func trackBranch(ctx context.Context, deps reviewDeps, name string) error {
-	if branch.IsReviewBranch(name) {
-		return runTrackReviewer(ctx, deps, name)
-	}
 	if b, err := branch.Parse(name); err == nil {
 		return runTrackDeveloper(ctx, deps, name, b)
 	}
@@ -104,62 +96,10 @@ func runTrackDeveloper(ctx context.Context, deps reviewDeps, branchName string, 
 		fmt.Fprintf(deps.client.IO().Err, "warning: push branch ref: %v\n", err)
 	}
 
-	// Warn if a review ref already exists for this issue (branch is locked).
-	if ref, _ := reviewpkg.Load(ctx, deps.client, b.IssueID()); ref != nil && !ref.Closed &&
-		ref.Status == reviewpkg.StatusInReview {
-		fmt.Fprintf(deps.client.IO().Err,
-			"Note: branch %q is currently locked for review (round %d).\n"+
-				"You cannot submit for review again until the reviewer decides.\n",
-			branchName, ref.Round)
-	}
-
 	fmt.Fprintf(deps.client.IO().Out,
 		"Branch %q is now tracked (issue %s, type %s).\n"+
 			"You can run 'git zf review request'\n",
 		branchName, b.IssueID(), b.Type())
-
-	return nil
-}
-
-// runTrackReviewer checks that a manually-created review branch has a review
-// awaiting a decision and records the reviewer on its chain, as review start
-// would have.
-func runTrackReviewer(ctx context.Context, deps reviewDeps, branchName string) error {
-	issueSlug, _ := branch.CutReviewSuffix(branchName)
-
-	// Sync review refs best-effort so we see the developer's lock signal.
-	if err := reviewpkg.Sync(ctx, deps.client); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: sync review refs: %v\n", err)
-	}
-
-	// Verify the review ref exists and is in_review.
-	ref, err := reviewpkg.Load(ctx, deps.client, issueSlug)
-	if err != nil {
-		return fmt.Errorf("read review ref: %w", err)
-	}
-	if ref == nil {
-		return fmt.Errorf(
-			"no review found for issue %q — has the developer run `git zf review request`?",
-			issueSlug)
-	}
-	if ref.Closed {
-		return fmt.Errorf(
-			"no open review for issue %q — has the developer run `git zf review request`?",
-			issueSlug)
-	}
-	if ref.Status != reviewpkg.StatusInReview {
-		return fmt.Errorf(
-			"issue %q is not awaiting review (current status: %s)", issueSlug, ref.Status)
-	}
-
-	recordReviewer(ctx, deps, ref)
-
-	fmt.Fprintf(deps.client.IO().Out,
-		"Branch %q registered as review branch for issue %q (round %d).\n"+
-			"Run:\n"+
-			"  git zf review approve\n"+
-			"  git zf review reject\n",
-		branchName, issueSlug, ref.Round)
 
 	return nil
 }

@@ -54,8 +54,8 @@ A second branch on the same issue, a spike or a parallel approach, carries a
 variant label: `ABC-42@feat@add-oauth-login@spike`. See
 [start an issue](../workflows/start-an-issue.md).
 
-A reviewer's branch is `<ID>@review`: see
-[review a branch](../workflows/review.md).
+A review happens on the branch itself, there is no branch of the reviewer:
+see [review a branch](../workflows/review.md).
 
 ## Commands used
 
