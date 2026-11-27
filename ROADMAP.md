@@ -6,9 +6,6 @@
 
 ## Bug
 
-### Closing when remote is unreachable
-During an `issue closed` if the remote is unreachable, it displays a warning and continues with the local copy. With Squash, the closure therefore succeeds without the other person's commits; Rebase and Classic refuse as long as the remote does not respond.
-
 ### Copy/Past of log
 
 Copy/past a log entry detail give this ugly format (from the gt-zf repo ) :

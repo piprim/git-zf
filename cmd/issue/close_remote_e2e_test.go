@@ -9,7 +9,10 @@ import (
 	"testing"
 
 	commitpkg "github.com/piprim/git-zf/commit"
+	"github.com/piprim/git-zf/git"
+	issuepkg "github.com/piprim/git-zf/issue"
 	reviewpkg "github.com/piprim/git-zf/review"
+	"github.com/piprim/git-zf/tui"
 )
 
 const remoteFeature = "ABC-1@feat@add-thing"
@@ -359,8 +362,6 @@ func assertClosedWithoutAsking(t *testing.T, rig *closeTestRig) {
 	t.Helper()
 
 	mainBefore := revParseInDir(t, rig.dir, "refs/heads/main")
-	// Squash: the classic and rebase strategies fetch on their own and refuse
-	// an unreachable remote, which is not what these tests are about.
 	p := classicClosePrompter(rig)
 	p.Strategy = commitpkg.MergeStrategySquash
 	err := runClose(t.Context(), rig.deps(), p)
@@ -382,13 +383,55 @@ func assertClosedWithoutAsking(t *testing.T, rig *closeTestRig) {
 
 func TestClose_Remote_Unreachable(t *testing.T) {
 	rig := newRemoteCloseRig(t)
+	out, err := exec.CommandContext(t.Context(), "git", "-C", rig.dir, "remote", "get-url", "origin").Output()
+	if err != nil {
+		t.Fatalf("get origin url: %v", err)
+	}
+	origin := strings.TrimSpace(string(out))
 	mustRunGitAt(t, rig.dir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
 	rig.rebuildClient(t)
 
-	assertClosedWithoutAsking(t, rig)
-	t.Run("a warning says the remote was not reached", func(t *testing.T) {
-		if !strings.Contains(rig.stderr.String(), "warning: fetch") {
-			t.Errorf("stderr:\n%s", rig.stderr)
+	mainBefore := revParseInDir(t, rig.dir, "refs/heads/main")
+	// Squash never fetches on its own: it is the strategy that used to close
+	// without the remote's commits.
+	p := classicClosePrompter(rig)
+	p.Strategy = commitpkg.MergeStrategySquash
+	p.StrategyErr = errors.New("PickStrategy must not be reached")
+	err = runClose(t.Context(), rig.deps(), p)
+
+	t.Run("the close is refused with git's error, not a latched one", func(t *testing.T) {
+		if !errors.Is(err, ErrRemoteUnreachable) || errors.Is(err, git.ErrRemoteDown) {
+			t.Fatalf("runClose = %v, want ErrRemoteUnreachable\n%s", err, rig.stderr)
+		}
+	})
+	t.Run("the error holds what git said", func(t *testing.T) {
+		if !strings.Contains(err.Error(), "gone.git") {
+			t.Errorf("runClose = %v, want git's message naming the repository", err)
+		}
+	})
+	t.Run("no picker was opened", func(t *testing.T) {
+		if p.PickBranchSeen != nil {
+			t.Errorf("PickBranch was offered %+v", p.PickBranchSeen)
+		}
+	})
+	t.Run("nothing was merged", func(t *testing.T) {
+		if got := revParseInDir(t, rig.dir, "refs/heads/main"); got != mainBefore {
+			t.Errorf("main moved: %s -> %s", mainBefore, got)
+		}
+	})
+	t.Run("c in the issue table closes once the remote is back", func(t *testing.T) {
+		mustRunGitAt(t, rig.dir, "remote", "set-url", "origin", origin)
+		p := classicClosePrompter(rig)
+		p.Strategy = commitpkg.MergeStrategySquash
+		infra := issueListInfra{client: rig.client, stderr: rig.stderr, close: rig.deps()}
+
+		_, err := New(rig.cfg).listAction(t.Context(), infra, &scriptedRecordPrompter{}, &scriptedStartPrompter{}, p,
+			tui.IssuePickClose, &issuepkg.Row{IssueSlug: "ABC-1"})
+		if err != nil {
+			t.Fatalf("listAction = %v\n%s", err, rig.stderr)
+		}
+		if got := revParseInDir(t, rig.dir, "refs/heads/main"); got == mainBefore {
+			t.Error("main did not move")
 		}
 	})
 }

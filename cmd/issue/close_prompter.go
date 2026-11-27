@@ -78,6 +78,10 @@ type RemoteOffer struct {
 // ErrCannotAsk is returned by ConfirmTakeRemote when stdin is not a terminal.
 var ErrCannotAsk = errors.New("no terminal to ask on")
 
+// ErrRemoteUnreachable is returned by runClose when the fetch failed: what
+// the remote branch holds is unknown, and a close would merge without it.
+var ErrRemoteUnreachable = errors.New("the remote did not answer, the issue is not closed")
+
 // ErrRemoteMoved is returned by runClose when it stopped at the remote check.
 var ErrRemoteMoved = errors.New("the remote branch moved, the issue is not closed")
 

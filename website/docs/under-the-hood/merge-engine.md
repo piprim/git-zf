@@ -121,6 +121,13 @@ remote tip, then `git merge --squash <feature>`, open the commitizen form with
 the same prefill as Rebase, and commit. Squash always runs in the main
 checkout.
 
+Squash does not fetch on its own. `issue close` and `branch merge` both fetch
+the remote before they ask anything and stop when it does not answer, whatever
+the strategy: the remote may hold commits of the branch this clone never saw.
+`branch merge` then refuses a source whose remote branch holds commits the
+local one lacks and prints the command that takes them; `issue close` offers
+to take them (see the close workflow).
+
 On a TUI abort or hook rejection the staged squash diff is left on `<base>`
 for inspection (`git reset --hard` discards it). The exception is a source
 branch that was materialized from `origin/<branch>` for the merge: there the

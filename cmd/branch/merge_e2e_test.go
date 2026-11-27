@@ -3,6 +3,7 @@ package branch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -187,6 +188,92 @@ func TestRunMerge_HappyPath_Squash(t *testing.T) {
 			t.Fatal("feature branch was deleted despite decline")
 		}
 	})
+}
+
+func TestRunMerge_UnreachableRemote(t *testing.T) {
+	rig := newMergeRig(t)
+	rig.addLocalBranch(t, "feature")
+	rig.addOrigin(t)
+	rig.git(t, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+	rig.rebuildClient(t)
+	before := rig.gitOut(t, "rev-parse", "master")
+	newPrompter := func() *scriptedMergePrompter {
+		// Squash never fetches on its own.
+		return &scriptedMergePrompter{
+			Source: SourceBranch{Name: "feature"}, Strategy: commit.MergeStrategySquash,
+			Confirm: true, Message: []byte("chore: merge feature\n"),
+		}
+	}
+
+	t.Run("branch merge is refused", func(t *testing.T) {
+		if err := runMerge(t.Context(), rig.deps(declinePush), newPrompter()); !errors.Is(err, ErrRemoteUnreachable) {
+			t.Fatalf("runMerge = %v, want ErrRemoteUnreachable", err)
+		}
+	})
+	t.Run("m in the branch table is refused", func(t *testing.T) {
+		rig.rebuildClient(t)
+		err := runMergeSource(t.Context(), rig.deps(declinePush), newPrompter(), "master", SourceBranch{Name: "feature"})
+		if !errors.Is(err, ErrRemoteUnreachable) {
+			t.Fatalf("runMergeSource = %v, want ErrRemoteUnreachable", err)
+		}
+	})
+	t.Run("nothing was merged", func(t *testing.T) {
+		if got := rig.gitOut(t, "rev-parse", "master"); got != before {
+			t.Errorf("master moved: %s -> %s", before, got)
+		}
+	})
+}
+
+func TestRunMerge_SourceBehindRemote(t *testing.T) {
+	// The remote's feature holds one commit the local one lacks; diverged, the
+	// local one also holds a commit of its own.
+	for _, tc := range []struct {
+		name     string
+		diverged bool
+		want     string
+	}{
+		{name: "behind", want: "git merge --ff-only origin/feature"},
+		{name: "diverged", diverged: true, want: "git merge origin/feature"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newMergeRig(t)
+			rig.addOrigin(t)
+			rig.addLocalBranch(t, "feature")
+			rig.git(t, "switch", "feature")
+			rig.git(t, "commit", "--allow-empty", "-m", "feat: theirs")
+			rig.git(t, "push", "-q", "origin", "feature")
+			rig.git(t, "reset", "-q", "--hard", "HEAD~1")
+			if tc.diverged {
+				rig.git(t, "commit", "--allow-empty", "-m", "feat: mine")
+			}
+			rig.git(t, "switch", "master")
+			rig.rebuildClient(t)
+			before := rig.gitOut(t, "rev-parse", "master")
+			p := &scriptedMergePrompter{
+				Source: SourceBranch{Name: "feature"}, Strategy: commit.MergeStrategySquash,
+				Confirm: true, Message: []byte("chore: merge feature\n"),
+			}
+
+			err := runMerge(t.Context(), rig.deps(declinePush), p)
+
+			t.Run("the merge is refused", func(t *testing.T) {
+				if !errors.Is(err, ErrRemoteMoved) {
+					t.Fatalf("runMerge = %v, want ErrRemoteMoved", err)
+				}
+			})
+			t.Run("nothing was merged", func(t *testing.T) {
+				if got := rig.gitOut(t, "rev-parse", "master"); got != before {
+					t.Errorf("master moved: %s -> %s", before, got)
+				}
+			})
+			t.Run("the command to take the commits is printed", func(t *testing.T) {
+				out := rig.stdout.String()
+				if !strings.Contains(out, "origin/feature holds 1 commit(s)") || !strings.Contains(out, tc.want) {
+					t.Errorf("stdout = %q", out)
+				}
+			})
+		})
+	}
 }
 
 func TestRunMerge_HappyPath_Classic(t *testing.T) {

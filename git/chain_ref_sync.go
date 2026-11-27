@@ -34,7 +34,10 @@ func (c *Client) remoteCmd(ctx context.Context, silent bool, args ...string) err
 
 	var err error
 	if silent {
-		err = c.gitCmd(ctx, args...).Run()
+		// Nothing is printed, so the error carries git's words: the caller
+		// has nothing else to tell a dead network from a refused key.
+		_, err = c.gitCmd(ctx, args...).Output()
+		err = gitStderr(err)
 	} else {
 		err = c.runInteractive(ctx, c.root, args...)
 	}
@@ -46,6 +49,11 @@ func (c *Client) remoteCmd(ctx context.Context, silent bool, args ...string) err
 
 	return err
 }
+
+// RetryRemote forgets a dead remote: the next fetch or push runs git again.
+// For a process that outlives one command (a table that runs an action per
+// key): the remote may be back by the next one.
+func (c *Client) RetryRemote() { c.remoteDown = nil }
 
 // chainTip is what one ref under a chain prefix points at.
 type chainTip struct {

@@ -14,6 +14,10 @@ Pick a local or remote branch and merge it into the current branch
 can be the source: one git zf created, or a plain git branch that follows no
 naming convention. Issue branches are refused — use `git zf issue close` for those.
 
+The remote is fetched first. When it does not answer nothing is merged,
+whatever the strategy. A source whose remote branch holds commits the local
+one lacks is refused too: take them, then run the merge again.
+
 ```
 git zf branch merge [flags]
 ```

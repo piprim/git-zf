@@ -288,9 +288,11 @@ The review happens on the feature branch: there is no `<ID>@review` branch,
 no lock and no hook. `review request` records the branch and the commit
 submitted, `review start` checks the branch out and brings it to the remote
 one, `review approve` records the commit approved (`approved_sha`, the
-branch's tip, which must be on the remote). `issue close` then applies two
+branch's tip, which must be on the remote). `issue close` then applies three
 checks before any merge (`cmd/issue/close.go`, `close_remote.go`):
 
+- the fetch itself: a remote that does not answer stops the close with
+  `ErrRemoteUnreachable`, whatever the strategy (`TestClose_Remote_Unreachable`).
 - `checkRemoteBranch`: after a fetch, a remote branch holding commits the
   local one lacks stops the close with `ErrRemoteMoved`, whether the user
   took them (fast-forward or merge) or not; the close is run again.
@@ -460,6 +462,14 @@ rollback). The `branch merge` command is end-to-end tested in
 
     mise exec -- go test ./cmd/mergeflow/... -v
     mise exec -- go test ./cmd/branch/... -run "^TestRunMerge_" -v
+
+`branch merge` fetches before it asks anything (`fetchForMerge`, in `runMerge`
+and in `runMergeSource` for `m` in the table) and stops with
+`ErrRemoteUnreachable` when the remote does not answer, as `issue close` does
+(`TestRunMerge_UnreachableRemote`). `checkSourceRemote` then refuses a source
+behind or diverged from its remote branch with `ErrRemoteMoved` and prints the
+command to take the commits, with no offer (`TestRunMerge_SourceBehindRemote`). A table reuses its client across actions:
+`runBranchTable` and `listAction` call `git.Client.RetryRemote` before each one.
 
 `issue close` and `branch merge` share `cmd/mergeflow` as their merge engine.
 `branch merge` REFUSES issue branches as the source (it redirects to `issue

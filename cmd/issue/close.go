@@ -205,6 +205,16 @@ func (i Issue) closeRunE(cmd *cobra.Command, args []string) error {
 //
 // Unexported because closeDeps is unexported (no cross-package caller).
 func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error {
+	// The remote is fetched before anything is asked, compared or created.
+	// When it cannot be reached the close stops, whatever the strategy: the
+	// remote branch may hold commits this clone never saw.
+	stopFetch := deps.client.IO().Spin("Fetching the remote")
+	err := deps.client.FetchQuiet(ctx)
+	stopFetch()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrRemoteUnreachable, err)
+	}
+
 	picked, err := getPickedBranch(ctx, deps.client, deps.invokedBranch, deps.issueID, deps.branchName, prompter)
 	if err != nil {
 		return err
@@ -215,14 +225,8 @@ func runClose(ctx context.Context, deps closeDeps, prompter ClosePrompter) error
 	}
 
 	// Every step down to the target picker may ask the remote or the forge.
-	stop := deps.client.IO().Spin("Checking the remote, the review and the pull request of " + picked.BranchName)
+	stop := deps.client.IO().Spin("Checking the review and the pull request of " + picked.BranchName)
 	defer stop()
-
-	// The remote is fetched before anything is compared or created. When it
-	// cannot be reached the close goes on with the refs the clone has.
-	if err := deps.client.FetchQuiet(ctx); err != nil {
-		fmt.Fprintf(deps.client.IO().Err, "warning: %v: the close goes on with what this clone has\n", err)
-	}
 
 	// A branch started in another clone (reviewer or teammate closing a branch
 	// they never checked out) may exist only on the remote: materialize it, at

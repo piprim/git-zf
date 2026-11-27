@@ -18,7 +18,7 @@ that issue is picked for you; when the issue has several branches in
 progress, the picker offers those alone. An issue with no branch in progress
 is told so, with a hint to `issue abandon`: closing always merges. An ID
 that is neither an issue nor a branch is an error. The remote is fetched
-(a warning when it cannot be reached), and the close checks that the remote
+(the close stops when it cannot be reached), and the close checks that the remote
 branch holds nothing your local one lacks: see
 [when the remote branch moved](#when-the-remote-branch-moved). Then:
 
@@ -98,9 +98,9 @@ to the remote one by hand.
 
 A stopped close exits with an error: the issue was not closed.
 
-When the remote cannot be reached the close warns and goes on with what the
-clone has. Squash then completes offline; Rebase and Classic fetch the base
-themselves and refuse until the remote answers.
+When the remote cannot be reached the close stops, whatever the strategy: the
+remote branch may hold commits this clone never fetched. Run it again once
+the remote answers.
 
 ### The review at close
 

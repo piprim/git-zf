@@ -152,6 +152,13 @@ func (ir Issue) listAction(
 	ctx context.Context, infra issueListInfra, p recordPrompter, sp issueflow.StartPrompter, cp ClosePrompter,
 	pick tui.IssuePick, row *issuepkg.Row,
 ) (reopen bool, err error) {
+	// The table outlives its actions and so do its clients: a remote that was
+	// down for the last action is asked again by this one.
+	infra.client.RetryRemote()
+	if infra.close.client != nil {
+		infra.close.client.RetryRemote()
+	}
+
 	switch pick {
 	case tui.IssuePickRow:
 		deps := infra.deps()

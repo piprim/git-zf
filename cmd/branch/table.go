@@ -196,6 +196,9 @@ func runBranchTable(
 		}
 		pick, row := tui.PickedBranch(m)
 		opts = tui.BranchTableState(m) // the next table opens as this one was left
+		// The table outlives its actions and so does its client: a remote that
+		// was down for the last action is asked again by this one.
+		d.client.RetryRemote()
 		var reopen bool
 		switch pick {
 		case tui.BranchPickNone:

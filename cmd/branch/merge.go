@@ -24,7 +24,11 @@ func (b Branch) mergeCmd() *cobra.Command {
 		Long: `Pick a local or remote branch and merge it into the current branch
 (rebase, squash, or classic), then optionally delete it and push. Any branch
 can be the source: one git zf created, or a plain git branch that follows no
-naming convention. Issue branches are refused — use ` + "`git zf issue close`" + ` for those.`,
+naming convention. Issue branches are refused — use ` + "`git zf issue close`" + ` for those.
+
+The remote is fetched first. When it does not answer nothing is merged,
+whatever the strategy. A source whose remote branch holds commits the local
+one lacks is refused too: take them, then run the merge again.`,
 		RunE: b.mergeRunE,
 	}
 	pushflow.AddFlags(cmd)
@@ -85,6 +89,10 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		return errors.New("checkout a branch before merging into it (HEAD is detached)")
 	}
 
+	if err := fetchForMerge(ctx, d.client); err != nil {
+		return err
+	}
+
 	sources, err := collectSources(d.client, target)
 	if err != nil {
 		return err
@@ -100,12 +108,77 @@ func runMerge(ctx context.Context, d mergeDeps, prompter MergePrompter) (err err
 		return err //nolint:wrapcheck // prompter already wraps
 	}
 
-	return runMergeSource(ctx, d, prompter, target, source)
+	return mergeFetched(ctx, d, prompter, target, source)
+}
+
+// ErrRemoteUnreachable is returned by a merge whose fetch failed: what the
+// remote holds of the source is unknown, and a squash would merge without it.
+var ErrRemoteUnreachable = errors.New("the remote did not answer, nothing was merged")
+
+// fetchForMerge fetches the remote before a merge asks or changes anything.
+// No remote is no error; one that does not answer stops the merge, whatever
+// the strategy.
+func fetchForMerge(ctx context.Context, c *git.Client) error {
+	stop := c.IO().Spin("Fetching the remote")
+	defer stop()
+
+	if err := c.FetchQuiet(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrRemoteUnreachable, err)
+	}
+
+	return nil
+}
+
+// ErrRemoteMoved is returned by a merge whose source lacks commits its remote
+// branch holds: merging the local copy would leave them out.
+var ErrRemoteMoved = errors.New("the remote branch moved, nothing was merged")
+
+// checkSourceRemote refuses a source whose remote branch, just fetched, holds
+// commits the local one lacks, and prints the command that takes them. A
+// remote-only source is created at the remote's tip and needs no check.
+func checkSourceRemote(ctx context.Context, c *git.Client, source SourceBranch) error {
+	if source.RemoteOnly {
+		return nil
+	}
+	rel, remoteRef, err := issueflow.RemoteOf(ctx, c, source.Name)
+	if err != nil {
+		return err //nolint:wrapcheck // names the command
+	}
+
+	var take string
+	switch rel {
+	case issueflow.RemoteBehind:
+		take = "git merge --ff-only " + remoteRef
+	case issueflow.RemoteDiverged:
+		take = "git merge " + remoteRef + "   (or, if the remote branch was rewritten: git rebase " + remoteRef + ")"
+	default:
+		return nil
+	}
+
+	n, err := c.CommitsAhead(ctx, remoteRef, source.Name)
+	if err != nil {
+		return fmt.Errorf("count the commits of %s: %w", remoteRef, err)
+	}
+	fmt.Fprintf(c.IO().Out,
+		"%s holds %d commit(s) branch %q lacks. Nothing was changed.\n"+
+			"Take them on that branch, look at them, then run the merge again:\n  %s\n",
+		remoteRef, n, source.Name, take)
+
+	return ErrRemoteMoved
 }
 
 // runMergeSource merges source into target (the current branch) without the
 // source picker: the branch table calls it with the row under the cursor.
-func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, target string, source SourceBranch) (err error) {
+func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, target string, source SourceBranch) error {
+	if err := fetchForMerge(ctx, d.client); err != nil {
+		return err
+	}
+
+	return mergeFetched(ctx, d, prompter, target, source)
+}
+
+// mergeFetched is runMergeSource once the remote was fetched.
+func mergeFetched(ctx context.Context, d mergeDeps, prompter MergePrompter, target string, source SourceBranch) (err error) {
 	// SAFETY: refuse issue-branch sources — merging one here would bypass the
 	// review check, sub-task guard, and tracker update that issue close
 	// runs. The gate is branch.Parse, so it also catches remote-only issue
@@ -117,6 +190,10 @@ func runMergeSource(ctx context.Context, d mergeDeps, prompter MergePrompter, ta
 			source.Name, parsed.IssueID())
 
 		return nil
+	}
+
+	if err := checkSourceRemote(ctx, d.client, source); err != nil {
+		return err
 	}
 
 	// Every step down to the strategy picker may ask the remote or the forge.
